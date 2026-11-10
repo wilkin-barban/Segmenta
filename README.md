@@ -1,0 +1,52 @@
+# Segmenta
+
+> Gestor de descargas de alto rendimiento, concurrencia dinámica y captura de flujos multimedia para **Ubuntu (GNOME / Wayland)**, con partición en caliente de segmentos y cero tiempo de ensamblado en disco.
+
+---
+
+## 1. Visión y Propósito del Proyecto
+
+**Segmenta** nace para llenar el vacío de un gestor de descargas aceleradas de grado comercial en Linux. Muchos usuarios de Ubuntu dependen de extensiones básicas o herramientas CLI (como `aria2` o `wget`), pero ninguna integra en un único flujo de trabajo:
+1. **Segmentación dinámica en caliente (Dynamic File Splitting)**: Subdivisión de partes en tiempo real sin requerir una fase de ensamblado posterior.
+2. **Captura profunda en el navegador (WebExtension Manifest V3)**: Detección inteligente de descargas, captura de cookies de sesión, headers HTTP (`User-Agent`, `Referer`, `Authorization`) e intercepción de flujos de streaming (HLS / MPEG-DASH).
+3. **Experiencia de Usuario Nativa para Ubuntu 26.10**: Interfaz moderna basada en **GTK4 + Libadwaita**, respetando las Human Interface Guidelines (HIG) de GNOME, con soporte completo para Wayland, temas claro/oscuro del sistema y visualización de conexiones concurrentes en tiempo real.
+
+---
+
+## 2. Principios de Ingeniería
+
+* **Diseño en Sala Limpia (*Clean-Room Design*)**: Proyecto desarrollado de forma 100% independiente a partir de especificaciones funcionales abiertas, estándares web (RFC 9110, WebExtensions MV3) y APIs nativas POSIX.
+* **Cero Ensamblado (*Zero-Assembly Disk I/O*)**: Supera las limitaciones de los gestores tradicionales. En Linux, mediante `posix_fallocate()` y `pwrite64()`, todos los hilos de red escriben directamente en sus desplazamientos exactos dentro de un único archivo final.
+* **Arquitectura Concurrente y Ligera**: Diseñado para el mínimo consumo de CPU y memoria (evitando frameworks pesados como Electron).
+* **Documentación Llave en Mano**: Especificaciones abiertas (OpenSpec) detalladas paso a paso para que cualquier agente o desarrollador pueda implementar módulos de forma autónoma y determinista.
+
+---
+
+## 3. Estructura de Documentación del Repositorio
+
+La documentación técnica y especificaciones completas se organizan en el directorio `docs/`:
+
+```
+Segmenta/
+├── docs/
+│   ├── research/
+│   │   └── legacy-engine-analysis.md         # Análisis técnico de arquitecturas de descarga
+│   └── openspec/
+│       ├── 01-system-architecture.md         # Arquitectura del sistema, componentes e IPC
+│       ├── 02-engine-dynamic-segmentation.md # Especificación del motor y algoritmo de partición
+│       ├── 03-browser-extension-and-native-messaging.md # Extensión WebExtension y Native Host
+│       ├── 04-ui-ux-libadwaita.md            # Especificación de la interfaz GTK4/Libadwaita
+│       └── 05-implementation-roadmap-for-agents.md # Guía paso a paso para agentes de desarrollo
+└── README.md
+```
+
+---
+
+## 4. Estado Actual
+
+* [x] Investigación técnica y especificaciones de arquitectura completadas.
+* [x] Especificaciones abiertas (OpenSpec) publicadas.
+* [ ] Fase 1: Implementación del Motor Central (CLI / Daemon de descarga).
+* [ ] Fase 2: Implementación de la Extensión de Navegador y Native Messaging Host.
+* [ ] Fase 3: Implementación de la GUI en GTK4 / Libadwaita.
+* [ ] Fase 4: Integración del Sniffer y Muxer de Streaming (HLS / DASH).
