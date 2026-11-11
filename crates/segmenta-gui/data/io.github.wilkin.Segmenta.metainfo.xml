@@ -23,7 +23,6 @@
   <launchable type="desktop-id">io.github.wilkin.Segmenta.desktop</launchable>
   <url type="homepage">https://github.com/wilkin-barban/Segmenta</url>
   <url type="bugtracker">https://github.com/wilkin-barban/Segmenta/issues</url>
-  <developer_name>Wilkin Barban Rosabal</developer_name>
   <developer id="io.github.wilkin">
     <name>Wilkin Barban Rosabal</name>
   </developer>
@@ -42,6 +41,19 @@
     <control>touch</control>
   </supports>
   <releases>
+    <release version="0.0.2" date="2026-11-11">
+      <description>
+        <p>Fixes from the first remote QA round: the Secret Service keyring is now
+        detected and used (with a one-time import of the legacy secrets file and no
+        silent plaintext fallback), downloads default to the XDG download directory,
+        pause/resume reject terminal tasks with their own error codes, the GUI starts
+        normally and reconnects with an actionable command when the socket is down,
+        and the log is structured and redacted.</p>
+        <p>New: Spanish, Brazilian Portuguese and English interface, a light/dark
+        appearance preference with reproducible QA captures, and working
+        <code>--version</code>/<code>--help</code> flags.</p>
+      </description>
+    </release>
     <release version="0.0.1" date="2026-04-24">
       <description>
         <p>First public release: segmented direct downloads, pause/resume across

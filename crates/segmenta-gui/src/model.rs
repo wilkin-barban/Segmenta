@@ -45,20 +45,6 @@ impl DownloadStatus {
         )
     }
 
-    pub fn label_es(&self) -> &'static str {
-        match self {
-            DownloadStatus::Pending => "En espera",
-            DownloadStatus::Probing => "Analizando",
-            DownloadStatus::Downloading => "Descargando",
-            DownloadStatus::Paused => "Pausada",
-            DownloadStatus::Verifying => "Verificando",
-            DownloadStatus::Completed => "Completada",
-            DownloadStatus::Failed => "Fallida",
-            DownloadStatus::Cancelled => "Cancelada",
-            DownloadStatus::Unknown => "Desconocida",
-        }
-    }
-
     /// Icon name for the sidebar and the row.
     pub fn icon_name(&self) -> &'static str {
         match self {
@@ -286,16 +272,6 @@ impl Filter {
                 Filter::Failed => Msg::FilterFailed,
             },
         )
-    }
-
-    pub fn label_es(&self) -> &'static str {
-        match self {
-            Filter::All => "Todas",
-            Filter::Active => "Activas",
-            Filter::Paused => "Pausadas",
-            Filter::Completed => "Completadas",
-            Filter::Failed => "Fallidas",
-        }
     }
 
     pub fn icon_name(&self) -> &'static str {

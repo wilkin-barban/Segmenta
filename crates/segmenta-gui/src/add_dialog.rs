@@ -1,7 +1,6 @@
 //! "Add download" dialog.
 //!
-//! No i18n catalog in this release: the copy is Spanish and lives inline. A
-//! later release can move it to `gettext` without changing the call sites.
+//! Every visible string comes from `segmenta-i18n` (S21).
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -15,6 +14,11 @@ use adw::prelude::*;
 use crate::client::{Client, ClientError, RequestBus};
 use crate::model::{filename_from_url, looks_like_http_url, Settings};
 use crate::{adw, gtk};
+use segmenta_i18n::{tr, Msg};
+
+fn locale() -> segmenta_i18n::Locale {
+    segmenta_i18n::current()
+}
 
 /// Defaults taken from `settings.get`.
 pub struct AddDefaults {
@@ -48,36 +52,36 @@ pub fn present(
     client: Arc<dyn Client>,
     defaults: AddDefaults,
     on_added: Rc<dyn Fn(String)>,
-) {
+) -> adw::Dialog {
     let dialog = adw::Dialog::builder()
-        .title("Añadir descarga")
+        .title(tr(locale(), Msg::AddDownloadTitle))
         .content_width(540)
         .follows_content_size(true)
         .build();
 
     let header = adw::HeaderBar::new();
-    let cancel_button = gtk::Button::with_label("Cancelar");
+    let cancel_button = gtk::Button::with_label(tr(locale(), Msg::Cancel));
     header.pack_start(&cancel_button);
-    let add_button = gtk::Button::with_label("Añadir");
+    let add_button = gtk::Button::with_label(tr(locale(), Msg::Start));
     add_button.add_css_class("suggested-action");
     header.pack_end(&add_button);
 
     let group = adw::PreferencesGroup::builder()
-        .title("Descarga")
-        .description("La descarga la ejecuta el daemon; esta ventana sólo la envía.")
+        .title(tr(locale(), Msg::AddDownloadSection))
+        .description(tr(locale(), Msg::AddDownloadHint))
         .build();
 
     let url = adw::EntryRow::builder()
-        .title("URL")
+        .title(tr(locale(), Msg::UrlLabel))
         .show_apply_button(false)
         .build();
     let filename = adw::EntryRow::builder()
-        .title("Nombre de archivo")
+        .title(tr(locale(), Msg::Filename))
         .show_apply_button(false)
         .build();
 
     let destination = adw::ActionRow::builder()
-        .title("Carpeta destino")
+        .title(tr(locale(), Msg::Destination))
         .activatable(true)
         .build();
     let folder_icon = gtk::Image::from_icon_name("folder-open-symbolic");
@@ -86,13 +90,13 @@ pub fn present(
     destination.set_subtitle(&defaults.destination_dir);
 
     let connections = adw::SpinRow::with_range(1.0, 32.0, 1.0);
-    connections.set_title("Conexiones");
-    connections.set_subtitle("1 a 32 conexiones paralelas");
+    connections.set_title(tr(locale(), Msg::Connections));
+    connections.set_subtitle(tr(locale(), Msg::ConnectionsHint));
     connections.set_value(f64::from(defaults.connections.clamp(1, 32)));
 
     let start_now = adw::SwitchRow::builder()
-        .title("Comenzar ahora")
-        .subtitle("Si está desactivado, la tarea queda en espera")
+        .title(tr(locale(), Msg::StartNow))
+        .subtitle(tr(locale(), Msg::StartNowHint))
         .active(true)
         .build();
 
@@ -167,7 +171,7 @@ pub fn present(
             return;
         };
         let chooser = gtk::FileDialog::builder()
-            .title("Elegir carpeta destino")
+            .title(tr(locale(), Msg::ChooseFolderTitle))
             .modal(true)
             .build();
         let form = Rc::clone(&form);
@@ -215,6 +219,7 @@ pub fn present(
     });
 
     dialog.present(Some(parent));
+    dialog.clone()
 }
 
 fn prefill_from_clipboard(form: &Rc<Form>) {
@@ -245,7 +250,7 @@ fn prefill_from_clipboard(form: &Rc<Form>) {
 fn submit(form: &Rc<Form>, client: Arc<dyn Client>, on_added: Rc<dyn Fn(String)>) {
     let url = form.url.text().trim().to_string();
     if !looks_like_http_url(&url) {
-        show_error(form, "Escribe una URL http:// o https:// válida.");
+        show_error(form, tr(locale(), Msg::InvalidUrl));
         return;
     }
 

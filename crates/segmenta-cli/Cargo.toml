@@ -26,6 +26,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 segmenta-daemon = { path = "../segmenta-daemon" }
+segmenta-i18n.workspace = true
 
 [dev-dependencies]
 hex.workspace = true

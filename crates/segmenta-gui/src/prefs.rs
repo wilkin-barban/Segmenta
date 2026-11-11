@@ -15,6 +15,11 @@ use adw::prelude::*;
 use crate::client::{Client, RequestBus};
 use crate::model::Settings;
 use crate::{adw, gtk};
+use segmenta_i18n::{tr, Msg};
+
+fn locale() -> segmenta_i18n::Locale {
+    segmenta_i18n::current()
+}
 
 /// Opens the preferences dialog over `parent`.
 pub fn present(
@@ -24,7 +29,7 @@ pub fn present(
     on_saved: Rc<dyn Fn(Settings)>,
 ) {
     let dialog = adw::PreferencesDialog::builder()
-        .title("Preferencias")
+        .title(tr(locale(), Msg::Preferences))
         .content_width(640)
         .content_height(720)
         .search_enabled(true)
@@ -34,13 +39,15 @@ pub fn present(
 
     // ---------------------------------------------------------------- General
     let general = adw::PreferencesPage::builder()
-        .title("General")
+        .title(tr(locale(), Msg::PrefsGeneral))
         .icon_name("emblem-system-symbolic")
         .build();
-    let storage = adw::PreferencesGroup::builder().title("Carpetas").build();
+    let storage = adw::PreferencesGroup::builder()
+        .title(tr(locale(), Msg::PrefsFolders))
+        .build();
 
     let download_dir = adw::ActionRow::builder()
-        .title("Carpeta de descargas")
+        .title(tr(locale(), Msg::DownloadFolder))
         .subtitle(settings.download_dir.clone())
         .activatable(true)
         .build();
@@ -48,13 +55,13 @@ pub fn present(
     storage.add(&download_dir);
 
     let categories = adw::ExpanderRow::builder()
-        .title("Carpetas por categoría")
-        .subtitle("Configuradas en el daemon; se muestran en modo lectura")
+        .title(tr(locale(), Msg::CategoriesReadOnly))
+        .subtitle(tr(locale(), Msg::CategoriesHint))
         .build();
     if settings.category_dirs.is_empty() {
         let empty = adw::ActionRow::builder()
-            .title("Sin categorías configuradas")
-            .subtitle("El daemon usa la carpeta de descargas para todo")
+            .title(tr(locale(), Msg::NoCategories))
+            .subtitle(tr(locale(), Msg::DownloadFolderHint))
             .build();
         categories.add_row(&empty);
     } else {
@@ -71,8 +78,8 @@ pub fn present(
 
     let session = adw::PreferencesGroup::builder().title("Sesión").build();
     let autostart = adw::SwitchRow::builder()
-        .title("Iniciar Segmenta con la sesión")
-        .subtitle("Activa la unidad systemd --user del daemon")
+        .title(tr(locale(), Msg::Autostart))
+        .subtitle(tr(locale(), Msg::AutostartHint))
         .active(settings.autostart)
         .build();
     session.add(&autostart);
@@ -80,28 +87,28 @@ pub fn present(
 
     // -------------------------------------------------- Connections and limits
     let network = adw::PreferencesPage::builder()
-        .title("Conexiones y límites")
+        .title(tr(locale(), Msg::PrefsConnectionsSection))
         .icon_name("network-transmit-receive-symbolic")
         .build();
     let limits = adw::PreferencesGroup::builder()
-        .title("Transferencia")
-        .description("Los valores fuera de rango son rechazados por el daemon")
+        .title(tr(locale(), Msg::PrefsTransfer))
+        .description(tr(locale(), Msg::RetriesHint))
         .build();
 
     let max_connections = adw::SpinRow::with_range(1.0, 32.0, 1.0);
-    max_connections.set_title("Conexiones por descarga");
-    max_connections.set_subtitle("De 1 a 32 conexiones paralelas");
+    max_connections.set_title(tr(locale(), Msg::ConnectionsPerDownload));
+    max_connections.set_subtitle(tr(locale(), Msg::ConnectionsRangeHint));
     max_connections.set_value(f64::from(settings.max_connections.clamp(1, 32)));
     limits.add(&max_connections);
 
     let speed_limit = adw::SpinRow::with_range(0.0, 1_000_000.0, 128.0);
-    speed_limit.set_title("Límite global de velocidad");
-    speed_limit.set_subtitle("KiB/s · 0 significa sin límite");
+    speed_limit.set_title(tr(locale(), Msg::SpeedLimit));
+    speed_limit.set_subtitle(tr(locale(), Msg::SpeedLimitHint));
     speed_limit.set_value(settings.speed_limit_kib() as f64);
     limits.add(&speed_limit);
 
     let retries = adw::SpinRow::with_range(0.0, 50.0, 1.0);
-    retries.set_title("Reintentos por tarea");
+    retries.set_title(tr(locale(), Msg::RetriesPerTask));
     retries.set_value(f64::from(settings.max_retries));
     limits.add(&retries);
     network.add(&limits);
@@ -123,8 +130,8 @@ pub fn present(
         .build();
     proxy.add(&proxy_url);
     let local = adw::SwitchRow::builder()
-        .title("Permitir descargas locales")
-        .subtitle("Direcciones de loopback y redes privadas")
+        .title(tr(locale(), Msg::AllowLocal))
+        .subtitle(tr(locale(), Msg::AllowLocalHint))
         .active(settings.allow_local_downloads)
         .build();
     proxy.add(&local);
@@ -132,7 +139,7 @@ pub fn present(
 
     // -------------------------------------------------------------- About page
     let about = adw::PreferencesPage::builder()
-        .title("Acerca de")
+        .title(tr(locale(), Msg::About))
         .icon_name("help-about-symbolic")
         .build();
     let info = adw::PreferencesGroup::new();
@@ -142,26 +149,26 @@ pub fn present(
         .build();
     info.add(&version);
     let license = adw::ActionRow::builder()
-        .title("Licencia")
+        .title(tr(locale(), Msg::License))
         .subtitle("GPL-3.0-or-later")
         .build();
     info.add(&license);
     let website = adw::ActionRow::builder()
-        .title("Sitio web")
+        .title(tr(locale(), Msg::Website))
         .subtitle("github.com/wilkin-barban/Segmenta")
         .activatable(true)
         .build();
     info.add(&website);
     let protocol = adw::ActionRow::builder()
-        .title("Protocolo")
-        .subtitle("JSON-RPC 2.0 sobre NDJSON · versión 1")
+        .title(tr(locale(), Msg::ProtocolLabel))
+        .subtitle(tr(locale(), Msg::ProtocolValue))
         .build();
     info.add(&protocol);
     // `system.status` is informational: it fills this row and never blocks the
     // dialog while the daemon answers.
     let daemon_row = adw::ActionRow::builder()
-        .title("Daemon")
-        .subtitle("Consultando…")
+        .title(tr(locale(), Msg::DaemonVersion))
+        .subtitle(tr(locale(), Msg::Querying))
         .build();
     info.add(&daemon_row);
     about.add(&info);
@@ -244,7 +251,7 @@ pub fn present(
     let save_dir = Rc::clone(&save);
     download_dir.connect_activated(move |_| {
         let chooser = gtk::FileDialog::builder()
-            .title("Elegir carpeta de descargas")
+            .title(tr(locale(), Msg::ChooseDownloadFolder))
             .modal(true)
             .build();
         let row = row_for_picker.clone();

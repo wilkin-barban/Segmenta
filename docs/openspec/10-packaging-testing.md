@@ -58,7 +58,7 @@ tempfile = "3.12"
 
 ```bash
 sudo apt install build-essential pkg-config libgtk-4-dev libadwaita-1-dev \
-  libsecret-1-dev libssl-dev ffmpeg
+  libsecret-1-dev libsecret-tools libssl-dev ffmpeg
 cargo install cargo-deb
 ```
 
@@ -68,6 +68,15 @@ directo no lo necesita. La licencia de FFmpeg debe revisarse antes de distribuir
 enlace; el `.deb` puede declararlo como recomendación en lugar de dependencia obligatoria. `libsecret` se usa vía D-Bus/Secret Service; no se
 enlaza una biblioteca que guarde secretos en SQLite. La versión de Ubuntu de desarrollo se fija en CI
 sobre Ubuntu 26.04 LTS, la LTS objetiva de esta release.
+
+`libsecret-tools` es **dependencia de ejecución declarada en el `.deb`** (`Depends`), no sólo
+dependencia de build: el daemon habla con el Secret Service del escritorio a través de
+`secret-tool`. `dpkg-deb --info` debe mostrarla y `packaging/check-package.sh` falla si falta (§2.2.1).
+El backend de secretos elige el keyring sólo cuando `secret-tool` existe y una consulta de sondeo
+termina con código 0 (secreto encontrado) o 1 (no hay secreto); **nunca** se usa
+`secret-tool --version`, que en libsecret 0.21 devuelve 2. Si el keyring no está disponible, el
+backend se informa `unavailable`, no se escribe ningún secreto en archivo plano y un alta con
+cabeceras sensibles falla con `1031` (`ERR_KEYRING_UNAVAILABLE`).
 
 ### 2.1. Estructura de Instalación del Paquete Debian (`.deb`)
 Construido mediante `cargo-deb`, el paquete instala los siguientes archivos en el sistema:
@@ -95,9 +104,9 @@ cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo build --release --workspace
-cargo deb -p segmenta-daemon
-cargo deb -p segmenta-gui
-sudo apt install ./target/debian/segmenta_*.deb
+cargo deb -p segmenta-gui --no-build -o dist/
+packaging/check-package.sh dist/segmenta_0.0.2-1_amd64.deb
+sudo apt install ./dist/segmenta_0.0.2-1_amd64.deb
 systemctl --user daemon-reload
 systemctl --user enable --now segmenta.socket
 ```
@@ -105,6 +114,36 @@ systemctl --user enable --now segmenta.socket
 El `.deb` no debe ejecutar `systemctl enable` desde `postinst` sin una decisión explícita: la unidad de
 usuario se activa por el operador o por la GUI. El desinstalador conserva `$XDG_DATA_HOME/segmenta` y
 pregunta antes de borrar descargas; el paquete no borra archivos del usuario.
+
+### 2.2.1. Puerta de empaquetado (`packaging/check-package.sh`)
+
+Es la puerta obligatoria entre `cargo deb` y cualquier tag o publicación. Se ejecuta sobre un `.deb`
+ya construido —no lo genera— y valida el paquete real, no las fuentes:
+
+```bash
+packaging/check-package.sh dist/segmenta_0.0.2-1_amd64.deb [version-esperada]
+```
+
+Qué comprueba, en este orden y saliendo con código distinto de cero en el primer fallo duro:
+
+1. que el archivo exista y sea un `.deb`;
+2. que `dpkg-deb --info` declare `Package: segmenta`, la `Version` esperada (por defecto `0.0.2`,
+   sobreescribible con el segundo argumento o `SEGMENTA_EXPECTED_VERSION`), `libsecret-tools` en
+   `Depends` y un `Description` no vacío;
+3. que `dpkg-deb --contents` liste los diez archivos del contrato de instalación: los cuatro
+   binarios (`segmenta`, `segmenta-cli`, `segmenta-daemon`, `segmenta-gui`), las dos unidades de
+   usuario (`segmenta.service`, `segmenta.socket`), el `.desktop`, el metainfo, el icono y
+   `usr/share/doc/segmenta/copyright`; informa **todos** los que falten, no sólo el primero;
+4. que `desktop-file-validate` y `appstreamcli validate --no-net` acepten las copias **extraídas
+   del propio paquete** con `dpkg-deb -x` en un directorio temporal de `mktemp -d` que se borra con
+   `trap` al salir (nunca una ruta fija como `/tmp/...`);
+5. `lintian` si está instalado. Es **opcional e informativo**: sus hallazgos se imprimen para
+   revisión y no cambian el resultado de la puerta; si no está instalado, el script imprime
+   `lintian: not installed, skipped` y sigue con código 0.
+
+`desktop-file-validate` (paquete `desktop-file-utils`) y `appstreamcli` (paquete `appstream`) sí son
+requisitos del gate. El script termina siempre con una línea `summary:` que resume paquete, versión,
+rutas encontradas y estado de `lintian`.
 
 ### 2.3. Flatpak, Snap y AppImage (fuera de v1)
 
@@ -224,6 +263,9 @@ Cada pull request debe pasar, como mínimo:
 - `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings` y `cargo test --workspace`;
 - tests de integración con `wiremock` y un servidor local de rangos;
 - build del `.deb` en un contenedor Ubuntu 26.04 (o la versión LTS fijada para desarrollo);
+- `packaging/check-package.sh` sobre el `.deb` recién construido: control (`Package`, `Version`,
+  `libsecret-tools` en `Depends`, `Description`), los diez archivos instalados, `desktop-file-validate`
+  y `appstreamcli validate --no-net` sobre las copias extraídas; `lintian` es opcional e informativo;
 - validación de enlaces de documentación y de que `README`/`openspec` no tengan rutas muertas;
 - un job separado para la extensión (lint del manifest, build del ZIP/XPI) cuando exista código.
 

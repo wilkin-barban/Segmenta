@@ -5,6 +5,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+use segmenta_i18n::{tr, Msg};
 use serde_json::{json, Value};
 
 /// Failure of one JSON-RPC call.
@@ -33,9 +34,19 @@ impl ClientError {
                 format!("No se pudo conectar con el daemon: {detail}")
             }
             ClientError::Rpc { code, message } => {
-                format!("El daemon respondió con un error ({code}): {message}")
+                // The stable code is the contract; the text is resolved locally.
+                let localized = segmenta_i18n::ErrorText::from_code(*code)
+                    .map(|error| segmenta_i18n::tr_error(segmenta_i18n::current(), error));
+                match localized {
+                    Some(text) => format!("{text} ({code})"),
+                    None => tr(segmenta_i18n::current(), Msg::ErrRpc)
+                        .replace("{code}", &code.to_string())
+                        .replace("{message}", message),
+                }
             }
-            ClientError::Protocol(detail) => format!("Respuesta inválida del daemon: {detail}"),
+            ClientError::Protocol(detail) => {
+                tr(segmenta_i18n::current(), Msg::ErrProtocol).replace("{detail}", detail)
+            }
         }
     }
 }
@@ -408,13 +419,13 @@ impl Client for UnixClient {
         };
         if self.jobs.send(job).is_err() {
             return Err(ClientError::Unavailable(
-                "el hilo de IPC del cliente no está disponible".to_string(),
+                tr(segmenta_i18n::current(), Msg::ErrThreadUnavailable).to_string(),
             ));
         }
         match answer.recv_timeout(REQUEST_TIMEOUT) {
             Ok(result) => result,
             Err(_) => Err(ClientError::Unavailable(
-                "el daemon no respondió a tiempo".to_string(),
+                tr(segmenta_i18n::current(), Msg::ErrTimeout).to_string(),
             )),
         }
     }
@@ -634,7 +645,7 @@ impl Worker {
             }
             if std::time::Instant::now() >= deadline {
                 return Err(ClientError::Unavailable(
-                    "el daemon no respondió a tiempo".to_string(),
+                    tr(segmenta_i18n::current(), Msg::ErrTimeout).to_string(),
                 ));
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
@@ -676,7 +687,7 @@ impl Worker {
                 Ok(0) => {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::WriteZero,
-                        "el daemon cerró el socket",
+                        tr(segmenta_i18n::current(), Msg::ErrDaemonClosed),
                     ))
                 }
                 Ok(written) => data = &data[written..],
@@ -703,7 +714,7 @@ impl Worker {
                 Ok(0) => {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::UnexpectedEof,
-                        "el daemon cerró la conexión",
+                        tr(segmenta_i18n::current(), Msg::ErrDaemonClosed),
                     ))
                 }
                 Ok(read) => self.buffer.extend_from_slice(&chunk[..read]),
@@ -715,7 +726,7 @@ impl Worker {
         if self.buffer.len() > MAX_MESSAGE_BYTES * 4 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "el daemon envió una línea demasiado grande",
+                tr(segmenta_i18n::current(), Msg::ErrLineTooLarge),
             ));
         }
 
