@@ -14,9 +14,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Current schema version, stored in `PRAGMA user_version`.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 const SCHEMA_SQL: &str = include_str!("schema.sql");
+
+/// Idempotent migration to schema v2: media metadata for 0.1.0 tasks.
+const MEDIA_COLUMNS: &[(&str, &str)] = &[
+    ("media_kind", "TEXT"),
+    ("media_format", "TEXT"),
+    ("playlist_title", "TEXT"),
+    ("playlist_count", "INTEGER"),
+    ("batch_id", "TEXT"),
+];
 
 /// Errors raised by the persistence layer.
 #[derive(Debug, thiserror::Error)]
@@ -158,6 +167,16 @@ pub struct DownloadRecord {
     pub completed_at: Option<String>,
     /// Suggested name captured at add time.
     pub filename: String,
+    /// Media kind of a 0.1.0 task (`video`, `playlist`, `audio`, `stream`).
+    pub media_kind: Option<String>,
+    /// Selected format identifier.
+    pub media_format: Option<String>,
+    /// Playlist title when the task is a playlist.
+    pub playlist_title: Option<String>,
+    /// Number of playlist entries accepted by the limit.
+    pub playlist_count: Option<u32>,
+    /// Groups the entries of one playlist run.
+    pub batch_id: Option<String>,
 }
 
 /// One row of `segments`.
@@ -513,7 +532,26 @@ impl Store {
             return Ok(current);
         }
         let tx = conn.unchecked_transaction()?;
-        tx.execute_batch(SCHEMA_SQL)?;
+        if current < 1 {
+            tx.execute_batch(SCHEMA_SQL)?;
+        }
+        if current < 2 {
+            // `ALTER TABLE ADD COLUMN` is not idempotent by itself: check each column
+            // first so a partially migrated file is repaired instead of failing.
+            for (name, kind) in MEDIA_COLUMNS {
+                let exists: i64 = tx.query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('downloads') WHERE name = ?1",
+                    params![name],
+                    |row| row.get(0),
+                )?;
+                if exists == 0 {
+                    tx.execute_batch(&format!("ALTER TABLE downloads ADD COLUMN {name} {kind}"))?;
+                }
+            }
+            tx.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_downloads_batch ON downloads(batch_id)",
+            )?;
+        }
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         Ok(SCHEMA_VERSION)
@@ -538,8 +576,10 @@ impl Store {
             "INSERT INTO downloads (
                 id, url, final_url, final_path, temp_path, total_bytes, downloaded_bytes,
                 status, supports_ranges, etag, last_modified, content_type, expected_checksum,
-                error_code, error_message, retry_count, priority, queue_name, download_type
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+                error_code, error_message, retry_count, priority, queue_name, download_type,
+                media_kind, media_format, playlist_title, playlist_count, batch_id
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
+                       ?20, ?21, ?22, ?23, ?24)",
             params![
                 record.id,
                 record.url,
@@ -560,6 +600,11 @@ impl Store {
                 record.priority,
                 record.queue_name,
                 record.download_type,
+                record.media_kind,
+                record.media_format,
+                record.playlist_title,
+                record.playlist_count,
+                record.batch_id,
             ],
         )?;
         Ok(())
@@ -690,7 +735,8 @@ impl Store {
             "SELECT id, url, final_url, final_path, temp_path, total_bytes, downloaded_bytes,
                     status, supports_ranges, etag, last_modified, content_type, expected_checksum,
                     error_code, error_message, retry_count, priority, queue_name, download_type,
-                    created_at, completed_at
+                    created_at, completed_at,
+                    media_kind, media_format, playlist_title, playlist_count, batch_id
              FROM downloads WHERE id = ?1",
         )?;
         let row = statement.query_row(params![id], row_to_record).optional()?;
@@ -714,7 +760,8 @@ impl Store {
                     "SELECT id, url, final_url, final_path, temp_path, total_bytes, downloaded_bytes,
                             status, supports_ranges, etag, last_modified, content_type, expected_checksum,
                             error_code, error_message, retry_count, priority, queue_name, download_type,
-                            created_at, completed_at
+                            created_at, completed_at,
+                            media_kind, media_format, playlist_title, playlist_count, batch_id
                      FROM downloads WHERE status = ?3 ORDER BY created_at DESC, rowid DESC LIMIT ?1 OFFSET ?2",
                 )?;
                 let mapped =
@@ -728,7 +775,8 @@ impl Store {
                     "SELECT id, url, final_url, final_path, temp_path, total_bytes, downloaded_bytes,
                             status, supports_ranges, etag, last_modified, content_type, expected_checksum,
                             error_code, error_message, retry_count, priority, queue_name, download_type,
-                            created_at, completed_at
+                            created_at, completed_at,
+                            media_kind, media_format, playlist_title, playlist_count, batch_id
                      FROM downloads ORDER BY created_at DESC, rowid DESC LIMIT ?1 OFFSET ?2",
                 )?;
                 let mapped = statement.query_map(params![limit, offset], row_to_record)?;
@@ -1041,6 +1089,11 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<DownloadRecord> {
         created_at: row.get(19)?,
         completed_at: row.get(20)?,
         filename,
+        media_kind: row.get(21)?,
+        media_format: row.get(22)?,
+        playlist_title: row.get(23)?,
+        playlist_count: row.get::<_, Option<i64>>(24)?.map(|value| value as u32),
+        batch_id: row.get(25)?,
     })
 }
 

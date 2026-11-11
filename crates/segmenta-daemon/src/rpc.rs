@@ -490,3 +490,45 @@ pub struct EmptyParams {
     #[serde(flatten)]
     pub rest: Map<String, Value>,
 }
+
+/// Parameters of `media.probe`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MediaProbeParams {
+    /// Media URL (`https` only).
+    pub url: String,
+    /// `video`, `playlist` or `stream`.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// Playlist limit for the preview.
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+/// Parameters of `media.add`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MediaAddParams {
+    /// Media URL (`https` only).
+    pub url: String,
+    /// `video`, `audio` or `playlist`.
+    pub mode: String,
+    /// Backend format id.
+    #[serde(default)]
+    pub format_id: Option<String>,
+    /// Requested vertical resolution.
+    #[serde(default)]
+    pub height: Option<u32>,
+    /// Playlist limit, 1-500 (default 100).
+    #[serde(default)]
+    pub playlist_limit: Option<u32>,
+}
+
+/// Parameters of `media.status`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MediaStatusParams {
+    /// Task identifier.
+    #[serde(default)]
+    pub task_id: Option<String>,
+    /// Playlist batch identifier.
+    #[serde(default)]
+    pub batch_id: Option<String>,
+}

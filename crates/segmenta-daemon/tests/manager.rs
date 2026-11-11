@@ -42,6 +42,11 @@ fn record(id: &str, status: DownloadStatus) -> DownloadRecord {
         created_at: None,
         completed_at: None,
         filename: format!("{id}.bin"),
+        media_kind: None,
+        media_format: None,
+        playlist_title: None,
+        playlist_count: None,
+        batch_id: None,
     }
 }
 
