@@ -4,10 +4,27 @@
 > caída para **Ubuntu 26.04 LTS (GNOME 50 / Wayland)**, con daemon propio, CLI y GUI
 > nativa GTK4 + Libadwaita.
 
-**Estado: 0.0.2** — correcciones del QA remoto sobre 0.0.1: keyring real, carpeta XDG, estados
+**Estado: 0.1.0 (en preparación)** — correcciones del QA remoto sobre 0.0.1: keyring real, carpeta XDG, estados
 de pausa/reanudación honestos, arranque de la GUI, logging con redacción, i18n es/pt-BR/en y
 capturas claro/oscuro. Descarga directa segmentada, usable de punta a punta desde la GUI y desde
 la terminal. Ver [Alcance](#alcance-de-esta-release) para lo que todavía no entra.
+
+### Novedades de 0.1.0
+
+- **Extensión de navegador** para la familia Chromium (Chrome, Chromium, Brave, Edge, Vivaldi, Opera)
+  y Firefox: botón flotante en YouTube, panel de calidades, «Solo audio» y descarga de playlist con
+  límite (default 100, máximo 500).
+- **Host nativo** `segmenta-host` (Native Messaging, framing de 4 bytes LE, límite 1 MiB, sin shell)
+  que reenvía `media.*` al daemon por el mismo socket. Se instala con el `.deb`; los manifiestos de
+  usuario los escribe `extension/install-native.sh`.
+- **Backend de medios** en el daemon: `media.probe`, `media.add` y `media.status` con `yt-dlp` para
+  YouTube (video, playlist y audio sin recodificar) y HLS/DASH públicos sin cifrar con `ffmpeg
+  -c copy`. DRM, AES-128, live, privados, subtítulos y multi-audio se rechazan con código explícito.
+- **Dependencias**: el `.deb` declara `yt-dlp` y `ffmpeg`; no se embeben binarios.
+- **Assets**: `.deb`, `segmenta-extension-0.1.0.zip` (Chromium) y `segmenta-firefox-0.1.0.zip` (XPI).
+- Firefox sin firma se carga temporalmente desde `about:debugging`; no hay tiendas en 0.1.0.
+
+La extensión no se instala desde el `.deb`: se carga en modo desarrollador o desde el ZIP.
 
 ### Novedades de 0.0.2
 

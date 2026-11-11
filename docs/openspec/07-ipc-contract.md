@@ -289,3 +289,65 @@ Todos los eventos emitidos por el daemon incluyen un identificador de secuencia 
 
 `seq_id` es monótono por daemon, no por cliente. Un cliente que detecta un salto debe llamar a
 `download.list` y descartar su caché; no se intenta reenviar eventos perdidos.
+
+---
+
+## 9. Contrato de medios (0.1.0)
+
+### 9.1. `media.probe`
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"media.probe",
+ "params":{"url":"https://www.youtube.com/watch?v=...","kind":"video","limit":100}}
+```
+
+Respuesta:
+
+```json
+{"result":{"kind":"video","title":"...","duration_seconds":213,"thumbnail":"https://...",
+ "formats":[{"format_id":"137","label":"1080p","height":1080,"ext":"mp4","kind":"video"}],
+ "audio":[{"format_id":"140","label":"m4a","ext":"m4a"}],
+ "playlist":{"count":0,"entries":[]}}}
+```
+
+- `kind` ∈ `video|playlist|stream`. Para una playlist, `playlist.count` es el total público y
+  `entries` una muestra acotada (máximo 200).
+- El daemon valida esquema y host; sólo `https://`. Errores: `1004`, `1022`, `1023`, `1031`,
+  `1040`-`1045`.
+
+### 9.2. `media.add`
+
+```json
+{"method":"media.add","params":{"url":"https://www.youtube.com/watch?v=...",
+ "mode":"video","format_id":"137","height":1080,"playlist_limit":100}}
+```
+
+- `mode` ∈ `video|audio|playlist`. `playlist_limit` se acota a 1–500 (default 100).
+- Devuelve `{"task_id":"...","status":"downloading","kind":"youtube_video"}`.
+- `download_type` pasa a admitir `youtube_video`, `youtube_playlist`, `youtube_audio`, además de
+  `direct`, `hls` y `dash`.
+- Una playlist crea **una** tarea con `playlist_count`, `playlist_title` y `batch_id`; sus entradas
+  se reportan en `playlist_progress {completed,total}`.
+
+### 9.3. `media.status`
+
+Acepta `{"task_id":"..."}` o `{"batch_id":"..."}` y devuelve estado, progreso, velocidad, ETA,
+`title`, `final_path`, `error_code`, `error_message` y, en playlists, `playlist {completed,total}`.
+
+### 9.4. Eventos
+
+`download.event` de una tarea de medios agrega `media_kind` a `task_added` y
+`playlist_progress {completed,total}` a `task_progress`. `seq_id` sigue siendo monótono por daemon.
+
+### 9.5. Persistencia (esquema v2)
+
+Migración idempotente a `PRAGMA user_version = 2` que agrega a `downloads`:
+`media_kind TEXT`, `media_format TEXT`, `playlist_title TEXT`, `playlist_count INTEGER`,
+`batch_id TEXT`, con `CREATE INDEX IF NOT EXISTS idx_downloads_batch ON downloads(batch_id)`.
+Un archivo v1 migra en una transacción sin perder filas.
+
+### 9.6. Seguridad
+
+El host nativo sólo reenvía `media.*`, `system.*`, `download.*` y `settings.*`; cualquier otro método
+responde `-32601` sin tocar el daemon. El daemon valida URL, host y límites antes de crear la tarea y
+nunca registra query strings ni cabeceras sensibles.

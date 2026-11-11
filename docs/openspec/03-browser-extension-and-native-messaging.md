@@ -167,3 +167,67 @@ Cuando el recurso capturado es un manifiesto (`.m3u8` o `.mpd`):
      [`09-extension-security.md`](09-extension-security.md) §5.2. El comando no debe usar un shell.
    * **Alcance v1:** HLS/DASH públicos sin cifrar. Cualquier `EXT-X-KEY` distinto de `NONE` o
      `ContentProtection` DRM se rechaza con un mensaje explícito.
+
+---
+
+## 14. Media, navegadores y alcance de 0.1.0
+
+Esta sección fija el contrato de la release 0.1.0. No reemplaza lo anterior: lo extiende.
+
+### 14.1. Matriz de navegadores
+
+La extensión se publica para la **familia Chromium completa y Firefox**. Misma UI y mismo
+`background`; sólo cambia el manifiesto y el adaptador de API.
+
+| Navegador | Extensión | Manifiesto nativo de usuario |
+| --- | --- | --- |
+| Chrome | MV3 con `key` fija | `${XDG_CONFIG_HOME}/google-chrome/NativeMessagingHosts/io.github.wilkin.segmenta.json` |
+| Chromium | MV3 | `${XDG_CONFIG_HOME}/chromium/NativeMessagingHosts/...` |
+| Brave | MV3 | `${XDG_CONFIG_HOME}/BraveSoftware/Brave-Browser/NativeMessagingHosts/...` |
+| Edge | MV3 | `${XDG_CONFIG_HOME}/microsoft-edge/NativeMessagingHosts/...` |
+| Vivaldi | MV3 | `${XDG_CONFIG_HOME}/vivaldi/NativeMessagingHosts/...` |
+| Opera | MV3 | `${XDG_CONFIG_HOME}/opera/NativeMessagingHosts/...` |
+| Firefox | WebExtension con `browser_specific_settings.gecko.id = segmenta@wilkin.github.io` | `${XDG_CONFIG_HOME}/mozilla/native-messaging-hosts/segmenta@wilkin.github.io.json` |
+
+- El nombre del host es siempre `io.github.wilkin.segmenta`; el binario es `/usr/bin/segmenta-host`.
+- Chromium identifica la extensión por su `key`; el ID derivado debe aparecer como
+  `allowed_origins: ["chrome-extension://<ID>/"]`. Firefox usa `allowed_extensions`.
+- El host es común: recibe del navegador su propio manifiesto y no necesita lógica por navegador.
+- `extension/install-native.sh` detecta los navegadores instalados y escribe los manifiestos de
+  usuario; el `.deb` instala los manifiestos de sistema de los soportados.
+- Firefox sin firma de tienda se carga temporalmente desde `about:debugging`; es una limitación
+  documentada, no un fallo.
+
+### 14.2. Flujo de YouTube
+
+1. `content.js` detecta `youtube.com/watch` o `youtube.com/playlist` e inyecta el botón flotante
+   «Descargar con Segmenta» en un Shadow DOM.
+2. Sólo tras un click pide `media.probe` al `background`, que reenvía por Native Messaging.
+3. El panel muestra las calidades devueltas por el daemon, «Solo audio», «Video actual» y
+   «Playlist completa (N)» con límite editable (default 100, máximo 500).
+4. Al confirmar se envía `media.add` y la extensión hace polling de `media.status` cada 1,5 s.
+5. Al completar, toast con la ruta y «Abrir carpeta»; al fallar, el mensaje proviene del `code`
+   estable traducido por la extensión.
+6. No se leen cookies, no se descarga contenido privado, no se intenta saltar DRM ni anuncios.
+
+### 14.3. Formatos y modos
+
+- **Video**: `yt-dlp` con el `format_id` elegido; si se pide una altura se elige el mejor formato
+  progresivo o `video+audio` que la contenga (`bestvideo[height<=H]+bestaudio/best[height<=H]`).
+  Contenedor final `mp4` (merge con ffmpeg, `-c copy`).
+- **Audio**: `bestaudio/best`, contenedor original (M4A/Opus), **sin recodificar** por defecto.
+- **Playlist**: una tarea agregada con `playlist_count`, `batch_id` y progreso
+  `{completed,total}`; límite `--playlist-end`.
+- **HLS/DASH**: variante/representación elegida por altura, init segment primero, fragmentos
+  descargados con el scheduler, union con `ffmpeg -c copy` y argumentos separados.
+
+### 14.4. Errores de medios
+
+| Código | Nombre | Causa |
+| --- | --- | --- |
+| `1040` | `ERR_DRM_PROTECTED` | `EXT-X-KEY` distinto de `NONE` o `ContentProtection` de DRM |
+| `1041` | `ERR_LIVE_NOT_SUPPORTED` | playlist sin `ENDLIST` o MPD `type="dynamic"` |
+| `1042` | `ERR_MANIFEST_MALFORMED` | manifiesto ilegible o sin segmentos |
+| `1043` | `ERR_STREAM_UNSUPPORTED` | subtítulos, multi-audio o formato fuera de alcance |
+| `1044` | `ERR_MEDIA_BACKEND` | `yt-dlp`/`ffmpeg` ausente, falló o quedó desactualizado |
+| `1045` | `ERR_MEDIA_NOT_PUBLIC` | contenido privado, con edad o no disponible |
