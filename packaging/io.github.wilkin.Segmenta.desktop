@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Segmenta
+GenericName=Download Manager
+Comment=Fast segmented downloads with resume and live splitting
+Exec=segmenta-gui %U
+Icon=io.github.wilkin.Segmenta
+Terminal=false
+Type=Application
+Categories=Network;FileTransfer;GTK;
+Keywords=download;http;https;segments;resume;manager;
+StartupNotify=true
+StartupWMClass=io.github.wilkin.Segmenta

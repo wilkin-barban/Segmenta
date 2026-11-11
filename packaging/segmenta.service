@@ -1,0 +1,15 @@
+[Unit]
+Description=Segmenta Core Download Daemon
+Requires=segmenta.socket
+After=network.target
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/segmenta-daemon --systemd
+Restart=on-failure
+RestartSec=2s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
