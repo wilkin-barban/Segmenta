@@ -76,6 +76,8 @@ struct Inner {
     query: RefCell<String>,
     queue: RefCell<Option<String>>,
     view_state: RefCell<ViewState>,
+    loading_page: gtk::Box,
+    loading_spinner: gtk::Spinner,
     add_dialog: RefCell<Option<adw::Dialog>>,
     confirm_dialog: RefCell<Option<adw::AlertDialog>>,
     last_error: RefCell<Option<String>>,
@@ -140,6 +142,15 @@ impl SegmentaWindow {
         let list_view =
             gtk::ListView::new(Some(selection.clone()), None::<gtk::SignalListItemFactory>);
 
+        let spinner = gtk::Spinner::new();
+        let loading = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        loading.set_valign(gtk::Align::Center);
+        loading.set_halign(gtk::Align::Center);
+        loading.append(&spinner);
+        let loading_label = gtk::Label::new(Some(tr(locale(), Msg::Loading)));
+        loading_label.add_css_class("dim-label");
+        loading.append(&loading_label);
+
         let inner = Rc::new(Inner {
             app: app.clone(),
             client,
@@ -162,6 +173,8 @@ impl SegmentaWindow {
             query: RefCell::new(String::new()),
             queue: RefCell::new(None),
             view_state: RefCell::new(ViewState::Loading),
+            loading_page: loading.clone(),
+            loading_spinner: spinner.clone(),
             add_dialog: RefCell::new(None),
             confirm_dialog: RefCell::new(None),
             last_error: RefCell::new(None),
@@ -472,19 +485,9 @@ impl Inner {
 
         // Content stack: loading, list, empty and error are distinct pages so
         // "daemon unreachable" never looks like "no downloads".
-        let spinner = gtk::Spinner::new();
-        spinner.start();
-        let loading = gtk::Box::new(gtk::Orientation::Vertical, 12);
-        loading.set_valign(gtk::Align::Center);
-        loading.set_halign(gtk::Align::Center);
-        loading.append(&spinner);
-        let loading_label = gtk::Label::new(Some(tr(locale(), Msg::Loading)));
-        loading_label.add_css_class("dim-label");
-        loading.append(&loading_label);
-
         self.stack
             .set_transition_type(gtk::StackTransitionType::Crossfade);
-        self.stack.add_named(&loading, Some("loading"));
+        self.stack.add_named(&self.loading_page, Some("loading"));
         self.stack.add_named(&self.build_list_page(), Some("list"));
         self.stack
             .add_named(&self.build_empty_page(), Some("empty"));
@@ -1160,10 +1163,20 @@ impl Inner {
             eprintln!("segmenta-gui: view -> Loading");
         }
         *self.view_state.borrow_mut() = ViewState::Loading;
+        self.loading_page.set_visible(true);
+        self.loading_spinner.start();
         self.stack.set_visible_child_name("loading");
     }
 
+    /// Stop the spinner and hide the loading page; a hidden page must not keep an
+    /// animation ticking behind the list.
+    fn stop_loading(&self) {
+        self.loading_spinner.stop();
+        self.loading_page.set_visible(false);
+    }
+
     fn set_error(&self, message: String) {
+        self.stop_loading();
         if crate::client::trace_enabled() {
             eprintln!("segmenta-gui: view -> Error({message})");
         }
@@ -1249,6 +1262,11 @@ impl Inner {
             ViewState::Empty
         };
         self.empty_page.set_title(filter.empty_title());
+        // Leaving Loading must also stop the spinner: the widget kept animating
+        // behind the list and looked like a stuck "Conectando…".
+        if !matches!(state, ViewState::Loading) {
+            self.stop_loading();
+        }
         match state {
             ViewState::Empty => self.stack.set_visible_child_name("empty"),
             ViewState::Ready => self.stack.set_visible_child_name("list"),

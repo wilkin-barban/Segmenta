@@ -80,13 +80,20 @@ pub fn is_sensitive(name: &str) -> bool {
     // such as `secret_backend` or `checksum_ok`.
     lowered
         .split(['.', '/', ':'])
-        .last()
+        .next_back()
         .map(|last| SENSITIVE.contains(&last) || has_sensitive_suffix(last))
         .unwrap_or(false)
 }
 
 fn has_sensitive_suffix(name: &str) -> bool {
-    const SUFFIXES: &[&str] = &["_token", "_secret", "_password", "_passwd", "_api_key", "_cookie"];
+    const SUFFIXES: &[&str] = &[
+        "_token",
+        "_secret",
+        "_password",
+        "_passwd",
+        "_api_key",
+        "_cookie",
+    ];
     SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
 }
 

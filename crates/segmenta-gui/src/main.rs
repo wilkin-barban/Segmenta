@@ -50,10 +50,11 @@ fn main() -> glib::ExitCode {
             return glib::ExitCode::FAILURE;
         }
         return match segmenta_gui::screenshots::capture(std::path::Path::new(dir)) {
-            Ok(paths) => {
-                for path in paths {
+            Ok(captures) => {
+                for path in captures.paths {
                     println!("wrote {}", path.display());
                 }
+                println!("captured rows={} state={}", captures.rows, captures.state);
                 glib::ExitCode::SUCCESS
             }
             Err(err) => {

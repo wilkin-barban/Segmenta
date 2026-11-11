@@ -337,7 +337,9 @@ mod tests {
         let table = render_table(Locale::En, &[view()]);
         assert!(table.starts_with("ID "));
         assert!(table.contains("c1f7a28e"));
-        assert!(table.contains("downloading"));
+        // The status word is localized now (S21).
+        assert!(table.contains("Downloading"));
+        assert!(!table.contains("downloading"));
         assert!(table.contains("ubuntu.iso"));
         assert!(table.contains("10.0 MiB"));
     }

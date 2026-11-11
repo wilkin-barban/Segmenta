@@ -279,7 +279,10 @@ fn spanish_units_and_labels() {
     item.eta_seconds = Some(53);
     let line = item.progress_line();
     assert!(!line.contains("Quedan"), "{line}");
-    assert!(line.contains("remaining") || line.contains("restante"), "{line}");
+    assert!(
+        line.contains("remaining") || line.contains("restante"),
+        "{line}"
+    );
     assert_eq!(Filter::All.label(Locale::Es), "Todas");
     assert_eq!(Filter::Active.label(Locale::Es), "Activas");
 }
