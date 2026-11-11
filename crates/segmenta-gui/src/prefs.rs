@@ -36,6 +36,7 @@ pub fn present(
         .build();
 
     let bus = Rc::new(RequestBus::new());
+    let browser_bus = Rc::new(RequestBus::new());
 
     // ---------------------------------------------------------------- General
     let general = adw::PreferencesPage::builder()
@@ -137,6 +138,43 @@ pub fn present(
     proxy.add(&local);
     network.add(&proxy);
 
+    // -------------------------------------------------------------- Browsers
+    let browsers_page = adw::PreferencesPage::builder()
+        .title(tr(locale(), Msg::PrefsBrowsers))
+        .icon_name("applications-internet-symbolic")
+        .build();
+    let browsers_group = adw::PreferencesGroup::builder()
+        .title(tr(locale(), Msg::PrefsBrowsers))
+        .description(tr(locale(), Msg::BrowserInstallHint))
+        .build();
+    browser_bus.spawn(&client, "extension.status", json!({}));
+    let install_row = adw::ActionRow::builder()
+        .title(tr(locale(), Msg::InstallNative))
+        .build();
+    let install_button = gtk::Button::with_label(tr(locale(), Msg::InstallNative));
+    install_button.add_css_class("suggested-action");
+    install_row.add_suffix(&install_button);
+    install_row.set_activatable_widget(Some(&install_button));
+    browsers_group.add(&install_row);
+
+    let local_group = adw::PreferencesGroup::builder()
+        .title(tr(locale(), Msg::ExtensionLocalTitle))
+        .build();
+    local_group.add(
+        &adw::ActionRow::builder()
+            .title(tr(locale(), Msg::ExtensionLocalHint))
+            .subtitle("/usr/share/segmenta/extensions")
+            .build(),
+    );
+    browsers_page.add(&browsers_group);
+    browsers_page.add(&local_group);
+
+    let install_bus = Rc::clone(&browser_bus);
+    let install_client = Arc::clone(&client);
+    install_button.connect_clicked(move |_| {
+        install_bus.spawn(&install_client, "extension.install-native", json!({}));
+    });
+
     // ------------------------------------------------------------ Web capture
     let capture = adw::PreferencesPage::builder()
         .title(tr(locale(), Msg::PrefsCapture))
@@ -230,6 +268,7 @@ pub fn present(
     dialog.add(&general);
     dialog.add(&network);
     dialog.add(&capture);
+    dialog.add(&browsers_page);
     dialog.add(&about);
 
     // ------------------------------------------------------------ Save helpers
@@ -241,6 +280,74 @@ pub fn present(
     let open = Rc::new(std::cell::Cell::new(true));
     let open_for_close = Rc::clone(&open);
     dialog.connect_closed(move |_| open_for_close.set(false));
+
+    // Browsers poll: `extension.status` fills the list, `install-native` reports back.
+    let browser_poll = Rc::clone(&browser_bus);
+    let browser_group_poll = browsers_group.clone();
+    let browser_dialog_poll = dialog.clone();
+    let browser_open_poll = Rc::clone(&open);
+    let browser_locale = locale();
+    gtk::glib::timeout_add_local(Duration::from_millis(150), move || {
+        if !browser_open_poll.get() {
+            return gtk::glib::ControlFlow::Break;
+        }
+        for (_, result) in browser_poll.take() {
+            match result {
+                Ok(value) => {
+                    if let Some(list) = value.get("browsers").and_then(Value::as_array) {
+                        for browser in list {
+                            let installed =
+                                browser.get("command").and_then(Value::as_str).is_some();
+                            if !installed {
+                                continue;
+                            }
+                            let name = browser.get("name").and_then(Value::as_str).unwrap_or("?");
+                            let unsupported = browser.get("unsupported").and_then(Value::as_str);
+                            let present = browser
+                                .get("manifest_present")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false);
+                            let status = if unsupported.is_some() {
+                                tr(browser_locale, Msg::BrowserUnsupported)
+                            } else if present {
+                                tr(browser_locale, Msg::NativeReady)
+                            } else {
+                                tr(browser_locale, Msg::NativeMissing)
+                            };
+                            let row = adw::ActionRow::builder()
+                                .title(name)
+                                .subtitle(status)
+                                .build();
+                            if let Some(version) = browser.get("version").and_then(Value::as_str) {
+                                row.add_suffix(
+                                    &gtk::Label::builder()
+                                        .label(version)
+                                        .css_classes(["dim-label"])
+                                        .build(),
+                                );
+                            }
+                            browser_group_poll.add(&row);
+                        }
+                    } else if let Some(installed) = value.get("installed").and_then(Value::as_array)
+                    {
+                        let errors = value
+                            .get("errors")
+                            .and_then(Value::as_array)
+                            .map(|entries| entries.len())
+                            .unwrap_or(0);
+                        browser_dialog_poll.add_toast(adw::Toast::new(&format!(
+                            "{}: {} · {}",
+                            tr(browser_locale, Msg::InstallNative),
+                            installed.len(),
+                            errors
+                        )));
+                    }
+                }
+                Err(err) => browser_dialog_poll.add_toast(adw::Toast::new(&err.ui_message())),
+            }
+        }
+        gtk::glib::ControlFlow::Continue
+    });
 
     let bus_poll = Rc::clone(&bus);
     let dialog_poll = dialog.clone();
