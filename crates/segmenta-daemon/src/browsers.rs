@@ -32,13 +32,55 @@ struct Spec {
 }
 
 const SPECS: &[Spec] = &[
-    Spec { id: "chrome", name: "Google Chrome", family: "chromium", commands: &["google-chrome", "google-chrome-stable"], manifest: "/etc/opt/chrome/native-messaging-hosts/io.github.wilkin.segmenta.json" },
-    Spec { id: "chromium", name: "Chromium", family: "chromium", commands: &["chromium", "chromium-browser"], manifest: "/etc/chromium/native-messaging-hosts/io.github.wilkin.segmenta.json" },
-    Spec { id: "edge", name: "Microsoft Edge", family: "chromium", commands: &["microsoft-edge", "microsoft-edge-stable"], manifest: "/etc/opt/edge/native-messaging-hosts/io.github.wilkin.segmenta.json" },
-    Spec { id: "brave", name: "Brave", family: "chromium", commands: &["brave-browser", "brave"], manifest: "/etc/brave/native-messaging-hosts/io.github.wilkin.segmenta.json" },
-    Spec { id: "vivaldi", name: "Vivaldi", family: "chromium", commands: &["vivaldi", "vivaldi-stable"], manifest: "/etc/vivaldi/native-messaging-hosts/io.github.wilkin.segmenta.json" },
-    Spec { id: "opera", name: "Opera", family: "chromium", commands: &["opera"], manifest: "/etc/opera/native-messaging-hosts/io.github.wilkin.segmenta.json" },
-    Spec { id: "firefox", name: "Firefox", family: "firefox", commands: &["firefox"], manifest: "/usr/lib/mozilla/native-messaging-hosts/io.github.wilkin.segmenta.json" },
+    Spec {
+        id: "chrome",
+        name: "Google Chrome",
+        family: "chromium",
+        commands: &["google-chrome", "google-chrome-stable"],
+        manifest: "/etc/opt/chrome/native-messaging-hosts/io.github.wilkin.segmenta.json",
+    },
+    Spec {
+        id: "chromium",
+        name: "Chromium",
+        family: "chromium",
+        commands: &["chromium", "chromium-browser"],
+        manifest: "/etc/chromium/native-messaging-hosts/io.github.wilkin.segmenta.json",
+    },
+    Spec {
+        id: "edge",
+        name: "Microsoft Edge",
+        family: "chromium",
+        commands: &["microsoft-edge", "microsoft-edge-stable"],
+        manifest: "/etc/opt/edge/native-messaging-hosts/io.github.wilkin.segmenta.json",
+    },
+    Spec {
+        id: "brave",
+        name: "Brave",
+        family: "chromium",
+        commands: &["brave-browser", "brave"],
+        manifest: "/etc/brave/native-messaging-hosts/io.github.wilkin.segmenta.json",
+    },
+    Spec {
+        id: "vivaldi",
+        name: "Vivaldi",
+        family: "chromium",
+        commands: &["vivaldi", "vivaldi-stable"],
+        manifest: "/etc/vivaldi/native-messaging-hosts/io.github.wilkin.segmenta.json",
+    },
+    Spec {
+        id: "opera",
+        name: "Opera",
+        family: "chromium",
+        commands: &["opera"],
+        manifest: "/etc/opera/native-messaging-hosts/io.github.wilkin.segmenta.json",
+    },
+    Spec {
+        id: "firefox",
+        name: "Firefox",
+        family: "firefox",
+        commands: &["firefox"],
+        manifest: "/usr/lib/mozilla/native-messaging-hosts/io.github.wilkin.segmenta.json",
+    },
 ];
 
 /// Find an executable on an explicit `PATH`.
@@ -75,11 +117,7 @@ pub fn detect_with(path_env: &str, manifest_root: &Path, probe_version: bool) ->
             let manifest_path = if manifest_root == Path::new("") {
                 PathBuf::from(spec.manifest)
             } else {
-                manifest_root.join(
-                    Path::new(spec.manifest)
-                        .file_name()
-                        .unwrap_or_default(),
-                )
+                manifest_root.join(Path::new(spec.manifest).file_name().unwrap_or_default())
             };
             // Snap and Flatpak wrappers cannot launch the native host from outside
             // their sandbox; report that instead of offering a broken install.
@@ -166,7 +204,10 @@ pub fn install_user_manifest(browser: &Browser, home: &Path) -> Result<PathBuf, 
         return Err(format!("{} is not installed", browser.name));
     }
     if let Some(reason) = browser.unsupported {
-        return Err(format!("{} is a {reason} package and cannot run the host", browser.name));
+        return Err(format!(
+            "{} is a {reason} package and cannot run the host",
+            browser.name
+        ));
     }
     let relative = user_manifest_relative(browser.id)
         .ok_or_else(|| format!("{} has no manifest location", browser.name))?;
@@ -208,7 +249,11 @@ mod tests {
             &mut std::fs::metadata(&chromium).unwrap().permissions(),
             0o755,
         );
-        std::fs::set_permissions(&chromium, std::fs::metadata(&chromium).unwrap().permissions()).unwrap();
+        std::fs::set_permissions(
+            &chromium,
+            std::fs::metadata(&chromium).unwrap().permissions(),
+        )
+        .unwrap();
 
         let path_env = format!("{}:{}", bin.display(), snap.display());
         let browsers = detect_with(&path_env, &dir.path().join("manifests"), false);

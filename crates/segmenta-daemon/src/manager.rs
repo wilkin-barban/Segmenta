@@ -1788,7 +1788,10 @@ impl RpcHandler for Manager {
                         if browser.command.is_none() {
                             continue;
                         }
-                        match crate::browsers::install_user_manifest(&browser, std::path::Path::new(&home)) {
+                        match crate::browsers::install_user_manifest(
+                            &browser,
+                            std::path::Path::new(&home),
+                        ) {
                             Ok(path) => installed.push(json!({
                                 "id": browser.id,
                                 "path": path.to_string_lossy(),

@@ -172,7 +172,7 @@ pub fn present(
             tr(locale(), Msg::CaptureExtensionsHint)
         ))
         .build();
-    let extensions_button = gtk::Button::with_label(&tr(locale(), Msg::Edit));
+    let extensions_button = gtk::Button::with_label(tr(locale(), Msg::Edit));
     extensions_row.add_suffix(&extensions_button);
     extensions_row.set_activatable_widget(Some(&extensions_button));
     capture_group.add(&extensions_row);
@@ -185,7 +185,7 @@ pub fn present(
             tr(locale(), Msg::DomainDenylistHint)
         ))
         .build();
-    let denylist_button = gtk::Button::with_label(&tr(locale(), Msg::Edit));
+    let denylist_button = gtk::Button::with_label(tr(locale(), Msg::Edit));
     denylist_row.add_suffix(&denylist_button);
     denylist_row.set_activatable_widget(Some(&denylist_button));
     capture_group.add(&denylist_row);
@@ -294,8 +294,8 @@ pub fn present(
         move || {
             edit_list(
                 &dialog,
-                &tr(locale, Msg::CaptureExtensions),
-                &tr(locale, Msg::CaptureExtensionsHint),
+                tr(locale, Msg::CaptureExtensions),
+                tr(locale, Msg::CaptureExtensionsHint),
                 &current,
                 {
                     let save = Rc::clone(&save);
@@ -324,8 +324,8 @@ pub fn present(
         move || {
             edit_list(
                 &dialog,
-                &tr(locale, Msg::DomainDenylist),
-                &tr(locale, Msg::DomainDenylistHint),
+                tr(locale, Msg::DomainDenylist),
+                tr(locale, Msg::DomainDenylistHint),
                 &current,
                 {
                     let save = Rc::clone(&save);
@@ -489,9 +489,9 @@ fn edit_list(
         .wrap(true)
         .css_classes(["dim-label"])
         .build();
-    let save = gtk::Button::with_label(&tr(locale(), Msg::SaveAction));
+    let save = gtk::Button::with_label(tr(locale(), Msg::SaveAction));
     save.add_css_class("suggested-action");
-    let cancel = gtk::Button::with_label(&tr(locale(), Msg::Cancel));
+    let cancel = gtk::Button::with_label(tr(locale(), Msg::Cancel));
     let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     buttons.set_halign(gtk::Align::End);
     buttons.append(&cancel);
