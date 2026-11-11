@@ -57,3 +57,14 @@ watch -n 10 cat docs/qa/segmenta-0.0.2-live.md
 | GUI normal queda en «Conectando…» | El `activate` creaba el `SegmentaWindow` (envoltorio de `Rc<Inner>`) y lo descartaba: GTK mantenía el widget, pero moría el estado con el tick que procesa las respuestas. | `app::build_window_for_client` registra la ventana en `OPEN_WINDOWS` (thread-local). | Reproducido con el daemon real local: antes no había `finish reload`; ahora `download.list ok (3 rows)` y la lista se pinta. Test `the_production_window_is_kept_alive_by_the_application`. |
 | i18n: estados crudos, `--help` en inglés, ETA en español | El CLI imprimía el protocolo tal cual y clap no localiza; la GUI componía «Quedan 53 s». | `render::status_label` traduce el estado; `--help` sale de `help_text(locale)`; `format_eta` devuelve sólo la duración y la etiqueta sale del catálogo. | `render_locale` (6 tests: estados es/pt-BR/en, help es/pt/en), test de modelo para la línea de progreso. |
 | Redacción excesiva | `is_sensitive` hacía coincidencia por subcadena y «secret» atrapaba `secret_backend`; «checksum» ocultaba `checksum_ok`. | Coincidencia exacta o por sufijo (`_token`, `_secret`, `_password`, `_api_key`, `_cookie`). | Tests de `logging.rs`: `secret_backend=keyring` y `checksum_ok=true` visibles, `access_token` redactado. |
+
+## Tercer candidato (tras la segunda pasada de QA)
+
+- Spinner: la página de carga se oculta y el `GtkSpinner` se detiene al salir de `Loading`;
+  captura PT normal ya sin indicador residual.
+- `--screenshots` espera a `Ready` con al menos una fila y publica `rows`/`state`; el test
+  falla si captura el estado de carga.
+- Paquete: `dist/segmenta_0.0.2-1_amd64.deb` — 3.930.632 B, sha256 `25db540296008a0b6696d424f5a05bbc8354b91d5595cf3b98bda40f8b511399`.
+- Puertas locales: `cargo fmt --check`, `clippy -D warnings`, `cargo test --workspace` y la
+  suite GUI bajo Xvfb en verde; `check-package.sh` OK (10/10 paths, AppStream y desktop válidos).
+- **Sin publicar**: pendiente la tercera instalación/prueba remota del usuario.
