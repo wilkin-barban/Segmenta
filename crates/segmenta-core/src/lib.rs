@@ -11,6 +11,7 @@
 
 pub mod checksum;
 pub mod disk;
+pub mod engine;
 pub mod probe;
 pub mod error;
 pub mod filename;
