@@ -75,7 +75,13 @@
         return;
       }
       if (returned && typeof returned.then === 'function') {
-        returned.then(finish, (err) => {
+        returned.then((value) => {
+          // Chrome MV3 may expose a promise that resolves undefined while still
+          // delivering the reply through the callback; never let that win.
+          if (typeof value !== 'undefined') {
+            finish(value);
+          }
+        }, (err) => {
           if (!settled) {
             settled = true;
             reject(err);
