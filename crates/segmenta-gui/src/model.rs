@@ -172,6 +172,12 @@ pub struct DownloadItem {
     pub error_message: Option<String>,
     #[serde(default)]
     pub segments: Vec<SegmentItem>,
+    /// Media kind for 0.1.0 tasks (`video`, `audio`, `playlist`).
+    #[serde(default)]
+    pub media_kind: Option<String>,
+    /// Playlist title when the task is a playlist.
+    #[serde(default)]
+    pub playlist_title: Option<String>,
 }
 
 impl DownloadItem {
@@ -203,6 +209,19 @@ impl DownloadItem {
             ),
             None => format_bytes(self.downloaded_bytes),
         }
+    }
+
+    /// Localized media badge (`Video`, `Audio`, `Playlist`), empty for direct downloads.
+    pub fn media_badge(&self) -> String {
+        let Some(kind) = self.media_kind.as_deref() else {
+            return String::new();
+        };
+        let message = match kind {
+            "audio" => segmenta_i18n::Msg::MediaAudioBadge,
+            "playlist" => segmenta_i18n::Msg::MediaPlaylistBadge,
+            _ => segmenta_i18n::Msg::MediaVideoBadge,
+        };
+        segmenta_i18n::tr(segmenta_i18n::current(), message).to_string()
     }
 
     /// `80.0 MB/s · 25 s left · 2.0 GB of 4.0 GB` (labels localized).
@@ -247,6 +266,12 @@ pub struct ProgressUpdate {
     pub eta_seconds: Option<u64>,
     #[serde(default)]
     pub segments: Vec<SegmentItem>,
+    /// Media kind for 0.1.0 tasks (`video`, `audio`, `playlist`).
+    #[serde(default)]
+    pub media_kind: Option<String>,
+    /// Playlist title when the task is a playlist.
+    #[serde(default)]
+    pub playlist_title: Option<String>,
 }
 
 /// Sidebar filter.

@@ -189,6 +189,8 @@ impl Manager {
             error_code: record.error_code,
             error_message: record.error_message.clone(),
             segments,
+            media_kind: record.media_kind.clone(),
+            playlist_title: record.playlist_title.clone(),
         }
     }
 

@@ -107,12 +107,49 @@ enum Command {
         #[command(subcommand)]
         action: QueueAction,
     },
+    /// Media helpers for YouTube and public streams.
+    Media {
+        #[command(subcommand)]
+        action: MediaAction,
+    },
     /// Ask the daemon for its protocol and version.
     Hello,
     /// Daemon diagnostics and lifecycle.
     System {
         #[command(subcommand)]
         action: SystemAction,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum MediaAction {
+    /// Inspect a media URL without downloading it.
+    Probe {
+        /// https media URL.
+        url: String,
+        /// video, playlist or stream.
+        #[arg(long, default_value = "video")]
+        kind: String,
+        /// Playlist preview limit.
+        #[arg(long)]
+        limit: Option<u32>,
+    },
+    /// Enqueue a media download.
+    Add {
+        /// https media URL.
+        url: String,
+        /// video, audio or playlist.
+        #[arg(long, default_value = "video")]
+        mode: String,
+        /// Backend format id.
+        #[arg(long)]
+        format_id: Option<String>,
+        /// Requested vertical resolution.
+        #[arg(long)]
+        height: Option<u32>,
+        /// Playlist limit (1-500, default 100).
+        #[arg(long)]
+        limit: Option<u32>,
     },
 }
 
@@ -488,6 +525,62 @@ fn run(cli: Cli, locale: Locale) -> Result<String, ClientError> {
                     }),
                 )?;
                 out.push_str(&format!("{result}\n"));
+            }
+        },
+        Command::Media { action } => match action {
+            MediaAction::Probe { url, kind, limit } => {
+                let result = client.call(
+                    "media.probe",
+                    json!({ "url": url, "kind": kind, "limit": limit }),
+                )?;
+                if json_out {
+                    out.push_str(&format!("{result}\n"));
+                } else {
+                    use segmenta_i18n::{tr, Msg};
+                    let locale = segmenta_i18n::current();
+                    out.push_str(&format!(
+                        "{}: {}\n{}: {}\n{}: {} · {}: {} · {}: {}\n",
+                        tr(locale, Msg::MediaTitle),
+                        result["title"].as_str().unwrap_or("-"),
+                        tr(locale, Msg::MediaKind),
+                        result["kind"].as_str().unwrap_or("-"),
+                        tr(locale, Msg::MediaFormats),
+                        result["formats"].as_array().map(Vec::len).unwrap_or(0),
+                        tr(locale, Msg::MediaAudio),
+                        result["audio"].as_array().map(Vec::len).unwrap_or(0),
+                        tr(locale, Msg::MediaPlaylist),
+                        result["playlist"]["count"].as_u64().unwrap_or(0),
+                    ));
+                }
+            }
+            MediaAction::Add {
+                url,
+                mode,
+                format_id,
+                height,
+                limit,
+            } => {
+                let result = client.call(
+                    "media.add",
+                    json!({
+                        "url": url,
+                        "mode": mode,
+                        "format_id": format_id,
+                        "height": height,
+                        "playlist_limit": limit,
+                    }),
+                )?;
+                if json_out {
+                    out.push_str(&format!("{result}\n"));
+                } else {
+                    use segmenta_i18n::{tr, Msg};
+                    out.push_str(&format!(
+                        "{} {} ({})\n",
+                        tr(segmenta_i18n::current(), Msg::MediaAdded),
+                        result["task_id"].as_str().unwrap_or("-"),
+                        result["kind"].as_str().unwrap_or("-"),
+                    ));
+                }
             }
         },
         Command::Hello => {

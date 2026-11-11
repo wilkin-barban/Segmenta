@@ -14,6 +14,8 @@ use segmenta_i18n::Locale;
 
 fn view() -> DownloadView {
     DownloadView {
+        media_kind: None,
+        playlist_title: None,
         task_id: "c1f7a28e-8b1b-4f9e-9d22-29f123456789".to_string(),
         url: "https://example.test/ubuntu.iso".to_string(),
         final_path: "/home/u/Downloads/ubuntu.iso".to_string(),

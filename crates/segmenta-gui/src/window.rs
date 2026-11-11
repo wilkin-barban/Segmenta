@@ -1808,7 +1808,14 @@ fn fill_row(widget: &gtk::Widget, item: &DownloadItem) {
         item.progress() * 100.0
     ))]);
 
-    let meta = gtk::Label::new(Some(&item.progress_line()));
+    // Media tasks carry a localized badge in front of the progress line.
+    let badge = item.media_badge();
+    let meta_text = if badge.is_empty() {
+        item.progress_line()
+    } else {
+        format!("{badge} · {}", item.progress_line())
+    };
+    let meta = gtk::Label::new(Some(&meta_text));
     meta.set_xalign(0.0);
     meta.set_ellipsize(gtk::pango::EllipsizeMode::End);
     meta.add_css_class("caption");
