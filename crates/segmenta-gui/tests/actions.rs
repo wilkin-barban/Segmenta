@@ -105,6 +105,17 @@ fn pump_until(mut predicate: impl FnMut() -> bool, timeout: Duration) -> bool {
     predicate()
 }
 
+fn pump_until_stable(mut predicate: impl FnMut() -> bool, window: Duration) -> bool {
+    let deadline = std::time::Instant::now() + window;
+    while std::time::Instant::now() < deadline {
+        if predicate() {
+            return true;
+        }
+        pump_until(|| false, Duration::from_millis(20));
+    }
+    predicate()
+}
+
 fn row(task_id: &str, status: &str, filename: &str) -> Value {
     json!({
         "task_id": task_id,
@@ -335,7 +346,7 @@ fn selecting_a_row_opens_the_detail_and_gates_its_actions_on_state() {
             Duration::from_secs(5)
         ));
 
-        assert!(window.select_task("run"));
+        assert!(window.click_task("run"));
         assert!(pump_until(
             || window.detail().map(|item| item.task_id) == Some("run".to_string()),
             Duration::from_secs(2)
@@ -345,7 +356,7 @@ fn selecting_a_row_opens_the_detail_and_gates_its_actions_on_state() {
         assert!(actions.contains(&"cancel".to_string()), "{actions:?}");
         assert!(!actions.contains(&"resume".to_string()), "{actions:?}");
 
-        assert!(window.select_task("done"));
+        assert!(window.click_task("done"));
         assert!(pump_until(
             || window.detail().map(|item| item.task_id) == Some("done".to_string()),
             Duration::from_secs(2)
@@ -365,7 +376,7 @@ fn selecting_a_row_opens_the_detail_and_gates_its_actions_on_state() {
             || window.rows().len() == 1,
             Duration::from_secs(5)
         ));
-        assert!(window.select_task("paused"));
+        assert!(window.click_task("paused"));
         assert!(pump_until(
             || window.detail().is_some(),
             Duration::from_secs(2)
@@ -388,7 +399,7 @@ fn the_destructive_actions_ask_for_confirmation_first() {
             || window.rows().len() == 1,
             Duration::from_secs(5)
         ));
-        assert!(window.select_task("done"));
+        assert!(window.click_task("done"));
         assert!(pump_until(
             || window.detail().is_some(),
             Duration::from_secs(2)
@@ -436,5 +447,22 @@ fn quitting_closes_the_window() {
             .lookup_action("quit")
             .expect("the quit action must exist");
         assert!(quit.is_enabled());
+    });
+}
+
+#[test]
+fn hovering_a_row_never_opens_the_detail() {
+    run_gui("hover_detail", || {
+        let application = app("io.github.wilkin.Segmenta.Hover1");
+        let fake = DemoClient::with_downloads(vec![
+            row("a", "downloading", "ubuntu.iso"),
+            row("b", "completed", "debian.iso"),
+        ]);
+        let window = ready_window(&application, &fake, 2);
+
+        // Selection without focus is what a hover produced before the fix.
+        assert!(window.select_task("a"), "row a must exist");
+        let opened = pump_until_stable(|| window.detail().is_some(), Duration::from_millis(300));
+        assert!(!opened, "hover/selection opened the detail: {:?}", window.detail());
     });
 }

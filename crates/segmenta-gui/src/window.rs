@@ -85,6 +85,8 @@ struct Inner {
     bus: RequestBus,
     pending: RefCell<Vec<(u64, Pending)>>,
     detail: RefCell<Option<DetailPage>>,
+    /// A click is in flight: it focused the list and is selecting a row.
+    click_intent: std::cell::Cell<bool>,
     connected: Cell<bool>,
     closed: Cell<bool>,
     daemon_version: RefCell<Option<String>>,
@@ -182,6 +184,7 @@ impl SegmentaWindow {
             bus: RequestBus::new(),
             pending: RefCell::new(Vec::new()),
             detail: RefCell::new(None),
+            click_intent: std::cell::Cell::new(false),
             connected: Cell::new(false),
             closed: Cell::new(false),
             daemon_version: RefCell::new(None),
@@ -237,6 +240,16 @@ impl SegmentaWindow {
     }
 
     /// Selects the row of `task_id`, opening its detail page.
+    /// Select a row the way a click does: the list takes focus, then the row is
+    /// selected, and only then does the detail open. Pointer hover never focuses.
+    pub fn click_task(&self, task_id: &str) -> bool {
+        self.0.list_view.grab_focus();
+        self.0.click_intent.set(true);
+        let selected = self.select_task(task_id);
+        self.0.click_intent.set(false);
+        selected
+    }
+
     pub fn select_task(&self, task_id: &str) -> bool {
         let Some(index) = self.0.index_of(task_id) else {
             return false;
@@ -678,7 +691,29 @@ impl Inner {
 
         self.list_view.set_factory(Some(&factory));
         self.list_view.add_css_class("boxed-list");
-        self.list_view.set_single_click_activate(true);
+        // A single click must not imply "activate on pointer contact": with this
+        // enabled GTK activated the row as the pointer entered it, which pushed the
+        // detail page on hover (0.1.1 bug). Activation is explicit below.
+        self.list_view.set_single_click_activate(false);
+        let activate_handle = Rc::downgrade(self);
+        self.list_view.connect_activate(move |view, position| {
+            let Some(inner) = activate_handle.upgrade() else {
+                return;
+            };
+            let task_id = view
+                .model()
+                .and_then(|model| model.item(position))
+                .and_downcast::<gtk::glib::BoxedAnyObject>()
+                .and_then(|boxed| {
+                    boxed
+                        .try_borrow::<DownloadItem>()
+                        .ok()
+                        .map(|item| item.task_id.clone())
+                });
+            if let Some(task_id) = task_id {
+                inner.open_detail(&task_id);
+            }
+        });
 
         let selection_handle = Rc::downgrade(self);
         self.selection.connect_selected_notify(move |selection| {
@@ -694,6 +729,12 @@ impl Inner {
                         .ok()
                         .map(|item| item.task_id.clone())
                 });
+            // Hover used to select a row, and every selection opened the detail.
+            // Selection without keyboard/mouse focus is never a user intent, so it
+            // only paints the row; `close_detail` is the sole teardown path.
+            if !inner.click_intent.get() && !inner.list_view.has_focus() {
+                return;
+            }
             // Deselection happens whenever a row is replaced in place, so it
             // must not tear the detail page down; `close_detail` clears it.
             if let Some(task_id) = task_id {

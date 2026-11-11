@@ -173,7 +173,7 @@ fn run_smoke() -> glib::ExitCode {
             // The row only exists after the first `download.list` answer, so the
             // selection is retried until it sticks.
             if !selected {
-                selected = window.select_task(SMOKE_TASK);
+                selected = window.click_task(SMOKE_TASK);
             }
             let rows = window.rows().len();
             let segments = window.detail_segment_count();
