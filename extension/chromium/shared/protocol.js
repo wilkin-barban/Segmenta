@@ -70,6 +70,70 @@
     return parsed;
   }
 
+  function parseHttpUrl(value) {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const raw = value.trim();
+    if (!raw || raw.length > MAX_URL_LENGTH) {
+      return null;
+    }
+    let parsed;
+    try {
+      parsed = new URL(raw);
+    } catch (err) {
+      return null;
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return null;
+    }
+    if (parsed.username || parsed.password) {
+      return null;
+    }
+    return parsed;
+  }
+
+  function requireHttpUrl(value) {
+    const parsed = parseHttpUrl(value);
+    if (!parsed) {
+      throw new ProtocolError('ERR_INVALID_URL', 'url must be a valid http or https url');
+    }
+    return parsed.href;
+  }
+
+  function parseTorrentUrl(value) {
+    if (typeof value !== 'string') {
+      return null;
+    }
+    const raw = value.trim();
+    if (!raw || raw.length > MAX_URL_LENGTH) {
+      return null;
+    }
+    const lower = raw.toLowerCase();
+    if (lower.startsWith('magnet:')) {
+      if (lower.includes('xt=urn:btih:')) {
+        return raw;
+      }
+      return null;
+    }
+    const parsed = parseHttpUrl(raw);
+    if (!parsed) {
+      return null;
+    }
+    if (parsed.pathname.toLowerCase().endsWith('.torrent')) {
+      return raw;
+    }
+    return null;
+  }
+
+  function requireTorrentUrl(value) {
+    const torrent = parseTorrentUrl(value);
+    if (!torrent) {
+      throw new ProtocolError('ERR_INVALID_URL', 'torrent url or magnet uri is not valid');
+    }
+    return torrent;
+  }
+
   function normalizedHost(parsed) {
     return parsed.hostname.toLowerCase();
   }
@@ -235,6 +299,32 @@
     return envelope('media.add', params, request.id);
   }
 
+  function buildDownloadAdd(input) {
+    const request = input && typeof input === 'object' ? input : {};
+    const url = requireHttpUrl(request.url);
+    const params = { url: url };
+    if (request.filename !== undefined && request.filename !== null && request.filename !== '') {
+      const filename = sanitizeText(String(request.filename), 255);
+      if (filename) {
+        params.filename = filename;
+      }
+    }
+    if (request.referrer !== undefined && request.referrer !== null && request.referrer !== '') {
+      const refParsed = parseHttpUrl(request.referrer);
+      if (refParsed) {
+        params.headers = { Referer: refParsed.href };
+      }
+    }
+    return envelope('download.add', params, request.id);
+  }
+
+  function buildTorrentAdd(input) {
+    const request = input && typeof input === 'object' ? input : {};
+    const url = requireTorrentUrl(request.url);
+    const params = { url: url };
+    return envelope('torrent.add', params, request.id);
+  }
+
   function buildStatus(input) {
     const request = input && typeof input === 'object' ? input : {};
     const taskId = typeof request.taskId === 'string' ? request.taskId.trim() : '';
@@ -349,8 +439,12 @@
     playlistUrlFrom: playlistUrlFrom,
     clampPlaylistLimit: clampPlaylistLimit,
     clampHeight: clampHeight,
+    parseHttpUrl: parseHttpUrl,
+    parseTorrentUrl: parseTorrentUrl,
     buildProbe: buildProbe,
     buildAdd: buildAdd,
+    buildDownloadAdd: buildDownloadAdd,
+    buildTorrentAdd: buildTorrentAdd,
     buildStatus: buildStatus,
     validateHostReply: validateHostReply,
     sanitizeText: sanitizeText,

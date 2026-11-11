@@ -143,6 +143,71 @@
     return true;
   }
 
+  function resolveNamespace(api, name) {
+    const root = api || resolveRuntime();
+    return root && root[name] ? root[name] : null;
+  }
+
+  function resolveStorage(api) {
+    const root = api || resolveRuntime();
+    if (root && root.storage) {
+      return root.storage.local || root.storage;
+    }
+    return null;
+  }
+
+  function createEventWrapper(namespaceName, eventName) {
+    return {
+      addListener(callback) {
+        const ns = resolveNamespace(null, namespaceName);
+        if (ns && ns[eventName] && typeof ns[eventName].addListener === 'function') {
+          ns[eventName].addListener(callback);
+          return true;
+        }
+        return false;
+      },
+      removeListener(callback) {
+        const ns = resolveNamespace(null, namespaceName);
+        if (ns && ns[eventName] && typeof ns[eventName].removeListener === 'function') {
+          ns[eventName].removeListener(callback);
+          return true;
+        }
+        return false;
+      },
+    };
+  }
+
+  const downloads = {
+    onCreated: createEventWrapper('downloads', 'onCreated'),
+    cancel(downloadId) {
+      const ns = resolveNamespace(null, 'downloads');
+      return invoke(resolveRuntime(), ns, 'cancel', [downloadId]);
+    },
+    erase(query) {
+      const ns = resolveNamespace(null, 'downloads');
+      return invoke(resolveRuntime(), ns, 'erase', [query]);
+    },
+  };
+
+  const contextMenus = {
+    create(createProperties) {
+      const ns = resolveNamespace(null, 'contextMenus');
+      return invoke(resolveRuntime(), ns, 'create', [createProperties]);
+    },
+    onClicked: createEventWrapper('contextMenus', 'onClicked'),
+  };
+
+  const storage = {
+    get(keys) {
+      const st = resolveStorage(resolveRuntime());
+      return invoke(resolveRuntime(), st, 'get', [keys]);
+    },
+    set(items) {
+      const st = resolveStorage(resolveRuntime());
+      return invoke(resolveRuntime(), st, 'set', [items]);
+    },
+  };
+
   const api = {
     hostName: HOST_NAME,
     nativeHost: NATIVE_HOST,
@@ -151,6 +216,9 @@
     getMessage: getMessage,
     addListener: addListener,
     resolveRuntime: resolveRuntime,
+    downloads: downloads,
+    contextMenus: contextMenus,
+    storage: storage,
   };
 
   Object.defineProperty(api, 'api', {

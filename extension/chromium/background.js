@@ -23,6 +23,16 @@ if (typeof importScripts === 'function') {
   // user grants a site, only the fixed allowlist below is accepted.
   const STREAM_ALLOWLIST = [];
 
+  const handledDownloadIds = new Set();
+
+  function trackHandledId(id) {
+    if (handledDownloadIds.size >= 100) {
+      const first = handledDownloadIds.values().next().value;
+      handledDownloadIds.delete(first);
+    }
+    handledDownloadIds.add(id);
+  }
+
   function extensionId() {
     const runtime = API && API.resolveRuntime ? API.resolveRuntime() : null;
     const id = runtime && runtime.runtime ? runtime.runtime.id : '';
@@ -103,6 +113,189 @@ if (typeof importScripts === 'function') {
     return { ok: true, data: verdict.result };
   }
 
+  async function getCachedSettings() {
+    try {
+      if (API.storage && typeof API.storage.get === 'function') {
+        const stored = await API.storage.get(['segmenta_settings']);
+        if (stored && stored.segmenta_settings) {
+          return stored.segmenta_settings;
+        }
+      }
+    } catch (err) {}
+
+    const reply = await callHost(() => PROTOCOL.envelope('settings.get', {}));
+    if (reply.ok && reply.data) {
+      try {
+        if (API.storage && typeof API.storage.set === 'function') {
+          await API.storage.set({ segmenta_settings: reply.data });
+        }
+      } catch (err) {}
+      return reply.data;
+    }
+    return null;
+  }
+
+  function matchExtension(filenameOrUrl, extensionsList) {
+    if (!Array.isArray(extensionsList) || extensionsList.length === 0) {
+      return false;
+    }
+    let ext = '';
+    try {
+      const parsed = new URL(filenameOrUrl);
+      const pathname = parsed.pathname;
+      const lastSegment = pathname.split('/').pop() || '';
+      const dotIdx = lastSegment.lastIndexOf('.');
+      if (dotIdx !== -1) {
+        ext = lastSegment.slice(dotIdx + 1).toLowerCase();
+      }
+    } catch (err) {
+      const dotIdx = filenameOrUrl.lastIndexOf('.');
+      if (dotIdx !== -1) {
+        ext = filenameOrUrl.slice(dotIdx + 1).toLowerCase();
+      }
+    }
+    if (!ext) return false;
+
+    for (const pattern of extensionsList) {
+      const pat = String(pattern).trim().toLowerCase().replace(/^\./, '');
+      if (!pat) continue;
+      if (pat.endsWith('*')) {
+        const prefix = pat.slice(0, -1);
+        if (ext.startsWith(prefix)) {
+          return true;
+        }
+      } else {
+        if (ext === pat) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  function isHostDenylisted(url, denylist) {
+    if (!Array.isArray(denylist) || denylist.length === 0) {
+      return false;
+    }
+    try {
+      const parsed = new URL(url);
+      const hostname = parsed.hostname.toLowerCase();
+      for (const domain of denylist) {
+        const d = String(domain).trim().toLowerCase();
+        if (!d) continue;
+        if (hostname === d || hostname.endsWith('.' + d)) {
+          return true;
+        }
+      }
+    } catch (err) {}
+    return false;
+  }
+
+  async function onDownloadCreated(downloadItem) {
+    if (!downloadItem || !downloadItem.id || !downloadItem.url) {
+      return;
+    }
+    if (handledDownloadIds.has(downloadItem.id)) {
+      return;
+    }
+    trackHandledId(downloadItem.id);
+
+    const url = downloadItem.url;
+    const parsed = PROTOCOL.parseHttpUrl(url);
+    const isMagnet = url.startsWith('magnet:');
+    if (!parsed && !isMagnet) {
+      return;
+    }
+
+    if (parsed) {
+      const scheme = parsed.protocol;
+      if (scheme === 'blob:' || scheme === 'data:' || scheme === 'file:' || scheme === 'chrome-extension:' || scheme === 'moz-extension:') {
+        return;
+      }
+    }
+
+    if (downloadItem.byExtensionId && downloadItem.byExtensionId === extensionId()) {
+      return;
+    }
+
+    const settings = await getCachedSettings();
+    if (!settings) {
+      return;
+    }
+
+    if (settings.capture_enabled === false) {
+      return;
+    }
+
+    if (parsed && isHostDenylisted(url, settings.domain_denylist)) {
+      return;
+    }
+
+    const isTorrentFile = PROTOCOL.parseTorrentUrl(url);
+    if (isTorrentFile) {
+      if (settings.capture_torrents === false) {
+        return;
+      }
+    } else if (isMagnet) {
+      if (settings.capture_magnet === false) {
+        return;
+      }
+    } else {
+      const filename = downloadItem.filename || downloadItem.url;
+      if (!matchExtension(filename, settings.capture_extensions)) {
+        return;
+      }
+    }
+
+    try {
+      if (API.downloads && typeof API.downloads.cancel === 'function') {
+        await API.downloads.cancel(downloadItem.id);
+      }
+      if (API.downloads && typeof API.downloads.erase === 'function') {
+        await API.downloads.erase({ id: downloadItem.id });
+      }
+    } catch (err) {}
+
+    if (isTorrentFile || isMagnet) {
+      await callHost(() => PROTOCOL.buildTorrentAdd({ url: url }));
+    } else {
+      await callHost(() => PROTOCOL.buildDownloadAdd({
+        url: url,
+        filename: downloadItem.filename,
+        referrer: downloadItem.referrer,
+      }));
+    }
+  }
+
+  if (API && API.downloads && API.downloads.onCreated && typeof API.downloads.onCreated.addListener === 'function') {
+    API.downloads.onCreated.addListener(onDownloadCreated);
+  }
+
+  function setupContextMenus() {
+    if (API && API.contextMenus && typeof API.contextMenus.create === 'function') {
+      API.contextMenus.create({
+        id: 'segmenta-add-torrent',
+        title: API.getMessage ? (API.getMessage('contextMenuAddTorrent') || 'Anadir a Segmenta') : 'Anadir a Segmenta',
+        contexts: ['link'],
+        targetUrlPatterns: ['magnet:*', 'http://*/*.torrent', 'https://*/*.torrent'],
+      });
+    }
+  }
+
+  if (API && API.runtime && API.runtime.onInstalled && typeof API.runtime.onInstalled.addListener === 'function') {
+    API.runtime.onInstalled.addListener(setupContextMenus);
+  } else {
+    setupContextMenus();
+  }
+
+  if (API && API.contextMenus && API.contextMenus.onClicked && typeof API.contextMenus.onClicked.addListener === 'function') {
+    API.contextMenus.onClicked.addListener((info) => {
+      if (info.menuItemId === 'segmenta-add-torrent' && info.linkUrl) {
+        callHost(() => PROTOCOL.buildTorrentAdd({ url: info.linkUrl }));
+      }
+    });
+  }
+
   function handle(message, sender) {
     const check = VALIDATE.validateInbound(message, sender, {
       extensionId: extensionId(),
@@ -136,6 +329,16 @@ if (typeof importScripts === 'function') {
         );
       case 'segmenta.status':
         return callHost(() => PROTOCOL.buildStatus({ taskId: value.taskId }));
+      case 'segmenta.capture':
+        return callHost(() =>
+          PROTOCOL.buildDownloadAdd({
+            url: value.url,
+            filename: value.filename,
+            referrer: value.referrer,
+          }),
+        );
+      case 'segmenta.torrent.add':
+        return callHost(() => PROTOCOL.buildTorrentAdd({ url: value.url }));
       default:
         return Promise.resolve(failure('ERR_INVALID_TYPE', 'message type is not allowed'));
     }
@@ -167,5 +370,9 @@ if (typeof importScripts === 'function') {
     NATIVE_TIMEOUT_MS: NATIVE_TIMEOUT_MS,
     handle: handle,
     hostFailure: hostFailure,
+    onDownloadCreated: onDownloadCreated,
+    getCachedSettings: getCachedSettings,
+    matchExtension: matchExtension,
+    isHostDenylisted: isHostDenylisted,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);
