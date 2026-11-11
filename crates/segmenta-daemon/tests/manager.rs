@@ -320,11 +320,12 @@ async fn a_paused_task_reports_zero_speed_and_no_eta() {
     let mut saw_speed = false;
     for _ in 0..200 {
         match tokio::time::timeout(Duration::from_millis(250), events.recv()).await {
-            Ok(Ok(event)) if event.event_type == "task_progress" => {
-                if event.data["speed_bps"].as_u64().unwrap_or(0) > 0 {
-                    saw_speed = true;
-                    break;
-                }
+            Ok(Ok(event))
+                if event.event_type == "task_progress"
+                    && event.data["speed_bps"].as_u64().unwrap_or(0) > 0 =>
+            {
+                saw_speed = true;
+                break;
             }
             _ => {}
         }
