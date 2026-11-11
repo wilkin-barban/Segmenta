@@ -288,7 +288,7 @@ pub async fn probe(cfg: &HttpConfig, url: &Url) -> Result<ProbeOutcome> {
             current = next;
             continue;
         }
-        return Ok(classify_probe(response, current).await?);
+        return classify_probe(response, current).await;
     }
     Ok(ProbeOutcome::Fail(CoreError::TooManyRedirects))
 }

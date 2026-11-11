@@ -3,7 +3,6 @@
 //! Each test gets its own XDG_DATA_HOME/XDG_RUNTIME_DIR/HOME and its own socket, so the
 //! developer's real daemon is never touched. No external network.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -185,10 +184,6 @@ impl Daemon {
         let _ = self.child.wait();
     }
 
-    fn stop(mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
 }
 
 impl Drop for Daemon {
@@ -359,7 +354,7 @@ fn a_ten_megabyte_download_survives_a_daemon_kill_and_matches_its_checksum() {
     // The release acceptance test: segmented download, pause by killing the daemon,
     // resume from the checkpoint and byte-identical output.
     let sandbox = Sandbox::new();
-    let mut daemon = sandbox.daemon();
+    let daemon = sandbox.daemon();
     sandbox.configure();
 
     let body = payload(10 * MB);

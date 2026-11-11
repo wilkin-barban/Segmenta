@@ -204,6 +204,8 @@ pub enum EngineEvent {
         total_bytes: u64,
         /// Digest result when a checksum was requested.
         checksum_ok: Option<bool>,
+        /// Final segment table, so the daemon can persist a completed checkpoint.
+        segments: Vec<SegmentStateRecord>,
     },
 }
 
@@ -216,6 +218,8 @@ pub enum TaskOutcome {
         total_bytes: u64,
         /// Digest result when a checksum was requested.
         checksum_ok: Option<bool>,
+        /// Final segment table, so the daemon can persist a completed checkpoint.
+        segments: Vec<SegmentStateRecord>,
     },
     /// Stopped but resumable.
     Paused {
@@ -1187,16 +1191,19 @@ async fn finalize(
         }
     };
 
+    let segments = shared.records();
     shared
         .emit(EngineEvent::Completed {
             path: spec.path.clone(),
             total_bytes: total,
             checksum_ok,
+            segments: segments.clone(),
         })
         .await;
     Cycle::Outcome(TaskOutcome::Completed {
         total_bytes: total,
         checksum_ok,
+        segments,
     })
 }
 
@@ -1453,6 +1460,9 @@ impl SegmentWorker {
                             }
                             return self.stop(error, true);
                         }
+                        if !self.rewind().await {
+                            return;
+                        }
                         break;
                     }
                     Ok(None) => {
@@ -1482,6 +1492,9 @@ impl SegmentWorker {
                                 return;
                             }
                             return self.stop(error, true);
+                        }
+                        if !self.rewind().await {
+                            return;
                         }
                         break;
                     }
@@ -1534,12 +1547,12 @@ impl SegmentWorker {
 
     /// Write one clamped chunk, publishing `next` only after the bytes are on the file.
     async fn write(&mut self, bytes: &[u8]) -> bool {
+        let env = Arc::clone(&self.shared.env);
         let mut done = 0usize;
         while done < bytes.len() {
             if self.stopping() {
                 return false;
             }
-            let env = Arc::clone(&self.shared.env);
             let take = env.chunk_size.min(bytes.len() - done);
             env.bucket.acquire(take as u64).await;
             if let Err(error) = env
@@ -1560,6 +1573,29 @@ impl SegmentWorker {
         }
         self.next += done as u64;
         self.failures = 0;
+        true
+    }
+
+    /// A sequential stream cannot be resumed at an offset: the server ignores `Range`,
+    /// so a retry re-requests the body from byte zero. The bytes already written are
+    /// dropped and the offset restarts at zero rather than mixing two prefixes
+    /// (OpenSpec 06 §5.1). Segmentation has no such problem: its offsets are stable, so
+    /// this is a no-op there.
+    async fn rewind(&mut self) -> bool {
+        if !self.shared.env.sequential || self.next == 0 {
+            return true;
+        }
+        if let Err(error) = self.shared.env.file.truncate() {
+            self.stop(error, false);
+            return false;
+        }
+        self.next = 0;
+        self.seg.next.store(0, Ordering::SeqCst);
+        self.shared
+            .emit(EngineEvent::Restarted {
+                reason: "the sequential stream restarted from byte zero".to_string(),
+            })
+            .await;
         true
     }
 

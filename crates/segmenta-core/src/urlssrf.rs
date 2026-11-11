@@ -23,10 +23,13 @@ pub fn is_blocked_ip(ip: IpAddr) -> bool {
                 || v4.is_documentation()
         }
         IpAddr::V6(v6) => {
+            let head = v6.segments()[0];
             v6.is_loopback()
                 || v6.is_unspecified()
-                || v6.is_unique_local()
-                || v6.is_unicast_link_local()
+                // fc00::/7 unique local
+                || (head & 0xfe00) == 0xfc00
+                // fe80::/10 link local
+                || (head & 0xffc0) == 0xfe80
                 || v6
                     .to_ipv4_mapped()
                     .map(|mapped| is_blocked_ip(IpAddr::V4(mapped)))

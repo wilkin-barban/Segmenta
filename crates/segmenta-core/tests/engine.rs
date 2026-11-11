@@ -176,6 +176,7 @@ fn expect_completed(outcome: TaskOutcome) -> (u64, Option<bool>) {
         TaskOutcome::Completed {
             total_bytes,
             checksum_ok,
+            ..
         } => (total_bytes, checksum_ok),
         other => panic!("expected Completed, got {other:?}"),
     }
@@ -332,7 +333,8 @@ async fn hot_split_moves_bytes_to_an_idle_worker_without_gaps() {
     let total = body.len() as u64;
     let server = RangeServer::start(ServerConfig {
         body: body.clone(),
-        slow: Some(Duration::from_millis(2)),
+        // Keep the donor busy long enough for the handshake to be deterministic.
+        slow: Some(Duration::from_millis(8)),
         ..ServerConfig::default()
     })
     .await;

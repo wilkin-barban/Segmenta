@@ -124,12 +124,10 @@ fn decode_ext_value(raw: &str) -> String {
     let charset = pieces.next().unwrap_or("utf-8");
     let _lang = pieces.next().unwrap_or_default();
     let encoded = pieces.next().unwrap_or(raw);
-    let decoded = percent_decode_str(encoded);
-    if charset.eq_ignore_ascii_case("utf-8") {
-        decoded.decode_utf8_lossy().into_owned()
-    } else {
-        decoded.decode_utf8_lossy().into_owned()
-    }
+    // RFC 5987 allows other charsets; every browser sends UTF-8 and a lossy decode of
+    // anything else is still safer than trusting the raw bytes as a file name.
+    let _ = charset;
+    percent_decode_str(encoded).decode_utf8_lossy().into_owned()
 }
 
 /// Last path segment of a URL, percent-decoded and sanitized.

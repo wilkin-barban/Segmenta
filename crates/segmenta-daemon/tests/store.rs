@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use segmenta_daemon::secrets::{FileSecretStore, SecretStore};
 use segmenta_daemon::store::{
-    DownloadRecord, DownloadStatus, SegmentRow, Settings, Store, SCHEMA_VERSION,
+    Checkpoint, DownloadRecord, DownloadStatus, SegmentRow, Settings, Store, SCHEMA_VERSION,
 };
 use serde_json::json;
 
@@ -147,7 +147,17 @@ fn checkpoints_replace_segments_and_keep_next_offset() {
         },
     ];
     store
-        .save_checkpoint("t", &segments, 200, Some(1024), Some("\"v1\""), None, true)
+        .save_checkpoint(
+            "t",
+            &Checkpoint {
+                segments: &segments,
+                downloaded_bytes: 200,
+                total_bytes: Some(1024),
+                etag: Some("\"v1\""),
+                last_modified: None,
+                supports_ranges: true,
+            },
+        )
         .unwrap();
 
     let rows = store.segments("t").unwrap();
@@ -172,7 +182,17 @@ fn checkpoints_replace_segments_and_keep_next_offset() {
         },
     ];
     store
-        .save_checkpoint("t", &updated, 700, None, None, None, true)
+        .save_checkpoint(
+            "t",
+            &Checkpoint {
+                segments: &updated,
+                downloaded_bytes: 700,
+                total_bytes: None,
+                etag: None,
+                last_modified: None,
+                supports_ranges: true,
+            },
+        )
         .unwrap();
     assert_eq!(store.segments("t").unwrap(), updated);
     assert_eq!(store.get("t").unwrap().unwrap().downloaded_bytes, 700);
@@ -193,7 +213,17 @@ fn the_schema_rejects_impossible_segment_offsets() {
     }];
     assert!(
         store
-            .save_checkpoint("t", &bad, 0, None, None, None, true)
+            .save_checkpoint(
+                "t",
+                &Checkpoint {
+                    segments: &bad,
+                    downloaded_bytes: 0,
+                    total_bytes: None,
+                    etag: None,
+                    last_modified: None,
+                    supports_ranges: true,
+                },
+            )
             .is_err(),
         "the CHECK constraint must reject next > end + 1"
     );
@@ -208,17 +238,19 @@ fn segments_and_headers_cascade_on_delete() {
     store
         .save_checkpoint(
             "t",
-            &[SegmentRow {
-                id: 1,
-                start: 0,
-                end: 1023,
-                next: 5,
-            }],
-            5,
-            None,
-            None,
-            None,
-            true,
+            &Checkpoint {
+                segments: &[SegmentRow {
+                    id: 1,
+                    start: 0,
+                    end: 1023,
+                    next: 5,
+                }],
+                downloaded_bytes: 5,
+                total_bytes: None,
+                etag: None,
+                last_modified: None,
+                supports_ranges: true,
+            },
         )
         .unwrap();
     let mut headers = BTreeMap::new();
@@ -368,17 +400,19 @@ fn a_secret_never_appears_in_the_database_file() {
     store
         .save_checkpoint(
             "t",
-            &[SegmentRow {
-                id: 1,
-                start: 0,
-                end: 1023,
-                next: 10,
-            }],
-            10,
-            None,
-            None,
-            None,
-            true,
+            &Checkpoint {
+                segments: &[SegmentRow {
+                    id: 1,
+                    start: 0,
+                    end: 1023,
+                    next: 10,
+                }],
+                downloaded_bytes: 10,
+                total_bytes: None,
+                etag: None,
+                last_modified: None,
+                supports_ranges: true,
+            },
         )
         .unwrap();
     store.journal_mode().unwrap();
@@ -433,15 +467,19 @@ fn headers_are_stored_as_json_and_never_duplicated() {
 
 #[test]
 fn settings_validation_accepts_the_documented_edges() {
-    let mut settings = Settings::default();
-    settings.max_connections = 32;
-    settings.max_retries = 0;
-    settings.schedule_start = Some("00:00".to_string());
-    settings.proxy_mode = "manual".to_string();
-    settings.proxy_url = Some("socks5://127.0.0.1:1080".to_string());
+    let settings = Settings {
+        max_connections: 32,
+        max_retries: 0,
+        schedule_start: Some("00:00".to_string()),
+        proxy_mode: "manual".to_string(),
+        proxy_url: Some("socks5://127.0.0.1:1080".to_string()),
+        ..Settings::default()
+    };
     assert!(settings.validate().is_ok());
 
-    let mut bad = Settings::default();
-    bad.proxy_mode = "manual".to_string();
+    let bad = Settings {
+        proxy_mode: "manual".to_string(),
+        ..Settings::default()
+    };
     assert!(bad.validate().is_err(), "manual proxy needs a URL");
 }
