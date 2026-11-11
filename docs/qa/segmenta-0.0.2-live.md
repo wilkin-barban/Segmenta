@@ -68,3 +68,17 @@ watch -n 10 cat docs/qa/segmenta-0.0.2-live.md
 - Puertas locales: `cargo fmt --check`, `clippy -D warnings`, `cargo test --workspace` y la
   suite GUI bajo Xvfb en verde; `check-package.sh` OK (10/10 paths, AppStream y desktop válidos).
 - **Sin publicar**: pendiente la tercera instalación/prueba remota del usuario.
+
+## Cuarto candidato (spinner de carga)
+
+- Causa: la página de carga seguía siendo el hijo visible del `GtkStack` cuando se
+  detenía el spinner; GTK pinta el glifo estático aunque `is_spinning()` sea falso.
+- Fix: primero se cambia el hijo del stack y después se detiene y **oculta** el spinner
+  (`loading_spinner.set_visible(false)`). `loading_spinner_visible()` expone el estado y
+  `tests/actions.rs` exige que sea `false` en Ready y tras cambiar de filtro.
+- Capturas `docs/qa/screenshots/0.0.2-{light,dark}.png` (es) y `0.0.2-pt-light.png` (pt-BR)
+  regeneradas sin el indicador; `--screenshots` sigue exigiendo `Ready` con filas.
+- Paquete: `dist/segmenta_0.0.2-1_amd64.deb` — 3.930.764 B, sha256
+  `91b34cc053bfbd4f4d31ddae8bef2260a801119890440428f1c2b7a529cefdce`.
+- Puertas: fmt, clippy `-D warnings`, `cargo test --workspace` (37 suites) y
+  `check-package.sh` (10/10, AppStream/desktop válidos) en verde. **Sin publicar.**

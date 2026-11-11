@@ -215,6 +215,11 @@ fn sidebar_filters_and_counts_are_real() {
             Duration::from_secs(5)
         ));
 
+        // A Ready list must not leave the loading spinner painting.
+        assert!(
+            !window.loading_spinner_visible(),
+            "the loading spinner is still visible in Ready"
+        );
         let counts = window.counts();
         assert_eq!(counts.all, 3);
         assert_eq!(counts.active, 1);
@@ -223,6 +228,7 @@ fn sidebar_filters_and_counts_are_real() {
         assert_eq!(counts.failed, 0);
 
         window.set_filter(Filter::Paused);
+        assert!(!window.loading_spinner_visible());
         assert_eq!(window.rows().len(), 1);
         assert_eq!(window.rows()[0].task_id, "c");
         window.set_filter(Filter::Failed);
