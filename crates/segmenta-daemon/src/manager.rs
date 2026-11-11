@@ -300,6 +300,11 @@ impl Manager {
             created_at: None,
             completed_at: None,
             filename: suggested,
+            media_kind: None,
+            media_format: None,
+            playlist_title: None,
+            playlist_count: None,
+            batch_id: None,
         };
         // Write the secret first: if there is no keyring the caller gets 1031 and no
         // task is created, so the sensitive header is never silently dropped.

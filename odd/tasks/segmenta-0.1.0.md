@@ -8,7 +8,7 @@ hasta `## Log`. Sin publicar hasta el QA remoto del usuario.
 
 ### S1 — Host nativo común (Chromium y Firefox)
 `crates/segmenta-host` implementa el framing de Native Messaging: 4 bytes little-endian con el largo +
-JSON UTF-8, máximo 1 MiB por mensaje; bytes extra tras un mensaje completo son `ERR_FRAME_TRAILING`;
+JSON UTF-8, máximo 1 MiB por mensaje; los bytes extra tras un mensaje completo se leen como el mensaje siguiente (pipelining), no son error;
 EOF a mitad de cabecera/mensaje es `ERR_FRAME_TRUNCATED`; el proceso termina con código 0. Conecta al
 socket del daemon y reintenta una vez arrancando `segmenta.socket` si no está activo. Una solicitud →
 una respuesta correlacionada por `id`; no usa shell, no acepta rutas ni comandos del navegador y
