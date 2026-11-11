@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
+use segmenta_daemon::events::EventBus;
 use segmenta_daemon::ipc::{
     dispatch_bytes, hello_result, peer_is_authorized, IpcServer, RpcHandler,
 };
@@ -137,20 +138,21 @@ async fn a_blank_line_is_not_a_request() {
 
 struct Harness {
     _dir: tempfile::TempDir,
-    server: Arc<IpcServer>,
+    bus: Arc<EventBus>,
     path: std::path::PathBuf,
 }
 
 async fn start_server(expected_uid: u32) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("daemon.sock");
-    let server = Arc::new(IpcServer::bind(&path).await.unwrap());
+    let bus = Arc::new(EventBus::new());
+    let server = Arc::new(IpcServer::bind(&path, Arc::clone(&bus)).await.unwrap());
     let handler: Arc<dyn RpcHandler> = Arc::new(EchoHandler);
     let running = Arc::clone(&server);
     tokio::spawn(async move { running.run(handler, expected_uid).await });
     Harness {
         _dir: dir,
-        server,
+        bus,
         path,
     }
 }
@@ -265,12 +267,12 @@ async fn events_carry_a_monotonic_seq_id_and_reach_live_clients() {
         .unwrap();
     let _ = read_frame(&mut reader).await.unwrap().unwrap();
 
-    harness.server.publish(
+    harness.bus.publish(
         "task_progress",
         Some("task-1"),
         json!({"downloaded_bytes": 10, "total_bytes": 100}),
     );
-    harness.server.publish(
+    harness.bus.publish(
         "state_changed",
         Some("task-1"),
         json!({"old_state": "probing", "new_state": "downloading"}),
