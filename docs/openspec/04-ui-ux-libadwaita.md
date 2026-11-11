@@ -2,7 +2,7 @@
 
 > **Especificación:** OPENSPEC-SEGMENTA-004  
 > **Versión:** 1.0.0  
-> **Entorno Objetivo:** Ubuntu 26.10 / GNOME 48+ / Wayland  
+> **Entorno Objetivo:** Ubuntu 26.04 LTS / GNOME 50+ / Wayland  
 > **Toolkit:** GTK4 (>= 4.14) + Libadwaita (>= 1.5)
 
 > **Normativo:** el contrato IPC y el ciclo de vida están en 07; el empaquetado, los execution
@@ -27,7 +27,7 @@ Segmenta abandona el diseño tosco de ventanas legacy Win32 de los años 90 y ab
 +-------------------------------------------------------------------------+
 |      Panel Lateral      |                Lista de Descargas             |
 | ─────────────────────── | ───────────────────────────────────────────── |
-| 📥 Todas (14)           | 📦 ubuntu-26.10-desktop.iso                   |
+| 📥 Todas (14)           | 📦 ubuntu-26.04-desktop.iso                   |
 | ⚡ Activas (2)           |    45.2 MB/s ─ 1.2 GB de 4.0 GB ─ Quedan 1 min|
 | ⏸ Pausadas (1)          |    [▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░] |
 | ✅ Completadas (11)      |    [ ⏸ ] [ ✕ ]                                |
@@ -103,7 +103,7 @@ Cuando el sniffer del navegador detecta un video de YouTube, Vimeo u otra fuente
 
 * **Portal de Segundo Plano (`org.freedesktop.portal.Background`)**:
   * Permite que las descargas continúen activas aunque el usuario cierre la ventana principal.
-  * La bandeja es opcional: GNOME 48 no garantiza AppIndicator sin la extensión correspondiente. Si no hay bandeja, la app debe seguir funcionando desde el daemon y avisar por notificaciones; `libayatana-appindicator3` no se asume instalado.
+  * La bandeja es opcional: GNOME 50 no garantiza AppIndicator sin la extensión correspondiente. Si no hay bandeja, la app debe seguir funcionando desde el daemon y avisar por notificaciones; `libayatana-appindicator3` no se asume instalado.
 * **Notificaciones de Escritorio (`org.freedesktop.Notifications`)**:
   * Al completarse una descarga, se emite una notificación nativa con dos botones de acción rápida:
     * `[ Abrir Archivo ]` -> Invoca a `xdg-open` sobre el archivo final.
