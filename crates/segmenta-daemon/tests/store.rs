@@ -343,6 +343,7 @@ fn settings_update_validates_types_ranges_and_unknown_keys() {
         json!({ "schedule_start": "25:00" }),
         json!({ "download_dir": "relative/path" }),
         json!({ "max_connections": "many" }),
+        json!({ "appearance": "sepia" }),
     ] {
         assert!(
             store.update_settings(bad.as_object().unwrap()).is_err(),
@@ -491,6 +492,12 @@ fn settings_validation_accepts_the_documented_edges() {
         ..Settings::default()
     };
     assert!(settings.validate().is_ok());
+
+    let bad_appearance = Settings {
+        appearance: "sepia".to_string(),
+        ..Settings::default()
+    };
+    assert!(bad_appearance.validate().is_err());
 
     let bad = Settings {
         proxy_mode: "manual".to_string(),

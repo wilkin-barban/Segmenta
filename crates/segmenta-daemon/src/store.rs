@@ -235,6 +235,8 @@ pub struct Settings {
     pub proxy_url: Option<String>,
     /// Post-processing command without a shell.
     pub postprocess_command: Vec<String>,
+    /// UI appearance: `system`, `light` or `dark` (S22).
+    pub appearance: String,
 }
 
 impl Default for Settings {
@@ -263,6 +265,7 @@ impl Default for Settings {
             proxy_mode: "system".to_string(),
             proxy_url: None,
             postprocess_command: Vec::new(),
+            appearance: "system".to_string(),
         }
     }
 }
@@ -352,6 +355,7 @@ pub const SETTING_KEYS: &[&str] = &[
     "proxy_mode",
     "proxy_url",
     "postprocess_command",
+    "appearance",
 ];
 
 fn is_hh_mm(value: &str) -> bool {
@@ -436,6 +440,11 @@ impl Settings {
         ) {
             return Err(StoreError::Invalid(
                 "action_on_complete must be none, suspend, power_off or exit".to_string(),
+            ));
+        }
+        if !matches!(self.appearance.as_str(), "system" | "light" | "dark") {
+            return Err(StoreError::Invalid(
+                "appearance must be system, light or dark".to_string(),
             ));
         }
         if !matches!(self.proxy_mode.as_str(), "system" | "none" | "manual") {

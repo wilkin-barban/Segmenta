@@ -808,10 +808,7 @@ impl Inner {
                 }
                 Err(err) => {
                     // First real diagnosis of a broken connection: surface it.
-                    eprintln!(
-                        "segmenta-gui: system.hello failed: {}",
-                        err.ui_message()
-                    );
+                    eprintln!("segmenta-gui: system.hello failed: {}", err.ui_message());
                     self.set_error(err.ui_message());
                 }
             },
@@ -1033,7 +1030,7 @@ impl Inner {
         *self.last_error.borrow_mut() = Some(message.clone());
         *self.view_state.borrow_mut() = ViewState::Error(message.clone());
         let locale = segmenta_i18n::current();
-        use segmenta_i18n::{Msg, tr};
+        use segmenta_i18n::{tr, Msg};
         self.error_page.set_title(&tr(locale, Msg::ErrorTitle));
         self.error_page.set_description(Some(&format!(
             "{message}\n\n{}\n{}",

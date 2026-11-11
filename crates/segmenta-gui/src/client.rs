@@ -499,7 +499,9 @@ impl Worker {
             .unwrap_or_else(|| format!("{}: not connected", self.path.display()));
         let jobs = std::mem::take(&mut self.pending);
         for job in jobs {
-            let _ = job.reply.send(Err(ClientError::Unavailable(detail.clone())));
+            let _ = job
+                .reply
+                .send(Err(ClientError::Unavailable(detail.clone())));
         }
     }
 

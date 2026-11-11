@@ -1568,6 +1568,7 @@ dependencies = [
  "glib",
  "gtk4",
  "libadwaita",
+ "segmenta-i18n",
  "serde",
  "serde_json",
  "tempfile",
