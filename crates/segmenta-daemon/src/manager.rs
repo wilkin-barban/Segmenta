@@ -294,17 +294,25 @@ impl Manager {
             completed_at: None,
             filename: suggested,
         };
+        // Write the secret first: if there is no keyring the caller gets 1031 and no
+        // task is created, so the sensitive header is never silently dropped.
+        let secret_alias = match secret {
+            Some(secret) => {
+                let alias = format!("download/{task_id}");
+                self.secrets.store(&alias, &secret).map_err(|err| {
+                    RpcError::new(1031, "ERR_KEYRING_UNAVAILABLE", err.to_string())
+                })?;
+                Some(alias)
+            }
+            None => None,
+        };
         self.store.insert_download(&record).map_err(store_error)?;
         if !headers.is_empty() {
             self.store
                 .set_headers(&task_id, &headers)
                 .map_err(store_error)?;
         }
-        if let Some(secret) = secret {
-            let alias = format!("download/{task_id}");
-            self.secrets
-                .store(&alias, &secret)
-                .map_err(|err| RpcError::internal(err.to_string()))?;
+        if let Some(alias) = secret_alias {
             self.store
                 .set_secret_alias(&task_id, &alias)
                 .map_err(store_error)?;
@@ -349,6 +357,17 @@ impl Manager {
             .map_err(store_error)?
             .ok_or_else(|| RpcError::task_not_found(task_id))?;
         let settings = self.settings();
+        // A resumed task may outlive its destination folder (removed by the user, or a
+        // pending task that was never started); recreate it instead of failing ENOENT.
+        if let Some(parent) = PathBuf::from(&record.final_path).parent() {
+            std::fs::create_dir_all(parent).map_err(|err| {
+                RpcError::new(
+                    1005,
+                    "ERR_DESTINATION_UNWRITABLE",
+                    format!("cannot create {}: {err}", parent.display()),
+                )
+            })?;
+        }
         let resume = self.build_resume(&record)?;
         if resume.is_none() {
             // Nothing was checkpointed, so the bytes on disk are unverified: discard them
@@ -492,6 +511,19 @@ impl Manager {
             .get(task_id)
             .map_err(store_error)?
             .ok_or_else(|| RpcError::task_not_found(task_id))?;
+        // Only a task with work in flight (or one that never started) can be paused.
+        // A terminal task must keep its state and must not emit a fake transition.
+        if !matches!(
+            record.status,
+            DownloadStatus::Downloading
+                | DownloadStatus::Pending
+                | DownloadStatus::Probing
+                | DownloadStatus::Retrying
+                | DownloadStatus::Verifying
+                | DownloadStatus::Finalizing
+        ) {
+            return Err(RpcError::task_not_pausable(task_id));
+        }
         let running = self
             .running
             .lock()
@@ -525,10 +557,10 @@ impl Manager {
             DownloadStatus::Downloading => {
                 return Err(RpcError::task_already_active(task_id));
             }
-            DownloadStatus::Completed => {
-                return Err(RpcError::invalid_params("the task is already completed"));
+            DownloadStatus::Paused | DownloadStatus::Retrying => {}
+            other => {
+                return Err(RpcError::task_not_resumable_state(task_id, other.as_str()));
             }
-            _ => {}
         }
         let connections = self.settings().max_connections;
         self.start_task(task_id, connections)?;
@@ -1104,6 +1136,12 @@ fn finish_task(
                 },
             );
             let _ = store.set_status(task_id, status, error.clone());
+            // Drop the live snapshot: a stopped task reports speed 0 and no ETA, and
+            // the persisted checkpoint is the source of truth from here on.
+            progress
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .remove(task_id);
             bus.publish(
                 "state_changed",
                 Some(task_id),

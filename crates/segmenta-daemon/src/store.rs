@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Mutex;
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -266,17 +267,71 @@ impl Default for Settings {
     }
 }
 
-fn default_download_dir() -> String {
-    if let Ok(dir) = std::env::var("XDG_DOWNLOAD_DIR") {
-        if !dir.is_empty() {
-            return dir;
+/// Download directory used when the user never configured one.
+///
+/// Order (S4): `XDG_DOWNLOAD_DIR`, `xdg-user-dir DOWNLOAD`, the `XDG_DOWNLOAD_DIR`
+/// line of `~/.config/user-dirs.dirs`, and only then `$HOME/Downloads`.
+pub fn default_download_dir() -> String {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let home = Path::new(&home);
+    let env_value = std::env::var("XDG_DOWNLOAD_DIR").ok();
+    let user_dir = Command::new("xdg-user-dir")
+        .arg("DOWNLOAD")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string());
+    let user_dirs = std::fs::read_to_string(home.join(".config/user-dirs.dirs")).ok();
+    resolve_download_dir(
+        home,
+        env_value.as_deref(),
+        user_dir.as_deref(),
+        user_dirs.as_deref(),
+    )
+    .to_string_lossy()
+    .into_owned()
+}
+
+/// Pure resolver behind [`default_download_dir`], testable without touching the process
+/// environment.
+pub fn resolve_download_dir(
+    home: &Path,
+    xdg_env: Option<&str>,
+    xdg_user_dir: Option<&str>,
+    user_dirs_file: Option<&str>,
+) -> PathBuf {
+    fn accepted(candidate: &str) -> Option<PathBuf> {
+        let candidate = candidate.trim();
+        if candidate.is_empty() {
+            return None;
+        }
+        let path = PathBuf::from(candidate);
+        path.is_absolute().then_some(path)
+    }
+
+    if let Some(path) = xdg_env.and_then(accepted) {
+        return path;
+    }
+    if let Some(path) = xdg_user_dir.and_then(accepted) {
+        // `xdg-user-dir` prints $HOME when the entry is disabled; that is not a choice.
+        if path != home {
+            return path;
         }
     }
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    Path::new(&home)
-        .join("Downloads")
-        .to_string_lossy()
-        .into_owned()
+    if let Some(contents) = user_dirs_file {
+        for line in contents.lines() {
+            let line = line.trim();
+            let Some(rest) = line.strip_prefix("XDG_DOWNLOAD_DIR=") else {
+                continue;
+            };
+            let value = rest.trim().trim_matches('"');
+            let expanded = value.replace("$HOME", &home.to_string_lossy());
+            if let Some(path) = accepted(&expanded) {
+                return path;
+            }
+        }
+    }
+    home.join("Downloads")
 }
 
 /// Keys accepted by `settings.update`, in catalog order.
@@ -797,6 +852,26 @@ impl Store {
         settings = serde_json::from_value(object)
             .map_err(|err| StoreError::Invalid(format!("stored settings are invalid: {err}")))?;
         Ok(settings)
+    }
+
+    /// Replace a stored `download_dir` that is still the historical default.
+    ///
+    /// Only the exact 0.0.1 default (`$HOME/Downloads`) is migrated, and only once:
+    /// a directory the user chose is never rewritten. Returns whether it migrated.
+    pub fn migrate_download_dir(&self, legacy: &str, resolved: &str) -> Result<bool> {
+        let current = self.settings()?;
+        if current.download_dir != legacy || legacy == resolved {
+            return Ok(false);
+        }
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO settings (key, value_json) VALUES ('download_dir', ?1)
+             ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json",
+            params![Value::String(resolved.to_string()).to_string()],
+        )?;
+        tx.commit()?;
+        Ok(true)
     }
 
     /// Apply a partial update and persist only the keys the caller sent.

@@ -138,6 +138,24 @@ impl RpcError {
         )
     }
 
+    /// `1011`.
+    pub fn task_not_pausable(task_id: &str) -> RpcError {
+        RpcError::new(
+            1011,
+            "TASK_NOT_PAUSABLE",
+            format!("task `{task_id}` is not running and cannot be paused"),
+        )
+    }
+
+    /// `1003` for a terminal state (the same code covers a non-range server).
+    pub fn task_not_resumable_state(task_id: &str, status: &str) -> RpcError {
+        RpcError::new(
+            1003,
+            "TASK_NOT_RESUMABLE",
+            format!("task `{task_id}` is {status} and cannot be resumed"),
+        )
+    }
+
     /// `1009`.
     pub fn payload_too_large() -> RpcError {
         RpcError::new(
