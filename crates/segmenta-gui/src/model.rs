@@ -524,6 +524,11 @@ impl DownloadStore {
 }
 
 /// `settings.get` / `settings.update` payload.
+fn default_true() -> bool {
+    true
+}
+
+/// Settings payload as reported by the daemon.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct Settings {
     #[serde(default)]
@@ -538,6 +543,12 @@ pub struct Settings {
     pub download_dir: String,
     #[serde(default)]
     pub category_dirs: BTreeMap<String, String>,
+    #[serde(default = "default_true")]
+    pub capture_enabled: bool,
+    #[serde(default = "default_true")]
+    pub capture_torrents: bool,
+    #[serde(default = "default_true")]
+    pub capture_magnet: bool,
     #[serde(default)]
     pub capture_extensions: Vec<String>,
     #[serde(default)]

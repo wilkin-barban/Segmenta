@@ -137,6 +137,60 @@ pub fn present(
     proxy.add(&local);
     network.add(&proxy);
 
+    // ------------------------------------------------------------ Web capture
+    let capture = adw::PreferencesPage::builder()
+        .title(tr(locale(), Msg::PrefsCapture))
+        .icon_name("web-browser-symbolic")
+        .build();
+    let capture_group = adw::PreferencesGroup::builder()
+        .title(tr(locale(), Msg::PrefsCapture))
+        .description(tr(locale(), Msg::CaptureEnabledHint))
+        .build();
+
+    let capture_enabled = adw::SwitchRow::builder()
+        .title(tr(locale(), Msg::CaptureEnabled))
+        .active(settings.capture_enabled)
+        .build();
+    capture_group.add(&capture_enabled);
+    let capture_torrents = adw::SwitchRow::builder()
+        .title(tr(locale(), Msg::CaptureTorrents))
+        .active(settings.capture_torrents)
+        .build();
+    capture_group.add(&capture_torrents);
+    let capture_magnet = adw::SwitchRow::builder()
+        .title(tr(locale(), Msg::CaptureMagnet))
+        .active(settings.capture_magnet)
+        .build();
+    capture_group.add(&capture_magnet);
+
+    // Tokens are edited in a small dialog: the row only shows the current count.
+    let extensions_row = adw::ActionRow::builder()
+        .title(tr(locale(), Msg::CaptureExtensions))
+        .subtitle(format!(
+            "{} · {}",
+            settings.capture_extensions.len(),
+            tr(locale(), Msg::CaptureExtensionsHint)
+        ))
+        .build();
+    let extensions_button = gtk::Button::with_label(&tr(locale(), Msg::Edit));
+    extensions_row.add_suffix(&extensions_button);
+    extensions_row.set_activatable_widget(Some(&extensions_button));
+    capture_group.add(&extensions_row);
+
+    let denylist_row = adw::ActionRow::builder()
+        .title(tr(locale(), Msg::DomainDenylist))
+        .subtitle(format!(
+            "{} · {}",
+            settings.domain_denylist.len(),
+            tr(locale(), Msg::DomainDenylistHint)
+        ))
+        .build();
+    let denylist_button = gtk::Button::with_label(&tr(locale(), Msg::Edit));
+    denylist_row.add_suffix(&denylist_button);
+    denylist_row.set_activatable_widget(Some(&denylist_button));
+    capture_group.add(&denylist_row);
+    capture.add(&capture_group);
+
     // -------------------------------------------------------------- About page
     let about = adw::PreferencesPage::builder()
         .title(tr(locale(), Msg::About))
@@ -175,6 +229,7 @@ pub fn present(
 
     dialog.add(&general);
     dialog.add(&network);
+    dialog.add(&capture);
     dialog.add(&about);
 
     // ------------------------------------------------------------ Save helpers
@@ -216,6 +271,79 @@ pub fn present(
             bus.spawn(&client, "settings.update", patch);
         })
     };
+
+    let save_capture = Rc::clone(&save);
+    capture_enabled.connect_active_notify(move |row| {
+        save_capture(json!({ "capture_enabled": row.is_active() }));
+    });
+    let save_torrents = Rc::clone(&save);
+    capture_torrents.connect_active_notify(move |row| {
+        save_torrents(json!({ "capture_torrents": row.is_active() }));
+    });
+    let save_magnet = Rc::clone(&save);
+    capture_magnet.connect_active_notify(move |row| {
+        save_magnet(json!({ "capture_magnet": row.is_active() }));
+    });
+
+    let edit_extensions = {
+        let dialog = dialog.clone();
+        let save = Rc::clone(&save);
+        let current = settings.capture_extensions.clone();
+        let row = extensions_row.clone();
+        let locale = locale();
+        move || {
+            edit_list(
+                &dialog,
+                &tr(locale, Msg::CaptureExtensions),
+                &tr(locale, Msg::CaptureExtensionsHint),
+                &current,
+                {
+                    let save = Rc::clone(&save);
+                    let row = row.clone();
+                    move |tokens: Vec<String>| {
+                        row.set_subtitle(&format!("{}", tokens.len()));
+                        save(json!({ "capture_extensions": tokens }));
+                    }
+                },
+            );
+        }
+    };
+    let edit_extensions_handle = edit_extensions.clone();
+    extensions_button.connect_clicked(move |_| edit_extensions_handle());
+    extensions_row.connect_activated({
+        let edit = edit_extensions.clone();
+        move |_| edit()
+    });
+
+    let edit_denylist = {
+        let dialog = dialog.clone();
+        let save = Rc::clone(&save);
+        let current = settings.domain_denylist.clone();
+        let row = denylist_row.clone();
+        let locale = locale();
+        move || {
+            edit_list(
+                &dialog,
+                &tr(locale, Msg::DomainDenylist),
+                &tr(locale, Msg::DomainDenylistHint),
+                &current,
+                {
+                    let save = Rc::clone(&save);
+                    let row = row.clone();
+                    move |tokens: Vec<String>| {
+                        row.set_subtitle(&format!("{}", tokens.len()));
+                        save(json!({ "domain_denylist": tokens }));
+                    }
+                },
+            );
+        }
+    };
+    let edit_denylist_handle = edit_denylist.clone();
+    denylist_button.connect_clicked(move |_| edit_denylist_handle());
+    denylist_row.connect_activated({
+        let edit = edit_denylist.clone();
+        move |_| edit()
+    });
 
     let save_autostart = Rc::clone(&save);
     autostart.connect_active_notify(move |row| {
@@ -319,4 +447,91 @@ pub fn present(
     });
 
     dialog.present(Some(parent));
+}
+
+/// Split a free-form list into trimmed tokens, dropping empties and duplicates.
+pub fn parse_tokens(text: &str) -> Vec<String> {
+    let mut tokens: Vec<String> = Vec::new();
+    for token in text.split(['\n', ',', ' ']) {
+        let token = token.trim();
+        if token.is_empty() {
+            continue;
+        }
+        if !tokens.iter().any(|existing| existing == token) {
+            tokens.push(token.to_string());
+        }
+    }
+    tokens
+}
+
+/// Dialog with one multi-line editor for a token list.
+fn edit_list(
+    parent: &adw::PreferencesDialog,
+    title: &str,
+    hint: &str,
+    current: &[String],
+    apply: impl Fn(Vec<String>) + 'static,
+) {
+    let dialog = adw::Dialog::builder()
+        .title(title)
+        .content_width(480)
+        .build();
+    let view = gtk::TextView::new();
+    view.buffer().set_text(&current.join("\n"));
+    view.set_wrap_mode(gtk::WrapMode::WordChar);
+    let scroll = gtk::ScrolledWindow::builder()
+        .min_content_height(240)
+        .child(&view)
+        .build();
+    let hint_label = gtk::Label::builder()
+        .label(hint)
+        .xalign(0.0)
+        .wrap(true)
+        .css_classes(["dim-label"])
+        .build();
+    let save = gtk::Button::with_label(&tr(locale(), Msg::SaveAction));
+    save.add_css_class("suggested-action");
+    let cancel = gtk::Button::with_label(&tr(locale(), Msg::Cancel));
+    let buttons = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    buttons.set_halign(gtk::Align::End);
+    buttons.append(&cancel);
+    buttons.append(&save);
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    content.set_margin_top(16);
+    content.set_margin_bottom(16);
+    content.set_margin_start(16);
+    content.set_margin_end(16);
+    content.append(&hint_label);
+    content.append(&scroll);
+    content.append(&buttons);
+    dialog.set_child(Some(&content));
+
+    let apply = std::rc::Rc::new(apply);
+    let buffer = view.buffer();
+    let save_dialog = dialog.clone();
+    save.connect_clicked(move |_| {
+        let (start, end) = buffer.bounds();
+        let text = buffer.text(&start, &end, false).to_string();
+        apply(parse_tokens(&text));
+        let _ = save_dialog.close();
+    });
+    let cancel_dialog = dialog.clone();
+    cancel.connect_clicked(move |_| {
+        cancel_dialog.close();
+    });
+    dialog.present(Some(parent));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_tokens;
+
+    #[test]
+    fn tokens_split_on_commas_spaces_and_newlines() {
+        assert_eq!(
+            parse_tokens("mp4, PDF\nr0*  mp4"),
+            vec!["mp4".to_string(), "PDF".to_string(), "r0*".to_string()]
+        );
+        assert!(parse_tokens("  \n , ").is_empty());
+    }
 }
