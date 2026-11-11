@@ -151,6 +151,36 @@ enum SystemAction {
     Shutdown,
 }
 
+/// Resolve a task id: full UUIDs pass through, a unique prefix is expanded using
+/// `download.list` so the 8-character id printed by `segmenta list` is enough.
+fn resolve_task_id(client: &mut Client, given: &str) -> Result<String, ClientError> {
+    if given.len() >= 36 {
+        return Ok(given.to_string());
+    }
+    let listed = client.call("download.list", json!({ "filter": "all", "limit": 1000 }))?;
+    let ids: Vec<String> = listed
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| row["task_id"].as_str())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    let matches: Vec<&String> = ids.iter().filter(|id| id.starts_with(given)).collect();
+    match matches.as_slice() {
+        [only] => Ok((*only).clone()),
+        [] => Err(ClientError::Rpc {
+            code: 1001,
+            message: format!("no task starting with `{given}`"),
+        }),
+        many => Err(ClientError::Protocol(format!(
+            "`{given}` matches {} tasks; use a longer prefix",
+            many.len()
+        ))),
+    }
+}
+
 /// Parse the arguments and run one command.
 pub fn main() -> ExitCode {
     let cli = Cli::parse();
@@ -252,6 +282,7 @@ fn run(cli: Cli) -> Result<String, ClientError> {
             }
         }
         Command::Status { task_id } => {
+            let task_id = resolve_task_id(&mut client, &task_id)?;
             let result = client.call("download.status", json!({ "task_id": task_id }))?;
             if json_out {
                 out.push_str(&format!("{result}\n"));
@@ -264,6 +295,7 @@ fn run(cli: Cli) -> Result<String, ClientError> {
             }
         }
         Command::Pause { task_id } => {
+            let task_id = resolve_task_id(&mut client, &task_id)?;
             let result = client.call("download.pause", json!({ "task_id": task_id }))?;
             out.push_str(&format!(
                 "paused {}\n",
@@ -271,6 +303,7 @@ fn run(cli: Cli) -> Result<String, ClientError> {
             ));
         }
         Command::Resume { task_id } => {
+            let task_id = resolve_task_id(&mut client, &task_id)?;
             let result = client.call("download.resume", json!({ "task_id": task_id }))?;
             out.push_str(&format!(
                 "resumed {} ({})\n",
@@ -282,6 +315,7 @@ fn run(cli: Cli) -> Result<String, ClientError> {
             task_id,
             delete_file,
         } => {
+            let task_id = resolve_task_id(&mut client, &task_id)?;
             let result = client.call(
                 "download.cancel",
                 json!({ "task_id": task_id, "delete_file": delete_file }),
@@ -296,6 +330,7 @@ fn run(cli: Cli) -> Result<String, ClientError> {
             task_id,
             delete_file,
         } => {
+            let task_id = resolve_task_id(&mut client, &task_id)?;
             let result = client.call(
                 "download.delete",
                 json!({ "task_id": task_id, "delete_file": delete_file }),

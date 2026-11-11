@@ -1,12 +1,13 @@
 [package]
 name = "segmenta-gui"
-description = "Segmenta desktop client: GTK4 + Libadwaita"
+description = "Fast segmented download manager (daemon, CLI and GTK4 client)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
+homepage = "https://github.com/wilkin-barban/Segmenta"
 
 [lib]
 name = "segmenta_gui"
@@ -35,6 +36,9 @@ name = "segmenta"
 section = "net"
 priority = "optional"
 maintainer = "Wilkin Barban Rosabal <barbanwilkin@gmail.com>"
+copyright = "2026, Wilkin Barban Rosabal"
+license-file = ["../../LICENSE", "0"]
+extended-description = "Segmenta downloads HTTP and HTTPS files with several connections at once, writes every byte at its final offset and keeps the segment table in SQLite so a download survives a pause, a crash or a reboot. This package installs the download daemon (systemd user units), the segmenta CLI and the GTK4/Libadwaita desktop client."
 depends = "$auto, libgtk-4-1, libadwaita-1-0"
 recommends = "ffmpeg"
 assets = [
@@ -47,5 +51,4 @@ assets = [
     ["data/io.github.wilkin.Segmenta.desktop", "usr/share/applications/", "644"],
     ["data/io.github.wilkin.Segmenta.metainfo.xml", "usr/share/metainfo/", "644"],
     ["data/io.github.wilkin.Segmenta.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
-    ["../../LICENSE", "usr/share/doc/segmenta/copyright", "644"],
 ]
