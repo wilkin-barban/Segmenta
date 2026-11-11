@@ -67,12 +67,40 @@ La redacción de URL y cabeceras es correcta; conviene no redactar campos no sen
 - Capturas 0.0.2 light/dark: 1440×900, contraste correcto; la captura PT está en
   `0.0.2-pt-light.png`.
 
+## Segunda pasada — candidato `6bc4aad` (11:29)
+
+Reinstalado `0.0.2-1` con el `.deb` regenerado (SHA `0d800a66…`). Corregidos y
+reverificados:
+
+- La GUI normal ya lista la tarea completada y los contadores en <5 s
+  (`0.0.2-fixed-normal.png`); el socket real queda en `active_connections=1`.
+- `segmenta list` en es/pt muestra `Completada`/`Concluído`; `--help` ya está traducido.
+- La captura PT normal muestra `Concluído`, `Adicionar URL`, `Concluídas` y `Com fila`.
+- Journal: `secret_backend="keyring"` y `checksum_ok=None` ya son visibles; no hay
+  secretos en la URL/cabecera de prueba.
+
+Quedan dos defectos P2 antes de publicar:
+
+1. **Spinner residual:** la GUI normal deja un indicador giratorio en el centro del área
+   vacía aunque el estado ya es `Ready` y la tarea está listada
+   (`0.0.2-fixed-normal.png`, `0.0.2-normal-pt-fixed.png`). Debe ocultarse al terminar
+   la carga.
+2. **`--screenshots` no es determinista:** bajo `LANG=pt_BR.UTF-8` capturó
+   `Conectando ao daemon…` y no mostró la tarea, aunque había una completada en el
+   daemon (`0.0.2-pt-screenshot-failure.png`). El modo de capturas debe esperar el
+   estado listo y no producir imágenes de carga; su test sólo verifica que los archivos
+   existen y no vacíos.
+
+No publicar hasta corregir ambos y repetir esta comprobación.
+
 ## Criterio para reintentar
 
 1. La GUI normal debe listar las tareas del daemon en <2 s, no sólo `--smoke`.
 2. Estados y `--help` deben respetar `es`/`pt-BR`/`en`; ETA y textos accesibles incluidos.
 3. Dejar de redactar `secret_backend`/`checksum_ok` si no son sensibles.
-4. Reinstalar el siguiente `.deb`, repetir este informe y no publicar hasta que pase.
+4. El spinner debe desaparecer al llegar a `Ready`.
+5. `--screenshots` debe capturar el estado listo, con una tarea visible, en ambos temas.
+6. Reinstalar el siguiente `.deb`, repetir este informe y no publicar hasta que pase.
 
 ## Artefactos
 
