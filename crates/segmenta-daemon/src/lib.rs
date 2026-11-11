@@ -13,6 +13,7 @@ pub mod rpc;
 pub mod secrets;
 pub mod store;
 pub mod stream_media;
+pub mod torrent;
 
 /// Re-export used by the integration tests to build a manager without importing the
 /// module directly.

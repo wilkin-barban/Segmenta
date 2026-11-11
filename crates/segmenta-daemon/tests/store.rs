@@ -396,6 +396,79 @@ fn queue_schedule_is_stored() {
 }
 
 #[test]
+fn migration_from_v2_to_v3_preserves_data_and_creates_torrent_tables() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("segmenta-v2.db");
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.pragma_update(None, "user_version", 2).unwrap();
+        conn.execute_batch(r#"
+            CREATE TABLE IF NOT EXISTS queues (name TEXT PRIMARY KEY, max_active INTEGER NOT NULL DEFAULT 1);
+            INSERT OR IGNORE INTO queues(name, max_active) VALUES ('main', 3);
+            CREATE TABLE downloads (
+                id TEXT PRIMARY KEY,
+                url TEXT NOT NULL,
+                final_url TEXT,
+                final_path TEXT NOT NULL,
+                temp_path TEXT,
+                total_bytes INTEGER,
+                downloaded_bytes INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL,
+                supports_ranges BOOLEAN NOT NULL DEFAULT 0,
+                etag TEXT,
+                last_modified TEXT,
+                content_type TEXT,
+                expected_checksum TEXT,
+                error_code INTEGER,
+                error_message TEXT,
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                priority INTEGER NOT NULL DEFAULT 0,
+                queue_name TEXT NOT NULL DEFAULT 'main',
+                download_type TEXT NOT NULL DEFAULT 'direct',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMP,
+                media_kind TEXT,
+                media_format TEXT,
+                playlist_title TEXT,
+                playlist_count INTEGER,
+                batch_id TEXT
+            );
+            INSERT INTO downloads(id, url, final_path, status) VALUES ('old-1', 'http://example.test', '/tmp/old.bin', 'completed');
+        "#).unwrap();
+    }
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+    assert_eq!(SCHEMA_VERSION, 3);
+
+    let rows = store.list(None, 10, 0).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, "old-1");
+    assert_eq!(rows[0].status, DownloadStatus::Completed);
+
+    store
+        .insert_torrent(
+            "old-1",
+            "0123456789abcdef0123456789abcdef01234567",
+            "magnet:?",
+            false,
+            1,
+        )
+        .unwrap();
+    let torrent = store.get_torrent("old-1").unwrap().expect("torrent exists");
+    assert_eq!(
+        torrent.info_hash,
+        "0123456789abcdef0123456789abcdef01234567"
+    );
+
+    store
+        .insert_torrent_file("old-1", 0, "file.txt", 100, true)
+        .unwrap();
+    let files = store.torrent_files("old-1").unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].path, "file.txt");
+}
+
+#[test]
 fn a_secret_never_appears_in_the_database_file() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("segmenta.db");

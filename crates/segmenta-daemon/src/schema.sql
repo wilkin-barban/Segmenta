@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS downloads (
     retry_count INTEGER NOT NULL DEFAULT 0,
     priority INTEGER NOT NULL DEFAULT 0,
     queue_name TEXT NOT NULL DEFAULT 'main' REFERENCES queues(name),
-    download_type TEXT NOT NULL DEFAULT 'direct' CHECK(download_type IN ('direct', 'hls', 'dash', 'youtube_video', 'youtube_playlist', 'youtube_audio')),
+    download_type TEXT NOT NULL DEFAULT 'direct' CHECK(download_type IN ('direct', 'hls', 'dash', 'youtube_video', 'youtube_playlist', 'youtube_audio', 'torrent', 'magnet')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP
 );
@@ -86,6 +86,27 @@ CREATE TABLE IF NOT EXISTS site_logins (
     domain TEXT PRIMARY KEY,
     username TEXT NOT NULL,
     keyring_secret_id TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS torrents (
+    download_id TEXT PRIMARY KEY,
+    info_hash TEXT NOT NULL UNIQUE,
+    source TEXT NOT NULL,
+    seed_after_complete BOOLEAN NOT NULL DEFAULT 0,
+    uploaded_bytes INTEGER NOT NULL DEFAULT 0,
+    peers INTEGER NOT NULL DEFAULT 0,
+    files_count INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY(download_id) REFERENCES downloads(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS torrent_files (
+    download_id TEXT NOT NULL,
+    file_index INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    length INTEGER NOT NULL,
+    selected BOOLEAN NOT NULL DEFAULT 1,
+    PRIMARY KEY(download_id, file_index),
+    FOREIGN KEY(download_id) REFERENCES downloads(id) ON DELETE CASCADE
 );
 
 -- Índices para consultas de alta velocidad en la GUI
