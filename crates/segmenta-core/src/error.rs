@@ -129,6 +129,14 @@ impl CoreError {
         }
     }
 
+    /// Underlying `ErrorKind` when this is an I/O failure.
+    pub fn io_kind(&self) -> Option<std::io::ErrorKind> {
+        match self {
+            CoreError::Io { kind, .. } => Some(*kind),
+            _ => None,
+        }
+    }
+
     /// Whether the worker may retry the same range.
     pub fn is_retryable(&self) -> bool {
         matches!(
