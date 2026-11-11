@@ -274,3 +274,24 @@ Cada pull request debe pasar, como mínimo:
 El workspace declara `GPL-3.0-or-later`; el repositorio debe incluir `LICENSE` con el texto completo y
 un `NOTICE`/`README` que indique la licencia de la extensión. Los binarios y el `.deb` se firman; los
 checksums se publican con el artefacto. No se commitean claves privadas de firma ni secretos de tienda.
+
+---
+
+## 7. Empaquetado de medios y navegadores (0.1.0)
+
+- Nuevo crate `segmenta-host` → `/usr/bin/segmenta-host` (framing Native Messaging, sin shell).
+- Manifiestos nativos de sistema instalados por el `.deb`:
+  - `/etc/opt/chrome/native-messaging-hosts/io.github.wilkin.segmenta.json`
+  - `/etc/chromium/native-messaging-hosts/io.github.wilkin.segmenta.json`
+  - `/usr/lib/mozilla/native-messaging-hosts/segmenta@wilkin.github.io.json`
+  - `/etc/opt/edge/native-messaging-hosts/io.github.wilkin.segmenta.json`
+  Chromium, Brave, Vivaldi y Opera reutilizan la ruta de Chromium/Edge cuando su paquete la respeta;
+  `extension/install-native.sh` cubre los manifiestos de usuario de todos los navegadores detectados.
+- Dependencias de ejecución: `libsecret-tools`, `ffmpeg` y `yt-dlp` (nombres reales de Ubuntu 26.04).
+  No se embeben binarios; se documenta que el sistema puede actualizarlos y que YouTube cambia.
+- Assets de release además del `.deb` y su `.sha256`:
+  - `segmenta-extension-0.1.0.zip` (Chromium MV3, cargar en modo desarrollador),
+  - `segmenta-firefox-0.1.0.zip` (XPI para Firefox, carga temporal desde `about:debugging`).
+- `packaging/check-package.sh` valida además: `segmenta-host` en `/usr/bin`, los manifiestos nativos,
+  `Depends` con `yt-dlp` y `ffmpeg`, y la existencia de ambos ZIP en `dist/`.
+- La extensión **no** se instala desde el `.deb`; se carga desde el ZIP o en modo desarrollador.

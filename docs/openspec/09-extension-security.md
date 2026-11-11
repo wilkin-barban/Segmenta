@@ -246,3 +246,27 @@ La extensión no debe pedir permisos “por si acaso”. La matriz de v1 es:
 La extensión debe mostrar una pantalla de consentimiento antes de leer cookies o enviar una URL al
 host, y registrar en el daemon sólo la URL y las cabeceras necesarias. Un permiso nuevo requiere
 revisión de seguridad y un OpenSpec, no un cambio silencioso del manifest.
+
+---
+
+## 12. Alcance de seguridad en 0.1.0
+
+- **Permisos mínimos**: `nativeMessaging`, `storage`, `activeTab` y `scripting`; `host_permissions`
+  sólo `https://www.youtube.com/*`. Los sitios para HLS/DASH se habilitan con permiso opcional por
+  sitio, nunca con `<all_urls>`.
+- **ID de desarrollo**: la `key` del manifiesto MV3 es pública y fija; el ID derivado se documenta en
+  `extension/CHROMIUM-ID.txt` y debe coincidir con `allowed_origins`. En Firefox el ID es
+  `segmenta@wilkin.github.io` y el manifiesto nativo usa `allowed_extensions`.
+- **Mensajería**: el `background` valida remitente (mismo ID de extensión), tipo de mensaje, esquema
+  y host de la URL y tamaño (< 64 KiB). `document.js` entrega eventos por `MessageChannel` a un puerto
+  concreto, comprobando `event.source === window`; nunca `postMessage("*")`.
+- **Sin credenciales**: la extensión no lee cookies ni `localStorage` del sitio, no reenvía
+  `Authorization` y no descarga contenido privado o con edad.
+- **Sin DRM**: claves HLS (`EXT-X-KEY` ≠ `NONE`) y `ContentProtection` de DASH se rechazan con
+  `ERR_DRM_PROTECTED`; no se implementa ningún bypass.
+- **Sin código remoto**: no hay `eval`, `new Function`, scripts remotos ni dependencias npm en tiempo
+  de ejecución; el ZIP contiene sólo archivos locales.
+- **Host**: sin shell, sin rutas del navegador, allowlist de métodos y mensajes de error sin datos
+  sensibles.
+- **Firefox sin firma**: se carga temporalmente desde `about:debugging`; no se distribuye por la
+  tienda de Mozilla en 0.1.0.
