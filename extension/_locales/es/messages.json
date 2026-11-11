@@ -1,0 +1,182 @@
+{
+  "extensionName": {
+    "message": "Segmenta",
+    "description": "Nombre visible de la extensión."
+  },
+  "extensionDescription": {
+    "message": "Descarga videos, audio y playlists de YouTube y flujos HLS/DASH públicos con Segmenta.",
+    "description": "Descripción corta de la extensión."
+  },
+  "buttonTitle": {
+    "message": "Descargar con Segmenta",
+    "description": "Texto del botón flotante."
+  },
+  "panelTitle": {
+    "message": "Segmenta",
+    "description": "Título del panel."
+  },
+  "panelClose": {
+    "message": "Cerrar",
+    "description": "Etiqueta del botón de cierre."
+  },
+  "panelLoading": {
+    "message": "Consultando calidades...",
+    "description": "Estado mientras se ejecuta media.probe."
+  },
+  "qualityLabel": {
+    "message": "Calidad de video",
+    "description": "Título de la lista de calidades."
+  },
+  "audioOnly": {
+    "message": "Solo audio",
+    "description": "Opción para descargar únicamente el audio."
+  },
+  "videoCurrent": {
+    "message": "Video actual",
+    "description": "Opción para descargar el video abierto."
+  },
+  "playlistAll": {
+    "message": "Playlist completa ($1)",
+    "description": "Opción para descargar la playlist; el marcador es la cantidad de videos."
+  },
+  "playlistLimitLabel": {
+    "message": "Límite de la playlist",
+    "description": "Etiqueta del campo de límite de playlist."
+  },
+  "playlistLimitHint": {
+    "message": "Entre 1 y 500. Valor por defecto 100.",
+    "description": "Ayuda del campo de límite de playlist."
+  },
+  "startDownload": {
+    "message": "Descargar",
+    "description": "Botón que confirma la descarga."
+  },
+  "statusPreparing": {
+    "message": "Preparando la descarga...",
+    "description": "Estado inicial de la tarea."
+  },
+  "statusPercent": {
+    "message": "$1%",
+    "description": "Porcentaje de progreso."
+  },
+  "statusSpeed": {
+    "message": "$1/s",
+    "description": "Velocidad de descarga."
+  },
+  "statusEta": {
+    "message": "quedan $1",
+    "description": "Tiempo restante estimado."
+  },
+  "statusPlaylist": {
+    "message": "Playlist: $1 de $2",
+    "description": "Progreso agregado de una playlist."
+  },
+  "statusCompleted": {
+    "message": "Descarga completada",
+    "description": "Estado final correcto."
+  },
+  "toastSaved": {
+    "message": "Guardado en $1",
+    "description": "Aviso final con la ruta del archivo."
+  },
+  "openFolder": {
+    "message": "Abrir carpeta",
+    "description": "Acción del aviso final."
+  },
+  "streamDetected": {
+    "message": "Flujo detectado en esta página",
+    "description": "Opción para una URL de manifiesto HLS/DASH detectada."
+  },
+  "errorGeneric": {
+    "message": "No se pudo completar la operación.",
+    "description": "Error genérico."
+  },
+  "errorInvalidUrl": {
+    "message": "La URL no es válida o el sitio no está permitido.",
+    "description": "Error de URL rechazada."
+  },
+  "errorInvalidMessage": {
+    "message": "La solicitud no es válida para la extensión.",
+    "description": "Error de mensaje rechazado."
+  },
+  "errorTimeout": {
+    "message": "El host nativo no respondió a tiempo.",
+    "description": "Error de tiempo de espera."
+  },
+  "errorHostUnavailable": {
+    "message": "No se encontró el host nativo de Segmenta. ¿Está instalado segmenta-host?",
+    "description": "Error cuando el host nativo no está disponible."
+  },
+  "errorDrmProtected": {
+    "message": "Este contenido usa protección DRM y no es compatible.",
+    "description": "Error de DRM."
+  },
+  "errorLiveNotSupported": {
+    "message": "Las transmisiones en vivo no son compatibles todavía.",
+    "description": "Error de contenido en vivo."
+  },
+  "errorManifestMalformed": {
+    "message": "El manifiesto del flujo está dañado o vacío.",
+    "description": "Error de manifiesto inválido."
+  },
+  "errorStreamUnsupported": {
+    "message": "Este flujo usa funciones fuera de alcance (cifrado, subtítulos o varias pistas).",
+    "description": "Error de flujo no soportado."
+  },
+  "errorMediaBackend": {
+    "message": "yt-dlp o ffmpeg fallaron. Comprobá que estén instalados y actualizados.",
+    "description": "Error del backend de medios."
+  },
+  "errorNotPublic": {
+    "message": "El contenido no es público o no está disponible.",
+    "description": "Error de contenido privado."
+  },
+  "errorUnknown": {
+    "message": "Ocurrió un error inesperado.",
+    "description": "Error desconocido."
+  },
+  "popupTitle": {
+    "message": "Segmenta: descargar flujo",
+    "description": "Título de la ventana emergente."
+  },
+  "popupUrlLabel": {
+    "message": "URL del video o del manifiesto",
+    "description": "Etiqueta del campo de URL."
+  },
+  "popupUrlPlaceholder": {
+    "message": "https://...",
+    "description": "Ejemplo de URL en el campo."
+  },
+  "popupModeLabel": {
+    "message": "Modo de descarga",
+    "description": "Etiqueta del selector de modo."
+  },
+  "popupModeVideo": {
+    "message": "Video",
+    "description": "Modo video."
+  },
+  "popupModeAudio": {
+    "message": "Audio",
+    "description": "Modo audio."
+  },
+  "popupStart": {
+    "message": "Enviar a Segmenta",
+    "description": "Botón de envío del popup."
+  },
+  "popupInvalidUrl": {
+    "message": "Ingresá una URL https:// válida.",
+    "description": "Error de URL en el popup."
+  },
+  "popupSent": {
+    "message": "Tarea creada. Seguí el progreso en la ventana de Segmenta.",
+    "description": "Confirmación del popup."
+  },
+  "popupError": {
+    "message": "No se pudo crear la tarea.",
+    "description": "Error genérico del popup."
+  },
+  "notAvailable": {
+    "message": "Segmenta no está disponible en esta página.",
+    "description": "Página sin botón flotante."
+  }
+}
