@@ -1,0 +1,51 @@
+[package]
+name = "segmenta-gui"
+description = "Segmenta desktop client: GTK4 + Libadwaita"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "segmenta_gui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "segmenta-gui"
+path = "src/main.rs"
+
+[dependencies]
+glib = "0.22"
+gtk = { package = "gtk4", version = "0.11", features = ["v4_10"] }
+libadwaita = { version = "0.9", features = ["v1_5"] }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+# cargo-deb packaging of the GUI crate: the three binaries, the systemd user
+# units, the desktop entry, the icon and the AppStream metadata ship in one
+# `segmenta` package (S20). Sources live outside this crate, so they are
+# addressed relative to this manifest.
+[package.metadata.deb]
+name = "segmenta"
+section = "net"
+priority = "optional"
+maintainer = "Wilkin Barban Rosabal <barbanwilkin@gmail.com>"
+depends = "$auto, libgtk-4-1, libadwaita-1-0"
+recommends = "ffmpeg"
+assets = [
+    ["../../target/release/segmenta-gui", "usr/bin/", "755"],
+    ["../../target/release/segmenta-cli", "usr/bin/", "755"],
+    ["../../target/release/segmenta", "usr/bin/", "755"],
+    ["../../target/release/segmenta-daemon", "usr/bin/", "755"],
+    ["../../packaging/segmenta.service", "usr/lib/systemd/user/", "644"],
+    ["../../packaging/segmenta.socket", "usr/lib/systemd/user/", "644"],
+    ["data/io.github.wilkin.Segmenta.desktop", "usr/share/applications/", "644"],
+    ["data/io.github.wilkin.Segmenta.metainfo.xml", "usr/share/metainfo/", "644"],
+    ["data/io.github.wilkin.Segmenta.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
+    ["../../LICENSE", "usr/share/doc/segmenta/copyright", "644"],
+]
