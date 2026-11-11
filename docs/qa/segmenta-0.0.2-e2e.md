@@ -106,7 +106,17 @@ en la GUI normal, aunque la tarea ya está listada (`0.0.2-third-normal.png`,
 `0.0.2-third-normal12.png`). Hay que ocultarlo realmente al llegar a `Ready`; el fix de
 `c1fc1ce` no se refleja en el paquete o no cubre ese indicador.
 
-No publicar hasta que el spinner desaparezca y se regenere el `.deb`.
+## Cuarta pasada — candidato `bd19874` (12:26)
+
+Reinstalado el `.deb` de 12:26 (SHA `91b34cc0…`). La GUI normal lista la tarea,
+la i18n es/pt y los logs pasan, y `--screenshots` reporta `captured rows=1 state=Ready`
+con ETA traducido. Gates locales: 37 suites OK, clippy/fmt OK y paquete 3.930.764 B.
+
+**El spinner sigue visible en la GUI normal a los 5 s y a los 12 s** aunque la tarea
+está listada (`0.0.2-fourth-normal5.png`, `0.0.2-fourth-normal12.png`). El accessor
+`loading_spinner_visible()` y el modo capturas no lo detectan, así que el defecto es
+de pintura real del widget/página. No publicar hasta que desaparezca en una captura
+normal y se regenere el `.deb`.
 
 ## Criterio para reintentar
 
