@@ -30,7 +30,8 @@ pub const SOCKET_ENV: &str = "SEGMENTA_SOCKET";
 pub const SYSTEMD_UNIT: &str = "segmenta.socket";
 
 /// Prefixes the host is willing to forward. Nothing else leaves the process.
-pub const ALLOWED_METHOD_PREFIXES: [&str; 4] = ["media.", "system.", "download.", "settings."];
+pub const ALLOWED_METHOD_PREFIXES: [&str; 5] =
+    ["media.", "system.", "download.", "settings.", "torrent."];
 
 /// How long a single daemon round trip may take before the browser gets an error.
 pub const DEFAULT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);

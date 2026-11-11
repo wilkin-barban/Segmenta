@@ -200,6 +200,12 @@ fn the_allowed_prefixes_reach_the_daemon() {
         json!({ "jsonrpc": "2.0", "id": 2, "method": "download.list", "params": {} }),
         json!({ "jsonrpc": "2.0", "id": 3, "method": "settings.get", "params": {} }),
         json!({ "jsonrpc": "2.0", "id": 4, "method": "media.probe", "params": { "url": "https://example.invalid" } }),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 5,
+            "method": "torrent.add",
+            "params": { "url": "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567" }
+        }),
     ];
 
     let (result, frames) = run_host(&daemon.path, &requests);
@@ -211,6 +217,10 @@ fn the_allowed_prefixes_reach_the_daemon() {
     assert_eq!(frames[1]["error"]["code"], METHOD_NOT_FOUND);
     assert_eq!(frames[2]["error"]["code"], METHOD_NOT_FOUND);
     assert_eq!(frames[3]["result"]["kind"], "video");
+    // `torrent.` is forwarded to the daemon (stub answers -32601 until T5 lands);
+    // the host itself must not reject the prefix with its own method-not-found.
+    assert_eq!(frames[4]["error"]["code"], METHOD_NOT_FOUND);
+    assert_eq!(daemon.calls(), requests.len());
     assert_eq!(daemon.calls(), requests.len());
 }
 
