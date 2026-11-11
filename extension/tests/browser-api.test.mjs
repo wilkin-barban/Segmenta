@@ -44,6 +44,22 @@ export default function suite({ test }) {
     assert.equal(calls.length, 0);
   });
 
+  test('sendNative waits for an asynchronous callback with declared arity 2', async () => {
+    const calls = installFakeChrome();
+    // chrome.runtime.sendNativeMessage(host, message, callback) declares two named
+    // parameters and answers through the third argument, asynchronously.
+    globalThis.chrome.runtime.sendNativeMessage = (host, message, callback) => {
+      calls.push(['sendNativeMessage', host, message]);
+      setTimeout(() => callback({ jsonrpc: '2.0', id: message.id, result: { ok: true } }), 5);
+    };
+    const api = await loadShared('SegmentaApi', 'browser-api.js');
+    const reply = await api.sendNative({ jsonrpc: '2.0', id: 9, method: 'media.probe', params: {} });
+    assert.equal(reply && reply.result && reply.result.ok, true, 'the reply must not be undefined');
+    assert.equal(reply.id, 9);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][1], 'io.github.wilkin.segmenta');
+  });
+
   test('sendMessage unwraps callback-style chrome.runtime.sendMessage', async () => {
     const calls = installFakeChrome();
     const api = await loadShared('SegmentaApi', 'browser-api.js');
