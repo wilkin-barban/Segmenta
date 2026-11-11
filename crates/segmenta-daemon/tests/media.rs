@@ -126,6 +126,34 @@ async fn probe_add_playlist_and_private_media() {
         .to_string_lossy()
         .ends_with(".mp4"));
 
+    // Live QA: a second download of the same title must not resume into the first
+    // file (that produced HTTP 416). Each task owns a fresh, unique path.
+    let again = manager
+        .call(
+            "media.add",
+            Some(json!({"url":"https://www.youtube.com/watch?v=abc","mode":"video","height":720})),
+        )
+        .await
+        .expect("second add");
+    let second_id = again["task_id"].as_str().unwrap().to_string();
+    for _ in 0..60 {
+        let value = manager
+            .call("media.status", Some(json!({"task_id": second_id})))
+            .await
+            .expect("status");
+        if matches!(value["status"].as_str(), Some("completed") | Some("failed")) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let second = store.get(&second_id).unwrap().unwrap();
+    assert_ne!(second.final_path, record.final_path);
+    assert_eq!(
+        second.status,
+        segmenta_daemon::store::DownloadStatus::Completed
+    );
+    assert!(Path::new(&second.final_path).exists());
+
     let added = manager
         .call(
             "media.add",

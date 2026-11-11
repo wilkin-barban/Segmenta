@@ -2,7 +2,9 @@
 
 Release `0.1.0`: extensión de navegador para YouTube (familia Chromium completa y Firefox), host de
 Native Messaging, backend de medios con `yt-dlp` y HLS/DASH públicos sin cifrar. Documento ODD; se lee
-hasta `## Log`. Sin publicar hasta el QA remoto del usuario.
+hasta `## Log
+- L4: QA en vivo, segunda ronda. `b[height<=720]/18/best` falla con el `yt-dlp` 2026.10.26 (`Requested format is not available`); el selector debe caer a `bv*[height<=H]+ba`. Un destino existente produce 416. Las tareas completadas persisten 0 bytes. El DASH con `SegmentList`/`SegmentBase` se rechaza correctamente y queda documentado. Se exige validar una versión mínima de `yt-dlp`.
+`. Sin publicar hasta el QA remoto del usuario.
 
 ## Specs
 
@@ -169,6 +171,8 @@ cifrar con merge; DRM/privado/ live rechazados; GUI/CLI mostrando tareas de medi
 en `dist/` con checksums; gates verdes. **No se publica nada hasta el informe verde del usuario.**
 
 ## Log
+- L4: QA en vivo, segunda ronda. `b[height<=720]/18/best` falla con el `yt-dlp` 2026.10.26 (`Requested format is not available`); el selector debe caer a `bv*[height<=H]+ba`. Un destino existente produce 416. Las tareas completadas persisten 0 bytes. El DASH con `SegmentList`/`SegmentBase` se rechaza correctamente y queda documentado. Se exige validar una versión mínima de `yt-dlp`.
+
 
 **L1 (pedido de arranque, verbatim):**
 
