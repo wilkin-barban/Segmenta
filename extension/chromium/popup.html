@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Segmenta</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font: 13px/1.45 system-ui, -apple-system, 'Segoe UI', sans-serif;
+      }
+      body {
+        margin: 0;
+        padding: 12px;
+        width: 300px;
+        background: #1d1d20;
+        color: #f6f6f6;
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: 14px;
+        font-weight: 700;
+      }
+      label {
+        display: block;
+        margin: 10px 0 4px;
+        font-size: 12px;
+        color: #c9c9cf;
+      }
+      input[type='url'] {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 6px 8px;
+        border: 1px solid #4a4a52;
+        border-radius: 7px;
+        background: #121214;
+        color: #f6f6f6;
+        font: inherit;
+      }
+      .modes {
+        display: flex;
+        gap: 12px;
+        margin-top: 4px;
+      }
+      .modes label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin: 0;
+        color: #f6f6f6;
+      }
+      button {
+        margin-top: 12px;
+        width: 100%;
+        padding: 8px 10px;
+        border: 0;
+        border-radius: 8px;
+        background: #3584e4;
+        color: #ffffff;
+        font: 600 13px/1.2 system-ui, sans-serif;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #4a93ea;
+      }
+      button:disabled {
+        background: #3a3a44;
+        color: #9a9aa4;
+        cursor: default;
+      }
+      .status {
+        margin: 10px 0 0;
+        font-size: 12px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .status.error {
+        color: #ffb3bf;
+      }
+      .status.ok {
+        color: #b6f0c8;
+      }
+    </style>
+  </head>
+  <body>
+    <h1 id="title"></h1>
+    <label id="url-label" for="url"></label>
+    <input id="url" type="url" autocomplete="off" spellcheck="false" />
+    <label id="mode-label"></label>
+    <div class="modes">
+      <label><input type="radio" name="mode" value="video" checked /><span id="mode-video"></span></label>
+      <label><input type="radio" name="mode" value="audio" /><span id="mode-audio"></span></label>
+    </div>
+    <button id="start" type="button"></button>
+    <p id="status" class="status"></p>
+    <script src="shared/browser-api.js"></script>
+    <script src="shared/protocol.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
