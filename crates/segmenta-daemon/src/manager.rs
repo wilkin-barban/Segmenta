@@ -1592,6 +1592,184 @@ impl Manager {
         Ok(view)
     }
 
+    async fn torrent_probe(&self, params: Value) -> Result<Value, RpcError> {
+        let url = params
+            .get("url")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| RpcError::invalid_params("url parameter is required"))?;
+        let client = media_http_client()?;
+        crate::torrent::probe_torrent(&client, url).await
+    }
+
+    async fn torrent_add(&self, params: Value) -> Result<Value, RpcError> {
+        let url = params
+            .get("url")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| RpcError::invalid_params("url parameter is required"))?;
+        let settings = self.settings();
+        let destination_dir = params
+            .get("destination_dir")
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(&settings.download_dir));
+        if !destination_dir.is_absolute() {
+            return Err(RpcError::invalid_params(
+                "destination_dir must be an absolute path",
+            ));
+        }
+        let seed_after_complete = params
+            .get("seed_after_complete")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let client = media_http_client()?;
+        let probe_res = crate::torrent::probe_torrent(&client, url).await?;
+        let name = probe_res
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("download.bin");
+        let info_hash = probe_res
+            .get("info_hash")
+            .and_then(|v| v.as_str())
+            .unwrap_or("0000000000000000000000000000000000000000");
+        let total_bytes = probe_res.get("total_bytes").and_then(|v| v.as_u64());
+        let source_type = probe_res
+            .get("source_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("torrent");
+
+        let task_id = uuid::Uuid::new_v4().to_string();
+        if !destination_dir.exists() {
+            std::fs::create_dir_all(&destination_dir).map_err(|err| {
+                RpcError::new(
+                    1005,
+                    "ERR_DESTINATION_UNWRITABLE",
+                    format!("cannot create {}: {err}", destination_dir.display()),
+                )
+            })?;
+        }
+        let final_path = resolve_unique_path(&destination_dir, name).map_err(|err| {
+            RpcError::new(
+                1005,
+                "ERR_DESTINATION_UNWRITABLE",
+                format!("cannot pick file name: {err}"),
+            )
+        })?;
+
+        let record = DownloadRecord {
+            id: task_id.clone(),
+            url: url.to_string(),
+            final_url: None,
+            final_path: final_path.to_string_lossy().into_owned(),
+            temp_path: None,
+            total_bytes,
+            downloaded_bytes: 0,
+            status: DownloadStatus::Pending,
+            supports_ranges: true,
+            etag: None,
+            last_modified: None,
+            content_type: Some(
+                if source_type == "magnet" {
+                    "application/x-magnet"
+                } else {
+                    "application/x-bittorrent"
+                }
+                .to_string(),
+            ),
+            expected_checksum: None,
+            error_code: None,
+            error_message: None,
+            retry_count: 0,
+            priority: 0,
+            queue_name: "main".to_string(),
+            download_type: source_type.to_string(),
+            created_at: None,
+            completed_at: None,
+            filename: name.to_string(),
+            media_kind: None,
+            media_format: None,
+            playlist_title: None,
+            playlist_count: None,
+            batch_id: None,
+        };
+
+        self.store.insert_download(&record).map_err(store_error)?;
+        self.store
+            .insert_torrent(
+                &task_id,
+                if info_hash.is_empty() {
+                    "0000000000000000000000000000000000000000"
+                } else {
+                    info_hash
+                },
+                url,
+                seed_after_complete,
+                1,
+            )
+            .map_err(store_error)?;
+
+        let file_path = crate::torrent::sanitize_torrent_path(&destination_dir, name)
+            .map_err(|err| RpcError::invalid_params(format!("invalid torrent file path: {err}")))?;
+        self.store
+            .insert_torrent_file(
+                &task_id,
+                0,
+                &file_path.to_string_lossy(),
+                total_bytes.unwrap_or(0),
+                true,
+            )
+            .map_err(store_error)?;
+
+        self.bus.publish(
+            "task_added",
+            Some(&task_id),
+            json!({
+                "task_id": task_id,
+                "status": "pending",
+                "url": url,
+                "final_path": record.final_path,
+            }),
+        );
+
+        Ok(json!({
+            "task_id": task_id,
+            "status": "pending",
+            "filename": name,
+            "info_hash": info_hash,
+        }))
+    }
+
+    fn torrent_status(&self, params: Value) -> Result<Value, RpcError> {
+        let task_id = params
+            .get("task_id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| RpcError::invalid_params("task_id parameter is required"))?;
+        let record = self
+            .store
+            .get(task_id)
+            .map_err(store_error)?
+            .ok_or_else(|| RpcError::task_not_found(task_id))?;
+        let torrent = self.store.get_torrent(task_id).map_err(store_error)?;
+        let files = self.store.torrent_files(task_id).unwrap_or_default();
+
+        let mut view = serde_json::to_value(self.view(&record, true))
+            .map_err(|err| RpcError::internal(err.to_string()))?;
+        if let Value::Object(map) = &mut view {
+            if let Some(t) = torrent {
+                map.insert("info_hash".to_string(), json!(t.info_hash));
+                map.insert(
+                    "seed_after_complete".to_string(),
+                    json!(t.seed_after_complete),
+                );
+                map.insert("uploaded_bytes".to_string(), json!(t.uploaded_bytes));
+                map.insert("peers".to_string(), json!(t.peers));
+                map.insert("files_count".to_string(), json!(t.files_count));
+            }
+            map.insert("files".to_string(), json!(files));
+        }
+        Ok(view)
+    }
+
     /// Run `yt-dlp` for one media task and report progress on the bus.
     fn start_media_task(
         &self,
@@ -1818,6 +1996,18 @@ impl RpcHandler for Manager {
                     let parsed: MediaStatusParams = serde_json::from_value(parse(params)?)
                         .map_err(|err| RpcError::invalid_params(err.to_string()))?;
                     self.media_status(parsed)
+                }
+                "torrent.probe" => {
+                    let parsed = parse(params)?;
+                    self.torrent_probe(parsed).await
+                }
+                "torrent.add" => {
+                    let parsed = parse(params)?;
+                    self.torrent_add(parsed).await
+                }
+                "torrent.status" => {
+                    let parsed = parse(params)?;
+                    self.torrent_status(parsed)
                 }
                 "settings.get" => self.settings_get(),
                 "settings.update" => self.settings_update(params),

@@ -14,9 +14,87 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Current schema version, stored in `PRAGMA user_version`.
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 const SCHEMA_SQL: &str = include_str!("schema.sql");
+
+/// Rebuild of `downloads` for schema v3: widens the `download_type` CHECK to accept
+/// torrent and magnet, and adds torrents / torrent_files tables.
+const TORRENT_REBUILD_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS downloads_v3 (
+    id TEXT PRIMARY KEY,
+    url TEXT NOT NULL,
+    final_url TEXT,
+    final_path TEXT NOT NULL,
+    temp_path TEXT,
+    total_bytes INTEGER,
+    downloaded_bytes INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL CHECK(status IN (
+        'pending', 'probing', 'downloading', 'paused',
+        'retrying', 'verifying', 'finalizing',
+        'completed', 'failed', 'cancelled'
+    )),
+    supports_ranges BOOLEAN NOT NULL DEFAULT 0,
+    etag TEXT,
+    last_modified TEXT,
+    content_type TEXT,
+    expected_checksum TEXT,
+    error_code INTEGER,
+    error_message TEXT,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    priority INTEGER NOT NULL DEFAULT 0,
+    queue_name TEXT NOT NULL DEFAULT 'main' REFERENCES queues(name),
+    download_type TEXT NOT NULL DEFAULT 'direct' CHECK(download_type IN (
+        'direct', 'hls', 'dash', 'youtube_video', 'youtube_playlist', 'youtube_audio', 'torrent', 'magnet'
+    )),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP,
+    media_kind TEXT,
+    media_format TEXT,
+    playlist_title TEXT,
+    playlist_count INTEGER,
+    batch_id TEXT
+);
+INSERT OR IGNORE INTO downloads_v3 (
+    id, url, final_url, final_path, temp_path, total_bytes, downloaded_bytes, status,
+    supports_ranges, etag, last_modified, content_type, expected_checksum, error_code,
+    error_message, retry_count, priority, queue_name, download_type, created_at,
+    completed_at, media_kind, media_format, playlist_title, playlist_count, batch_id
+)
+SELECT id, url, final_url, final_path, temp_path, total_bytes, downloaded_bytes, status,
+       supports_ranges, etag, last_modified, content_type, expected_checksum, error_code,
+       error_message, retry_count, priority, queue_name, download_type, created_at,
+       completed_at, media_kind, media_format, playlist_title, playlist_count, batch_id
+FROM downloads;
+DROP TABLE downloads;
+ALTER TABLE downloads_v3 RENAME TO downloads;
+CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads(status);
+CREATE INDEX IF NOT EXISTS idx_downloads_queue ON downloads(queue_name, priority DESC);
+CREATE INDEX IF NOT EXISTS idx_downloads_created_at ON downloads(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_downloads_batch ON downloads(batch_id);
+
+CREATE TABLE IF NOT EXISTS torrents (
+    download_id TEXT PRIMARY KEY,
+    info_hash TEXT NOT NULL UNIQUE,
+    source TEXT NOT NULL,
+    seed_after_complete BOOLEAN NOT NULL DEFAULT 0,
+    uploaded_bytes INTEGER NOT NULL DEFAULT 0,
+    peers INTEGER NOT NULL DEFAULT 0,
+    files_count INTEGER NOT NULL DEFAULT 0,
+    FOREIGN KEY(download_id) REFERENCES downloads(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS torrent_files (
+    download_id TEXT NOT NULL,
+    file_index INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    length INTEGER NOT NULL,
+    selected BOOLEAN NOT NULL DEFAULT 1,
+    PRIMARY KEY(download_id, file_index),
+    FOREIGN KEY(download_id) REFERENCES downloads(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_torrent_files_download ON torrent_files(download_id);
+"#;
 
 /// Rebuild of `downloads` for schema v2: widens the `download_type` CHECK and adds the
 /// media columns. Running it twice is harmless because the whole batch is guarded by
@@ -225,6 +303,28 @@ pub struct DownloadRecord {
     pub playlist_count: Option<u32>,
     /// Groups the entries of one playlist run.
     pub batch_id: Option<String>,
+}
+
+/// One row of `torrents`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TorrentRecord {
+    pub download_id: String,
+    pub info_hash: String,
+    pub source: String,
+    pub seed_after_complete: bool,
+    pub uploaded_bytes: u64,
+    pub peers: u32,
+    pub files_count: u32,
+}
+
+/// One row of `torrent_files`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TorrentFileRecord {
+    pub download_id: String,
+    pub file_index: u32,
+    pub path: String,
+    pub length: u64,
+    pub selected: bool,
 }
 
 /// One row of `segments`.
@@ -633,6 +733,11 @@ impl Store {
             tx.execute_batch(MEDIA_REBUILD_SQL)?;
             tx.execute_batch("PRAGMA foreign_keys = ON")?;
         }
+        if current < 3 {
+            tx.execute_batch("PRAGMA foreign_keys = OFF")?;
+            tx.execute_batch(TORRENT_REBUILD_SQL)?;
+            tx.execute_batch("PRAGMA foreign_keys = ON")?;
+        }
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         Ok(SCHEMA_VERSION)
@@ -689,6 +794,94 @@ impl Store {
             ],
         )?;
         Ok(())
+    }
+
+    /// Insert a torrent metadata row.
+    pub fn insert_torrent(
+        &self,
+        download_id: &str,
+        info_hash: &str,
+        source: &str,
+        seed_after_complete: bool,
+        files_count: u32,
+    ) -> Result<()> {
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO torrents (download_id, info_hash, source, seed_after_complete, files_count)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![download_id, info_hash, source, seed_after_complete as i64, files_count],
+        )?;
+        Ok(())
+    }
+
+    /// Insert a torrent file row.
+    pub fn insert_torrent_file(
+        &self,
+        download_id: &str,
+        file_index: u32,
+        path: &str,
+        length: u64,
+        selected: bool,
+    ) -> Result<()> {
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO torrent_files (download_id, file_index, path, length, selected)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                download_id,
+                file_index,
+                path,
+                length as i64,
+                selected as i64
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Get torrent record by download ID.
+    pub fn get_torrent(&self, download_id: &str) -> Result<Option<TorrentRecord>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT download_id, info_hash, source, seed_after_complete, uploaded_bytes, peers, files_count
+             FROM torrents WHERE download_id = ?1"
+        )?;
+        let row = stmt
+            .query_row(params![download_id], |row| {
+                Ok(TorrentRecord {
+                    download_id: row.get(0)?,
+                    info_hash: row.get(1)?,
+                    source: row.get(2)?,
+                    seed_after_complete: row.get::<_, i64>(3)? != 0,
+                    uploaded_bytes: row.get::<_, i64>(4)? as u64,
+                    peers: row.get::<_, i64>(5)? as u32,
+                    files_count: row.get::<_, i64>(6)? as u32,
+                })
+            })
+            .optional()?;
+        Ok(row)
+    }
+
+    /// Get torrent files for a download ID.
+    pub fn torrent_files(&self, download_id: &str) -> Result<Vec<TorrentFileRecord>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT download_id, file_index, path, length, selected
+             FROM torrent_files WHERE download_id = ?1 ORDER BY file_index ASC",
+        )?;
+        let rows = stmt.query_map(params![download_id], |row| {
+            Ok(TorrentFileRecord {
+                download_id: row.get(0)?,
+                file_index: row.get::<_, i64>(1)? as u32,
+                path: row.get(2)?,
+                length: row.get::<_, i64>(3)? as u64,
+                selected: row.get::<_, i64>(4)? != 0,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 
     /// Update lifecycle state and error fields.
