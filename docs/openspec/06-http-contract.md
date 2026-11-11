@@ -119,6 +119,33 @@ If-Range: "686897696a7c876b7e"
         [ Backoff Exponencial ]                             [ Estado FAILED ]
 ```
 
+### 4.3. Códigos de error del motor
+
+Los errores que nacen en el motor no siempre tienen un HTTP status detrás. Este es el mapeo
+normativo entre el identificador que ven los usuarios (`downloads.error_message`), el código
+numérico que viaja en JSON-RPC (`error.code` / `data.code`) y se guarda en
+`downloads.error_code`, y la acción que toma el daemon.
+
+| Código | Identificador | Origen | Acción |
+| :--- | :--- | :--- | :--- |
+| `1004` | `ERR_INVALID_URL` | esquema no http(s), host ausente, DNS sin resultados | `failed` |
+| `1005` | `ERR_DESTINATION_UNWRITABLE` | `EACCES`/`EPERM` en la carpeta destino | `paused` |
+| `1006` | `ERR_DISK_FULL` | `posix_fallocate`/`fstatvfs` sin espacio | `paused` |
+| `1007` | `ERR_BLOCKED_PRIVATE_IP` | SSRF: la IP resuelta es privada y `allow_local_downloads` es falso | `failed` |
+| `1008` | `ERR_CHECKSUM_MISMATCH` | SHA-256 final distinto del esperado | `failed` |
+| `1021` | `ERR_TOO_MANY_REDIRECTS` | más de 10 saltos | `failed` |
+| `1022` | `ERR_RESOURCE_GONE` | `404`/`410` | `failed` |
+| `1023` | `ERR_AUTH_REQUIRED` | `401`/`403` | `paused` |
+| `1024` | `ERR_PROXY_AUTH` | `407` | `paused` |
+| `1025` | `ERR_RANGE_OUT_OF_BOUNDS` | `416` en un rango que no es el final del archivo | `failed` |
+| `1026` | `ERR_SIZE_MISMATCH` | los bytes en disco no coinciden con `total_bytes` | `failed` |
+| `1027` | `ERR_TRUNCATED_RESPONSE` | el cuerpo terminó antes del `Content-Length` | reintento |
+| `1028` | `ERR_UNSUPPORTED` | respuesta comprimida o forma de respuesta no utilizable | `failed` |
+| `1029` | `ERR_NETWORK` | reset, timeout, TLS, DNS intermitente | reintento |
+| `1030` | `ERR_CANCELLED` | pausa o cancelación pedida por el usuario | `paused` |
+| `1031` | `ERR_KEYRING_UNAVAILABLE` | no se pudo leer el secreto del llavero | `paused` |
+| `1032` | `ERR_MALFORMED_HEADER` | `Content-Range` o cabecera de rango inválida | `failed` |
+
 ### 4.2. Fórmula de Backoff con Jitter
 Para evitar el problema del rebaño (*thundering herd*):
 $$\text{espera}_n = \min\left(\text{BACKOFF\_MAX}, \text{BACKOFF\_BASE} \times 2^{n}\right) \pm \text{jitter}$$

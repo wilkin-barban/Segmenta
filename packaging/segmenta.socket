@@ -1,0 +1,10 @@
+[Unit]
+Description=Segmenta Download Engine Activation Socket
+
+[Socket]
+ListenStream=%t/segmenta/daemon.sock
+SocketMode=0600
+DirectoryMode=0700
+
+[Install]
+WantedBy=sockets.target

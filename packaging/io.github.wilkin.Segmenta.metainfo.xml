@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.wilkin.Segmenta</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Segmenta</name>
+  <summary>Fast segmented download manager for GNOME</summary>
+  <description>
+    <p>
+      Segmenta downloads HTTP and HTTPS files with several connections at once,
+      writes every byte directly at its final offset and keeps the state in SQLite
+      so a download survives a pause, a crash or a reboot.
+    </p>
+    <p>
+      Connections are split in hot during the transfer: when a worker finishes its
+      range it takes over half of the slowest remaining range instead of sitting idle.
+    </p>
+    <p>
+      Direct downloads only: HLS/DASH, DRM-protected streams and the browser capture
+      extension are planned for later releases.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.wilkin.Segmenta.desktop</launchable>
+  <url type="homepage">https://github.com/wilkin-barban/Segmenta</url>
+  <url type="bugtracker">https://github.com/wilkin-barban/Segmenta/issues</url>
+  <developer_name>Wilkin Barban Rosabal</developer_name>
+  <developer id="io.github.wilkin">
+    <name>Wilkin Barban Rosabal</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
+  <categories>
+    <category>Network</category>
+    <category>FileTransfer</category>
+    <category>GTK</category>
+  </categories>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+    <control>touch</control>
+  </supports>
+  <releases>
+    <release version="0.0.1" date="2026-04-24">
+      <description>
+        <p>First public release: segmented direct downloads, pause/resume across
+        daemon restarts, CLI and GTK4/Libadwaita GUI, .deb package with systemd user
+        units.</p>
+      </description>
+    </release>
+  </releases>
+  <translation type="gettext">segmenta</translation>
+</component>

@@ -270,6 +270,10 @@ Todos los eventos emitidos por el daemon incluyen un identificador de secuencia 
 7. **`task_completed`**: Descarga terminada y validada en disco.
 8. **`task_failed`**: Error terminal en la descarga (incluye código y mensaje legible).
 
+9. **`download_restarted_due_to_stale_cache`**: el servidor devolvió `200` a una reanudación con
+   `If-Range` o cambió el `total` de `Content-Range`; el motor truncó el archivo y reinició los
+   segmentos desde cero (lo exige `06`, sección 2.2). `data` lleva `reason`.
+
 ### Payload mínimo por evento
 
 | `event_type` | `data` obligatorio |
