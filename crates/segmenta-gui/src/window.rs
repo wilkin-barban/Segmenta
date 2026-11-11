@@ -14,6 +14,8 @@ use serde_json::{json, Value};
 use adw::prelude::*;
 
 use crate::client::{Client, ClientError, ClientEvent, RequestBus};
+use segmenta_i18n::{tr, Msg};
+
 use crate::model::{
     DownloadItem, DownloadStatus, Filter, ProgressUpdate, SegmentItem, SeqStatus, Settings,
 };
@@ -25,6 +27,11 @@ pub const APP_ID: &str = "io.github.wilkin.Segmenta";
 
 /// Interval of the UI tick that drains daemon events (OpenSpec 04).
 const TICK: Duration = Duration::from_millis(150);
+
+/// Locale used by every visible string (S21).
+fn locale() -> segmenta_i18n::Locale {
+    segmenta_i18n::current()
+}
 
 /// `download.list` page size. The list is filtered client side so the sidebar
 /// counters always describe the same snapshot.
@@ -303,7 +310,7 @@ impl Inner {
     fn build_layout(self: &Rc<Self>) {
         let header = adw::HeaderBar::new();
 
-        let add_button = gtk::Button::with_label("Añadir URL");
+        let add_button = gtk::Button::with_label(tr(locale(), Msg::AddUrl));
         add_button.add_css_class("suggested-action");
         add_button.set_tooltip_text(Some("Añadir una descarga (Ctrl+N)"));
         header.pack_start(&add_button);
@@ -337,7 +344,7 @@ impl Inner {
         let menu_button = gtk::MenuButton::new();
         menu_button.set_icon_name("open-menu-symbolic");
         menu_button.set_menu_model(Some(&menu));
-        menu_button.set_tooltip_text(Some("Menú principal"));
+        menu_button.set_tooltip_text(Some(tr(locale(), Msg::MenuMain)));
         header.pack_end(&menu_button);
 
         // Search bar.
@@ -368,7 +375,7 @@ impl Inner {
         loading.set_valign(gtk::Align::Center);
         loading.set_halign(gtk::Align::Center);
         loading.append(&spinner);
-        let loading_label = gtk::Label::new(Some("Conectando con el daemon…"));
+        let loading_label = gtk::Label::new(Some(tr(locale(), Msg::Loading)));
         loading_label.add_css_class("dim-label");
         loading.append(&loading_label);
 
@@ -446,7 +453,7 @@ impl Inner {
             row.set_activatable(true);
             let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
             let icon = gtk::Image::from_icon_name(filter.icon_name());
-            let label = gtk::Label::new(Some(filter.label_es()));
+            let label = gtk::Label::new(Some(filter.label(locale())));
             label.set_xalign(0.0);
             label.set_hexpand(true);
             let count = gtk::Label::new(Some("0"));
@@ -478,7 +485,7 @@ impl Inner {
 
         container.append(&self.filter_list);
 
-        let queue_title = gtk::Label::new(Some("Colas"));
+        let queue_title = gtk::Label::new(Some(tr(locale(), Msg::Queues)));
         queue_title.set_xalign(0.0);
         queue_title.add_css_class("dim-label");
         queue_title.add_css_class("caption-heading");
@@ -584,13 +591,13 @@ impl Inner {
     fn build_empty_page(self: &Rc<Self>) -> gtk::Widget {
         self.empty_page
             .set_icon_name(Some("folder-download-symbolic"));
-        self.empty_page.set_title(Filter::All.empty_title());
+        self.empty_page.set_title(tr(locale(), Msg::EmptyTitle));
         self.empty_page.set_description(Some(
             "Añade una URL con el botón «Añadir URL» para empezar.\n\
              El motor de descargas corre en el daemon; si no está activo, \
              inícialo con «systemctl --user start segmenta.socket».",
         ));
-        let add_button = gtk::Button::with_label("Añadir URL");
+        let add_button = gtk::Button::with_label(tr(locale(), Msg::AddUrl));
         add_button.add_css_class("suggested-action");
         add_button.set_halign(gtk::Align::Center);
         let handle = Rc::downgrade(self);
@@ -606,8 +613,7 @@ impl Inner {
     fn build_error_page(self: &Rc<Self>) -> gtk::Widget {
         self.error_page
             .set_icon_name(Some("dialog-warning-symbolic"));
-        self.error_page
-            .set_title("No se pudo contactar con el daemon");
+        self.error_page.set_title(tr(locale(), Msg::ErrorTitle));
         let content_box = gtk::Box::new(gtk::Orientation::Vertical, 12);
         content_box.set_halign(gtk::Align::Center);
         let detail = gtk::Label::new(Some(""));
@@ -620,7 +626,7 @@ impl Inner {
             "El motor de descargas no responde. Comprueba que el servicio de \
              usuario está activo con «systemctl --user start segmenta.socket».",
         ));
-        let retry = gtk::Button::with_label("Reintentar");
+        let retry = gtk::Button::with_label(tr(locale(), Msg::Retry));
         retry.add_css_class("suggested-action");
         retry.set_halign(gtk::Align::Center);
         let handle = Rc::downgrade(self);
@@ -1029,13 +1035,12 @@ impl Inner {
     fn set_error(&self, message: String) {
         *self.last_error.borrow_mut() = Some(message.clone());
         *self.view_state.borrow_mut() = ViewState::Error(message.clone());
-        let locale = segmenta_i18n::current();
-        use segmenta_i18n::{tr, Msg};
-        self.error_page.set_title(&tr(locale, Msg::ErrorTitle));
+        let here = locale();
+        self.error_page.set_title(tr(here, Msg::ErrorTitle));
         self.error_page.set_description(Some(&format!(
             "{message}\n\n{}\n{}",
-            tr(locale, Msg::ErrorBody),
-            tr(locale, Msg::ErrorCommand)
+            tr(here, Msg::ErrorBody),
+            tr(here, Msg::ErrorCommand)
         )));
         self.stack.set_visible_child_name("error");
     }
@@ -1267,7 +1272,7 @@ impl Inner {
         path.add_css_class("dim-label");
         path.set_tooltip_text(Some(&item.final_path));
 
-        let state = gtk::Label::new(Some(item.status.label_es()));
+        let state = gtk::Label::new(Some(item.status.label(locale())));
         state.add_css_class("pill");
         state.set_halign(gtk::Align::Start);
 
@@ -1521,7 +1526,7 @@ fn update_detail_widgets(detail: &DetailPage, item: &DownloadItem) {
     detail.filename.set_label(&item.filename);
     detail.path.set_label(&item.final_path);
     detail.path.set_tooltip_text(Some(&item.final_path));
-    detail.state.set_label(item.status.label_es());
+    detail.state.set_label(item.status.label(locale()));
     detail.progress.set_fraction(item.progress());
     let percent = format!("{:.0} %", item.progress() * 100.0);
     detail.percent.set_label(&percent);
@@ -1570,7 +1575,7 @@ fn fill_row(widget: &gtk::Widget, item: &DownloadItem) {
     title.set_tooltip_text(Some(&item.filename));
     title.add_css_class("heading");
 
-    let status = gtk::Label::new(Some(item.status.label_es()));
+    let status = gtk::Label::new(Some(item.status.label(locale())));
     status.set_xalign(0.0);
     status.add_css_class("caption");
     status.add_css_class("dim-label");

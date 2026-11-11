@@ -370,6 +370,7 @@ impl UnixClient {
             jobs: job_rx,
             control: control_rx,
             pending: VecDeque::new(),
+            pending_since: None,
             events: Arc::clone(&events),
             next_id: 0,
             last_error: None,
@@ -441,6 +442,9 @@ struct Worker {
     /// Jobs received before the socket existed. They are served as soon as the
     /// connection (and its `system.hello`) succeeds, instead of being rejected.
     pending: VecDeque<Job>,
+    /// When the oldest queued job arrived; the grace is measured from here, not from
+    /// the last connection attempt (which repeats every 50 ms while work waits).
+    pending_since: Option<std::time::Instant>,
     events: Arc<Mutex<VecDeque<ClientEvent>>>,
     next_id: u64,
     last_error: Option<String>,
@@ -487,8 +491,8 @@ impl Worker {
             return;
         }
         let waited = self
-            .last_attempt
-            .map(|attempt| attempt.elapsed())
+            .pending_since
+            .map(|since| since.elapsed())
             .unwrap_or_default();
         if waited < CONNECT_GRACE {
             return;
@@ -498,6 +502,7 @@ impl Worker {
             .clone()
             .unwrap_or_else(|| format!("{}: not connected", self.path.display()));
         let jobs = std::mem::take(&mut self.pending);
+        self.pending_since = None;
         for job in jobs {
             let _ = job
                 .reply
@@ -563,6 +568,7 @@ impl Worker {
                 self.emit(ClientEvent::Connected);
                 // Serve whatever the UI asked for before the socket existed.
                 let queued = std::mem::take(&mut self.pending);
+                self.pending_since = None;
                 for job in queued {
                     self.serve(job);
                 }
@@ -581,6 +587,9 @@ impl Worker {
                         "demasiadas peticiones en espera".to_string(),
                     )));
                 }
+            }
+            if self.pending_since.is_none() {
+                self.pending_since = Some(std::time::Instant::now());
             }
             self.pending.push_back(job);
             return;
