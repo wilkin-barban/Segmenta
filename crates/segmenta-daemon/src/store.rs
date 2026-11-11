@@ -570,10 +570,14 @@ impl Store {
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM segments WHERE download_id = ?1", params![id])?;
         for segment in segments.iter() {
+            // The primary key is the table-wide rowid: the engine's per-download
+            // segment ids cannot be reused across tasks (two downloads would collide).
+            // The row identity that matters to the contract is
+            // `UNIQUE(download_id, start_offset)`.
             tx.execute(
                 "INSERT INTO segments
-                    (id, download_id, start_offset, end_offset, next_offset, status)
-                 VALUES (?6, ?1, ?2, ?3, ?4, ?5)",
+                    (download_id, start_offset, end_offset, next_offset, status)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![
                     id,
                     segment.start as i64,
@@ -584,7 +588,6 @@ impl Store {
                     } else {
                         "active"
                     },
-                    segment.id
                 ],
             )?;
         }

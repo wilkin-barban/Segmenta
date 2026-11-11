@@ -161,7 +161,14 @@ fn checkpoints_replace_segments_and_keep_next_offset() {
         .unwrap();
 
     let rows = store.segments("t").unwrap();
-    assert_eq!(rows, segments);
+    // The row id is the table-wide rowid, not the engine's per-download id; the offsets
+    // are the contract.
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.start, row.end, row.next))
+            .collect::<Vec<_>>(),
+        vec![(0, 499, 200), (500, 1023, 500)]
+    );
     let row = store.get("t").unwrap().unwrap();
     assert_eq!(row.downloaded_bytes, 200);
     assert_eq!(row.total_bytes, Some(1024));
@@ -194,7 +201,15 @@ fn checkpoints_replace_segments_and_keep_next_offset() {
             },
         )
         .unwrap();
-    assert_eq!(store.segments("t").unwrap(), updated);
+    assert_eq!(
+        store
+            .segments("t")
+            .unwrap()
+            .iter()
+            .map(|row| (row.start, row.end, row.next))
+            .collect::<Vec<_>>(),
+        vec![(0, 499, 500), (500, 1023, 700)]
+    );
     assert_eq!(store.get("t").unwrap().unwrap().downloaded_bytes, 700);
 }
 
@@ -482,4 +497,45 @@ fn settings_validation_accepts_the_documented_edges() {
         ..Settings::default()
     };
     assert!(bad.validate().is_err(), "manual proxy needs a URL");
+}
+
+#[test]
+fn two_downloads_can_share_engine_segment_ids() {
+    // Regression: `segments.id` is the table rowid, so two tasks whose engine both
+    // numbers its segments from 0 must not collide.
+    let (_dir, store) = open_temp();
+    for id in ["first", "second"] {
+        store
+            .insert_download(&record(id, DownloadStatus::Downloading))
+            .unwrap();
+        let segments = vec![
+            SegmentRow {
+                id: 0,
+                start: 0,
+                end: 499,
+                next: 100,
+            },
+            SegmentRow {
+                id: 1,
+                start: 500,
+                end: 999,
+                next: 500,
+            },
+        ];
+        store
+            .save_checkpoint(
+                id,
+                &Checkpoint {
+                    segments: &segments,
+                    downloaded_bytes: 600,
+                    total_bytes: Some(1000),
+                    etag: None,
+                    last_modified: None,
+                    supports_ranges: true,
+                },
+            )
+            .expect("a second download must be able to checkpoint its own segments");
+    }
+    assert_eq!(store.segments("first").unwrap().len(), 2);
+    assert_eq!(store.segments("second").unwrap().len(), 2);
 }
