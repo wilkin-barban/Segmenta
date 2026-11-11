@@ -15,13 +15,13 @@ watch -n 10 cat docs/qa/segmenta-0.0.2-live.md
 | Frente | Estado | Evidencia / commit | Bloqueo |
 | --- | --- | --- | --- |
 | Keyring real, XDG y pause/resume honestos | Implementado, verde local | `134165e`; `tests/manager.rs`, `tests/secret_backend.rs` (15 tests) | Falta QA remoto |
-| i18n es / pt-BR / en | Implementado en GUI, diálogos, preferencias, CLI y errores | `3c38151`; catálogo + tests de paridad, `render_locale` y e2e de locale | Falta QA remoto con LANG real |
-| Arranque normal de la GUI | Corregido y probado con socket real | `0beb18a`; `tests/startup.rs` (2 tests, <2 s) | Falta QA remoto |
-| Tema claro/oscuro y capturas | Implementado y capturado | `49d32b7`; `--screenshots`, `docs/qa/screenshots/0.0.2-{light,dark}.png` 1440×900 revisadas | Falta QA remoto |
-| Logging estructurado y redacción | Implementado y verde | `9c1af8b`; `logging.rs` (5 tests), instrumentación de manager/ipc/main | Falta verificar `journalctl` en el remoto |
-| Matriz de botones/acciones | Implementada (9 tests) | `3c38151`; `tests/actions.rs` + accesores reales | Falta QA remoto de clicks |
-| Empaquetado 0.0.2 | Generado y validado | `dist/segmenta_0.0.2-1_amd64.deb` (3.925.828 B, sha256 `857fbbc3…e3357`); `check-package.sh`: 10/10 paths, AppStream y desktop OK | Pendiente instalación/QA remoto; no publicado |
-| QA remoto | Pendiente | candidato `dist/segmenta_0.0.2-1_amd64.deb` listo | El usuario instala y devuelve informe; no se publica antes |
+| i18n es / pt-BR / en | **Parcial; falla en QA remoto** | `3c38151`; tabla traducida, pero estados `failed/completed` y `--help` siguen en inglés; ETA PT en español | Corregir estados, ayuda y ETA |
+| Arranque normal de la GUI | **Falla en QA remoto (P1)** | `0beb18a`; conecta el socket (`active_connections=3`) pero queda en “Conectando…” y no lista tareas | Corregir el camino de conexión real; `--smoke` no alcanza |
+| Tema claro/oscuro y capturas | Implementado; capturas revisadas | `49d32b7`; `--screenshots`, `docs/qa/screenshots/0.0.2-{light,dark}.png` 1440×900 | La GUI normal sigue bloqueada antes de mostrar datos |
+| Logging estructurado y redacción | **Verificado en remoto con P2** | `9c1af8b`; journal reconstruye add/pause/resume/failed; sin secretos | `secret_backend` y `checksum_ok` salen `[redacted]` aunque no son secretos |
+| Matriz de botones/acciones | 9 tests locales verdes | `3c38151`; `tests/actions.rs` | No se pudo probar en remoto porque la GUI no carga |
+| Empaquetado 0.0.2 | Generado y validado; **no aprobado** | `dist/segmenta_0.0.2-1_amd64.deb` (3.8 MB); `check-package.sh`: 10/10 paths, AppStream y desktop OK | La QA remota rechazó la release |
+| QA remoto | **Ejecutado: NO PUBLICAR** | `docs/qa/segmenta-0.0.2-e2e.md`; GUI normal atascada + i18n parcial | Corregir P1 y repetir el ciclo |
 
 ## Reglas del flujo
 
