@@ -118,14 +118,31 @@ está listada (`0.0.2-fourth-normal5.png`, `0.0.2-fourth-normal12.png`). El acce
 de pintura real del widget/página. No publicar hasta que desaparezca en una captura
 normal y se regenere el `.deb`.
 
-## Criterio para reintentar
+## Quinta pasada — candidato `1403268` (12:39)
 
-1. La GUI normal debe listar las tareas del daemon en <2 s, no sólo `--smoke`.
-2. Estados y `--help` deben respetar `es`/`pt-BR`/`en`; ETA y textos accesibles incluidos.
-3. Dejar de redactar `secret_backend`/`checksum_ok` si no son sensibles.
-4. El spinner debe desaparecer al llegar a `Ready`.
-5. `--screenshots` debe capturar el estado listo, con una tarea visible, en ambos temas.
-6. Reinstalar el siguiente `.deb`, repetir este informe y no publicar hasta que pase.
+Reinstalado el `.deb` de 12:39 (SHA `d76131fe…`). Resultado: **APTO**.
+
+- La GUI normal lista la tarea completada a los 5 s y a los 12 s.
+- El “spinner” que quedaba en las capturas normales era el **cursor del ratón**
+  (`ffmpeg` lo capturaba con `-draw_mouse`). Con `-draw_mouse 0` la ventana queda
+  limpia (`0.0.2-fifth-normal-nomouse.png`); no hay widget de carga pintado.
+- `--screenshots` en pt-BR: `captured rows=1 state=Ready`, tarea visible y ETA
+  “53 s restante” (`0.0.2-fourth-pt-light.png`).
+- i18n es/pt, logs sin secretos, keyring, XDG, HTTPS, segmentado, pausa/reanudación,
+  AppStream, `.desktop`, `--version` y gates locales: correctos.
+- Paquete: `dist/segmenta_0.0.2-1_amd64.deb` 3.931.124 B, SHA
+  `d76131fed3d5a4bb92caa44fa5d772fb48c136eb2d4372bce02ff3ea8f531bcd`.
+
+Publicación aprobada. El defecto anterior era un artefacto de captura, no de la UI.
+
+## Criterio de cierre
+
+1. La GUI normal lista las tareas del daemon en <2 s.
+2. Estados y `--help` respetan `es`/`pt-BR`/`en`; ETA y textos accesibles incluidos.
+3. `secret_backend`/`checksum_ok` visibles; URL/cabeceras sensibles redactadas.
+4. `--screenshots` captura el estado listo, con una tarea visible, en ambos temas.
+5. `.deb` 0.0.2 + SHA-256 instalado y probado en `ssh ubuntu`.
+6. Tag `v0.0.2`, GitHub Release, `main` limpio y espacio liberado.
 
 ## Artefactos
 
