@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use segmenta_core::ratelimit::{TokenBucket, capacity_for, refill};
+use segmenta_core::ratelimit::{capacity_for, refill, TokenBucket};
 
 #[test]
 fn refill_is_linear_and_capped_by_capacity() {
@@ -53,7 +53,10 @@ fn limited_bucket_paces_a_burst() {
             elapsed >= Duration::from_millis(500),
             "bucket did not pace: {elapsed:?}"
         );
-        assert!(elapsed < Duration::from_secs(3), "bucket over-paced: {elapsed:?}");
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "bucket over-paced: {elapsed:?}"
+        );
     });
 }
 

@@ -8,19 +8,43 @@ use segmenta_core::filename::{
 
 #[test]
 fn path_traversal_is_reduced_to_the_base_name() {
-    assert_eq!(sanitize_filename("../../etc/passwd").as_deref(), Some("passwd"));
-    assert_eq!(sanitize_filename("..\\..\\windows\\evil.exe").as_deref(), Some("evil.exe"));
+    assert_eq!(
+        sanitize_filename("../../etc/passwd").as_deref(),
+        Some("passwd")
+    );
+    assert_eq!(
+        sanitize_filename("..\\..\\windows\\evil.exe").as_deref(),
+        Some("evil.exe")
+    );
     assert_eq!(sanitize_filename("a/b/c.txt").as_deref(), Some("c.txt"));
-    assert_eq!(sanitize_filename("/absolute/path.iso").as_deref(), Some("path.iso"));
-    assert_eq!(sanitize_filename("..%2fescape").as_deref(), Some("..%2fescape"));
+    assert_eq!(
+        sanitize_filename("/absolute/path.iso").as_deref(),
+        Some("path.iso")
+    );
+    assert_eq!(
+        sanitize_filename("..%2fescape").as_deref(),
+        Some("..%2fescape")
+    );
 }
 
 #[test]
 fn control_characters_are_removed_and_nul_becomes_underscore() {
-    assert_eq!(sanitize_filename("with\u{0}nul.txt").as_deref(), Some("with_nul.txt"));
-    assert_eq!(sanitize_filename("tab\there.txt").as_deref(), Some("tabhere.txt"));
-    assert_eq!(sanitize_filename("bell\u{7}.bin").as_deref(), Some("bell.bin"));
-    assert_eq!(sanitize_filename("del\u{7f}.bin").as_deref(), Some("del.bin"));
+    assert_eq!(
+        sanitize_filename("with\u{0}nul.txt").as_deref(),
+        Some("with_nul.txt")
+    );
+    assert_eq!(
+        sanitize_filename("tab\there.txt").as_deref(),
+        Some("tabhere.txt")
+    );
+    assert_eq!(
+        sanitize_filename("bell\u{7}.bin").as_deref(),
+        Some("bell.bin")
+    );
+    assert_eq!(
+        sanitize_filename("del\u{7f}.bin").as_deref(),
+        Some("del.bin")
+    );
 }
 
 #[test]
@@ -66,10 +90,7 @@ fn content_disposition_handles_plain_and_unquoted_names() {
         filename_from_content_disposition("attachment; filename=report.pdf").as_deref(),
         Some("report.pdf")
     );
-    assert_eq!(
-        filename_from_content_disposition("inline").as_deref(),
-        None
-    );
+    assert_eq!(filename_from_content_disposition("inline").as_deref(), None);
     // A traversal attempt in the header is sanitized, never returned raw.
     assert_eq!(
         filename_from_content_disposition("attachment; filename=\"../../etc/passwd\"").as_deref(),

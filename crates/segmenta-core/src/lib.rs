@@ -12,10 +12,10 @@
 pub mod checksum;
 pub mod disk;
 pub mod engine;
-pub mod probe;
 pub mod error;
 pub mod filename;
 pub mod planner;
+pub mod probe;
 pub mod ratelimit;
 pub mod retry;
 pub mod urlssrf;
@@ -24,4 +24,4 @@ pub mod urlssrf;
 pub mod testserver;
 
 pub use error::{CoreError, Result};
-pub use planner::{SegmentRange, connections_for, initial_segments};
+pub use planner::{connections_for, initial_segments, SegmentRange};

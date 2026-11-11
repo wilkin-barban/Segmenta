@@ -9,8 +9,8 @@ use std::net::IpAddr;
 use std::time::{Duration, SystemTime};
 
 use reqwest::header::{
-    ACCEPT_ENCODING, AUTHORIZATION, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE,
-    COOKIE, ETAG, HeaderMap, HeaderName, HeaderValue, LAST_MODIFIED, LOCATION, RANGE,
+    HeaderMap, HeaderName, HeaderValue, ACCEPT_ENCODING, AUTHORIZATION, CONTENT_DISPOSITION,
+    CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, COOKIE, ETAG, LAST_MODIFIED, LOCATION, RANGE,
     TRANSFER_ENCODING,
 };
 use reqwest::redirect::Policy;
@@ -137,16 +137,19 @@ impl Session {
             .connect_timeout(cfg.connect_timeout)
             .user_agent(cfg.user_agent.clone());
         if let Some(proxy) = &cfg.proxy {
-            builder = builder.proxy(reqwest::Proxy::all(proxy).map_err(|err| {
-                CoreError::InvalidUrl(format!("invalid proxy `{proxy}`: {err}"))
-            })?);
+            builder =
+                builder.proxy(reqwest::Proxy::all(proxy).map_err(|err| {
+                    CoreError::InvalidUrl(format!("invalid proxy `{proxy}`: {err}"))
+                })?);
         }
         let host = url.host_str().unwrap_or_default();
         if host.parse::<IpAddr>().is_err() {
             // reqwest would resolve the name again; pin the address we validated.
             builder = builder.resolve(host, addrs[0]);
         }
-        let client = builder.build().map_err(|err| CoreError::Network(err.to_string()))?;
+        let client = builder
+            .build()
+            .map_err(|err| CoreError::Network(err.to_string()))?;
         Ok(Session {
             client,
             url: url.clone(),
@@ -186,10 +189,7 @@ impl Session {
         for (name, value) in self.sensitive_headers.iter() {
             headers.insert(name, value.clone());
         }
-        headers.insert(
-            ACCEPT_ENCODING,
-            HeaderValue::from_static("identity"),
-        );
+        headers.insert(ACCEPT_ENCODING, HeaderValue::from_static("identity"));
         if let Some((start, end)) = range {
             let value = format!("bytes={start}-{end}");
             headers.insert(
@@ -248,14 +248,13 @@ pub fn parse_content_range(value: &str) -> Result<(u64, u64, Option<u64>)> {
             "content-range end before start: `{value}`"
         )));
     }
-    let total = match total.trim() {
-        "*" => None,
-        digits => Some(
-            digits
-                .parse()
-                .map_err(|_| CoreError::MalformedHeader(format!("content-range total `{digits}`")))?,
-        ),
-    };
+    let total =
+        match total.trim() {
+            "*" => None,
+            digits => Some(digits.parse().map_err(|_| {
+                CoreError::MalformedHeader(format!("content-range total `{digits}`"))
+            })?),
+        };
     Ok((start, end, total))
 }
 
@@ -278,9 +277,9 @@ pub async fn probe(cfg: &HttpConfig, url: &Url) -> Result<ProbeOutcome> {
                     "redirect without Location".to_string(),
                 )));
             };
-            let next = current.join(&location).map_err(|err| {
-                CoreError::InvalidUrl(format!("redirect `{location}`: {err}"))
-            })?;
+            let next = current
+                .join(&location)
+                .map_err(|err| CoreError::InvalidUrl(format!("redirect `{location}`: {err}")))?;
             if next.origin() != current.origin() {
                 // Cross-origin: never forward credentials.
                 sensitive = HeaderMap::new();
@@ -324,9 +323,8 @@ async fn classify_probe(response: Response, url: Url) -> Result<ProbeOutcome> {
                 content_encoding.unwrap_or_default()
             ))));
         }
-        let content_range = header_string(&headers, CONTENT_RANGE).ok_or_else(|| {
-            CoreError::MalformedHeader("206 without Content-Range".to_string())
-        })?;
+        let content_range = header_string(&headers, CONTENT_RANGE)
+            .ok_or_else(|| CoreError::MalformedHeader("206 without Content-Range".to_string()))?;
         let (_, _, total) = parse_content_range(&content_range)?;
         return Ok(ProbeOutcome::Ready(ProbeInfo {
             mode: match total {
@@ -408,7 +406,10 @@ mod tests {
             parse_content_range("bytes 0-1/1048576").unwrap(),
             (0, 1, Some(1_048_576))
         );
-        assert_eq!(parse_content_range("bytes 10-19/*").unwrap(), (10, 19, None));
+        assert_eq!(
+            parse_content_range("bytes 10-19/*").unwrap(),
+            (10, 19, None)
+        );
         assert!(parse_content_range("items 0-1/10").is_err());
         assert!(parse_content_range("bytes 5-1/10").is_err());
         assert!(parse_content_range("bytes x-y/10").is_err());

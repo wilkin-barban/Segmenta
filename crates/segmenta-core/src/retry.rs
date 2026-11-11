@@ -25,7 +25,11 @@ pub fn backoff_secs(attempt: u32, jitter: f64) -> f64 {
 /// One wait drawn with random jitter, ready to be `tokio::time::sleep`-ed.
 pub fn backoff_delay(attempt: u32) -> Duration {
     let magnitude = rand::random::<f64>() * 0.5;
-    let jitter = if rand::random::<bool>() { magnitude } else { -magnitude };
+    let jitter = if rand::random::<bool>() {
+        magnitude
+    } else {
+        -magnitude
+    };
     Duration::from_secs_f64(backoff_secs(attempt, jitter))
 }
 

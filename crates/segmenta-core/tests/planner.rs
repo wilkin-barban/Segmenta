@@ -3,8 +3,8 @@
 //! These tests are pure: no sockets, no files. Specs S4 and S5.
 
 use segmenta_core::planner::{
-    DonorView, MIN_SPLIT_SIZE, SegmentRange, SplitOutcome, SplitReject, choose_donor, clamp_read,
-    connections_for, initial_segments, midpoint_of, remaining, segments_for, split_at,
+    choose_donor, clamp_read, connections_for, initial_segments, midpoint_of, remaining,
+    segments_for, split_at, DonorView, SegmentRange, SplitOutcome, SplitReject, MIN_SPLIT_SIZE,
 };
 
 const MB: u64 = 1024 * 1024;
@@ -25,12 +25,26 @@ fn connection_count_follows_size_thresholds() {
 #[test]
 fn requested_segments_are_contiguous_and_cover_the_file() {
     let sizes = [
-        1u64, 2, 3, 4, 7, MB, 5 * MB - 1, 5 * MB, 5 * MB + 1, 50 * MB - 1, 50 * MB, 50 * MB + 7,
+        1u64,
+        2,
+        3,
+        4,
+        7,
+        MB,
+        5 * MB - 1,
+        5 * MB,
+        5 * MB + 1,
+        50 * MB - 1,
+        50 * MB,
+        50 * MB + 7,
         7 * 1024 * MB + 3,
     ];
     for total in sizes {
         for requested in [1u32, 2, 3, 4, 7, 16, 32] {
-            for segments in [segments_for(total, requested), initial_segments(total, requested)] {
+            for segments in [
+                segments_for(total, requested),
+                initial_segments(total, requested),
+            ] {
                 assert!(!segments.is_empty(), "total={total} requested={requested}");
                 assert_eq!(segments[0].start, 0, "first segment must start at 0");
                 assert_eq!(
@@ -68,9 +82,18 @@ fn requested_segments_split_evenly_without_off_by_one() {
         segments_for(1000, 4),
         vec![
             SegmentRange { start: 0, end: 249 },
-            SegmentRange { start: 250, end: 499 },
-            SegmentRange { start: 500, end: 749 },
-            SegmentRange { start: 750, end: 999 },
+            SegmentRange {
+                start: 250,
+                end: 499
+            },
+            SegmentRange {
+                start: 500,
+                end: 749
+            },
+            SegmentRange {
+                start: 750,
+                end: 999
+            },
         ]
     );
 }
@@ -105,7 +128,10 @@ fn split_midpoint_is_the_middle_of_the_remaining_region() {
 
 #[test]
 fn safe_hot_split_invariants() {
-    let donor = SegmentRange { start: 0, end: 9999 };
+    let donor = SegmentRange {
+        start: 0,
+        end: 9999,
+    };
     let outcome = split_at(donor, 3000, 6500);
     let SplitOutcome::Accepted {
         donor: new_donor,
@@ -115,16 +141,34 @@ fn safe_hot_split_invariants() {
     else {
         panic!("split must be accepted: {outcome:?}");
     };
-    assert_eq!(new_donor, SegmentRange { start: 0, end: 6500 });
-    assert_eq!(new_segment, SegmentRange { start: 6501, end: 9999 });
+    assert_eq!(
+        new_donor,
+        SegmentRange {
+            start: 0,
+            end: 6500
+        }
+    );
+    assert_eq!(
+        new_segment,
+        SegmentRange {
+            start: 6501,
+            end: 9999
+        }
+    );
     assert_eq!(clamped_next, 6501);
     assert_eq!(new_donor.end + 1, new_segment.start, "no gap, no overlap");
-    assert_eq!(new_segment.end, donor.end, "the new segment inherits the end");
+    assert_eq!(
+        new_segment.end, donor.end,
+        "the new segment inherits the end"
+    );
 }
 
 #[test]
 fn split_rejects_a_donor_that_already_passed_the_midpoint() {
-    let donor = SegmentRange { start: 0, end: 9999 };
+    let donor = SegmentRange {
+        start: 0,
+        end: 9999,
+    };
     assert_eq!(
         split_at(donor, 7000, 6500),
         SplitOutcome::Rejected(SplitReject::DonorAlreadyPast)
@@ -139,9 +183,24 @@ fn split_rejects_a_donor_that_already_passed_the_midpoint() {
 #[test]
 fn donor_selection_picks_the_largest_remaining_above_threshold() {
     let donors = vec![
-        DonorView { id: 1, start: 0, end: 10 * MB, next: 10 * MB },
-        DonorView { id: 2, start: 10 * MB + 1, end: 30 * MB, next: 10 * MB + 1 },
-        DonorView { id: 3, start: 30 * MB + 1, end: 31 * MB, next: 30 * MB + 1 },
+        DonorView {
+            id: 1,
+            start: 0,
+            end: 10 * MB,
+            next: 10 * MB,
+        },
+        DonorView {
+            id: 2,
+            start: 10 * MB + 1,
+            end: 30 * MB,
+            next: 10 * MB + 1,
+        },
+        DonorView {
+            id: 3,
+            start: 30 * MB + 1,
+            end: 31 * MB,
+            next: 30 * MB + 1,
+        },
     ];
     let choice = choose_donor(&donors).expect("a donor is available");
     assert_eq!(choice.id, 2);

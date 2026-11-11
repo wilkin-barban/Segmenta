@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde_json::Value;
 use tokio::sync::broadcast;
 
-
 /// Event bus shared by the manager and every IPC connection.
 pub struct EventBus {
     seq: AtomicU64,
@@ -54,4 +53,3 @@ impl Default for EventBus {
         EventBus::new()
     }
 }
-

@@ -52,14 +52,8 @@ pub fn pwrite_all_fd(fd: RawFd, buf: &[u8], offset: u64) -> std::io::Result<()> 
             .map_err(|_| std::io::Error::from_raw_os_error(libc::EINVAL))?;
         // SAFETY: `fd` is owned by the caller for the duration of the call and `chunk`
         // points to `len` initialized bytes.
-        let written = unsafe {
-            libc::pwrite(
-                fd,
-                chunk.as_ptr() as *const libc::c_void,
-                chunk.len(),
-                off,
-            )
-        };
+        let written =
+            unsafe { libc::pwrite(fd, chunk.as_ptr() as *const libc::c_void, chunk.len(), off) };
         if written < 0 {
             Err(std::io::Error::last_os_error())
         } else {
@@ -172,9 +166,7 @@ impl DiskWriter {
                 file,
                 path: path.to_path_buf(),
             },
-            PreallocOutcome::Truncate {
-                free_bytes: 0,
-            },
+            PreallocOutcome::Truncate { free_bytes: 0 },
         ))
     }
 

@@ -5,10 +5,10 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
 use crate::client::{Client, ClientError};
 use crate::render;
-use serde_json::{Value, json};
+use clap::{Parser, Subcommand};
+use serde_json::{json, Value};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -213,7 +213,10 @@ fn run(cli: Cli) -> Result<String, ClientError> {
                             "header `{header}` must be \"Name: value\""
                         )));
                     };
-                    map.insert(key.trim().to_string(), Value::String(value.trim().to_string()));
+                    map.insert(
+                        key.trim().to_string(),
+                        Value::String(value.trim().to_string()),
+                    );
                 }
                 params["headers"] = Value::Object(map);
             }
@@ -241,8 +244,8 @@ fn run(cli: Cli) -> Result<String, ClientError> {
             if json_out {
                 out.push_str(&format!("{result}\n"));
             } else {
-                let views: Vec<segmenta_daemon::rpc::DownloadView> =
-                    serde_json::from_value(result).map_err(|err| {
+                let views: Vec<segmenta_daemon::rpc::DownloadView> = serde_json::from_value(result)
+                    .map_err(|err| {
                         ClientError::Protocol(format!("unexpected download.list payload: {err}"))
                     })?;
                 out.push_str(&render::render_table(&views));
@@ -253,8 +256,8 @@ fn run(cli: Cli) -> Result<String, ClientError> {
             if json_out {
                 out.push_str(&format!("{result}\n"));
             } else {
-                let view: segmenta_daemon::rpc::DownloadView =
-                    serde_json::from_value(result).map_err(|err| {
+                let view: segmenta_daemon::rpc::DownloadView = serde_json::from_value(result)
+                    .map_err(|err| {
                         ClientError::Protocol(format!("unexpected download.status payload: {err}"))
                     })?;
                 out.push_str(&render::render_status(&view));
@@ -262,7 +265,10 @@ fn run(cli: Cli) -> Result<String, ClientError> {
         }
         Command::Pause { task_id } => {
             let result = client.call("download.pause", json!({ "task_id": task_id }))?;
-            out.push_str(&format!("paused {}\n", result["task_id"].as_str().unwrap_or("-")));
+            out.push_str(&format!(
+                "paused {}\n",
+                result["task_id"].as_str().unwrap_or("-")
+            ));
         }
         Command::Resume { task_id } => {
             let result = client.call("download.resume", json!({ "task_id": task_id }))?;
@@ -346,7 +352,10 @@ fn run(cli: Cli) -> Result<String, ClientError> {
                 }
             }
             QueueAction::Create { name, max_active } => {
-                let result = client.call("queue.create", json!({ "name": name, "max_active": max_active }))?;
+                let result = client.call(
+                    "queue.create",
+                    json!({ "name": name, "max_active": max_active }),
+                )?;
                 out.push_str(&format!(
                     "created queue {} (max_active {})\n",
                     result["name"].as_str().unwrap_or("-"),
