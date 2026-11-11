@@ -383,6 +383,12 @@ pub struct DownloadView {
     /// Segments when the caller asked for them.
     #[serde(default)]
     pub segments: Vec<SegmentView>,
+    /// Media kind for 0.1.0 tasks.
+    #[serde(default)]
+    pub media_kind: Option<String>,
+    /// Playlist title for playlist tasks.
+    #[serde(default)]
+    pub playlist_title: Option<String>,
 }
 
 /// Public view of one segment.

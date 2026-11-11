@@ -294,6 +294,8 @@ mod tests {
             completed_at: None,
             error_code: None,
             error_message: None,
+            media_kind: None,
+            playlist_title: None,
             segments: vec![SegmentView {
                 id: 1,
                 start_offset: 0,
