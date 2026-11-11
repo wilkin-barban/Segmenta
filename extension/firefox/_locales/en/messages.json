@@ -1,0 +1,182 @@
+{
+  "extensionName": {
+    "message": "Segmenta",
+    "description": "Visible extension name."
+  },
+  "extensionDescription": {
+    "message": "Download YouTube videos, audio and playlists plus public HLS/DASH streams with Segmenta.",
+    "description": "Short extension description."
+  },
+  "buttonTitle": {
+    "message": "Download with Segmenta",
+    "description": "Floating button text."
+  },
+  "panelTitle": {
+    "message": "Segmenta",
+    "description": "Panel title."
+  },
+  "panelClose": {
+    "message": "Close",
+    "description": "Close button label."
+  },
+  "panelLoading": {
+    "message": "Looking up formats...",
+    "description": "State while media.probe runs."
+  },
+  "qualityLabel": {
+    "message": "Video quality",
+    "description": "Format list title."
+  },
+  "audioOnly": {
+    "message": "Audio only",
+    "description": "Option to download audio only."
+  },
+  "videoCurrent": {
+    "message": "This video",
+    "description": "Option to download the current video."
+  },
+  "playlistAll": {
+    "message": "Whole playlist ($1)",
+    "description": "Option to download the playlist; the placeholder is the item count."
+  },
+  "playlistLimitLabel": {
+    "message": "Playlist limit",
+    "description": "Playlist limit field label."
+  },
+  "playlistLimitHint": {
+    "message": "Between 1 and 500. Default 100.",
+    "description": "Playlist limit field help."
+  },
+  "startDownload": {
+    "message": "Download",
+    "description": "Button that confirms the download."
+  },
+  "statusPreparing": {
+    "message": "Preparing download...",
+    "description": "Initial task state."
+  },
+  "statusPercent": {
+    "message": "$1%",
+    "description": "Progress percentage."
+  },
+  "statusSpeed": {
+    "message": "$1/s",
+    "description": "Download speed."
+  },
+  "statusEta": {
+    "message": "$1 left",
+    "description": "Estimated remaining time."
+  },
+  "statusPlaylist": {
+    "message": "Playlist: $1 of $2",
+    "description": "Aggregate playlist progress."
+  },
+  "statusCompleted": {
+    "message": "Download completed",
+    "description": "Successful final state."
+  },
+  "toastSaved": {
+    "message": "Saved to $1",
+    "description": "Final notice with the file path."
+  },
+  "openFolder": {
+    "message": "Open folder",
+    "description": "Final notice action."
+  },
+  "streamDetected": {
+    "message": "Stream detected on this page",
+    "description": "Option for a detected HLS/DASH manifest URL."
+  },
+  "errorGeneric": {
+    "message": "The operation could not be completed.",
+    "description": "Generic error."
+  },
+  "errorInvalidUrl": {
+    "message": "The URL is not valid or the site is not allowed.",
+    "description": "Rejected URL error."
+  },
+  "errorInvalidMessage": {
+    "message": "The request is not valid for the extension.",
+    "description": "Rejected message error."
+  },
+  "errorTimeout": {
+    "message": "The native host did not answer in time.",
+    "description": "Timeout error."
+  },
+  "errorHostUnavailable": {
+    "message": "The Segmenta native host was not found. Is segmenta-host installed?",
+    "description": "Native host unavailable error."
+  },
+  "errorDrmProtected": {
+    "message": "This content uses DRM protection and is not supported.",
+    "description": "DRM error."
+  },
+  "errorLiveNotSupported": {
+    "message": "Live streams are not supported yet.",
+    "description": "Live content error."
+  },
+  "errorManifestMalformed": {
+    "message": "The stream manifest is broken or empty.",
+    "description": "Invalid manifest error."
+  },
+  "errorStreamUnsupported": {
+    "message": "This stream uses out-of-scope features (encryption, subtitles or multiple tracks).",
+    "description": "Unsupported stream error."
+  },
+  "errorMediaBackend": {
+    "message": "yt-dlp or ffmpeg failed. Check that they are installed and up to date.",
+    "description": "Media backend error."
+  },
+  "errorNotPublic": {
+    "message": "The content is not public or is unavailable.",
+    "description": "Private content error."
+  },
+  "errorUnknown": {
+    "message": "An unexpected error happened.",
+    "description": "Unknown error."
+  },
+  "popupTitle": {
+    "message": "Segmenta: download a stream",
+    "description": "Popup window title."
+  },
+  "popupUrlLabel": {
+    "message": "Video or manifest URL",
+    "description": "URL field label."
+  },
+  "popupUrlPlaceholder": {
+    "message": "https://...",
+    "description": "Example URL in the field."
+  },
+  "popupModeLabel": {
+    "message": "Download mode",
+    "description": "Mode selector label."
+  },
+  "popupModeVideo": {
+    "message": "Video",
+    "description": "Video mode."
+  },
+  "popupModeAudio": {
+    "message": "Audio",
+    "description": "Audio mode."
+  },
+  "popupStart": {
+    "message": "Send to Segmenta",
+    "description": "Popup submit button."
+  },
+  "popupInvalidUrl": {
+    "message": "Enter a valid https:// URL.",
+    "description": "Popup URL error."
+  },
+  "popupSent": {
+    "message": "Task created. Follow the progress in the Segmenta window.",
+    "description": "Popup confirmation."
+  },
+  "popupError": {
+    "message": "The task could not be created.",
+    "description": "Popup generic error."
+  },
+  "notAvailable": {
+    "message": "Segmenta is not available on this page.",
+    "description": "Page without a floating button."
+  }
+}
