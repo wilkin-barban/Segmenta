@@ -82,3 +82,19 @@ watch -n 10 cat docs/qa/segmenta-0.0.2-live.md
   `91b34cc053bfbd4f4d31ddae8bef2260a801119890440428f1c2b7a529cefdce`.
 - Puertas: fmt, clippy `-D warnings`, `cargo test --workspace` (37 suites) y
   `check-package.sh` (10/10, AppStream/desktop válidos) en verde. **Sin publicar.**
+
+## Quinto candidato (glifo del spinner)
+
+- Hipótesis descartada: ocultar el spinner no basta; el glifo seguía pintándose en la
+  ventana normal aunque `is_visible()` fuese `false` y la captura por `WidgetPaintable`
+  no lo mostrara.
+- Fix: al salir de `Loading` la **página de carga se elimina del `GtkStack`**
+  (`stop_loading()` → `stop()` + `set_visible(false)` + `stack.remove(child)`). Un widget
+  fuera del árbol no puede pintarse. `set_loading()` la vuelve a agregar si hace falta
+  (reintento o reconexión).
+- Test: `loading_page_attached()` expone si la página sigue en el stack; `tests/actions.rs`
+  exige `false` en Ready además de `loading_spinner_visible() == false`.
+- Paquete: `dist/segmenta_0.0.2-1_amd64.deb` — 3.931.124 B, sha256
+  `d76131fed3d5a4bb92caa44fa5d772fb48c136eb2d4372bce02ff3ea8f531bcd`.
+- Puertas: fmt, clippy `-D warnings`, 37 suites de workspace y GUI bajo Xvfb en verde;
+  `check-package.sh` OK (10/10, AppStream/desktop válidos). **Sin publicar.**
