@@ -647,6 +647,42 @@ pub async fn run_download(
     Ok(())
 }
 
+/// Size of a produced file, or of a playlist directory, in bytes.
+pub fn output_size(path: &std::path::Path) -> Option<u64> {
+    let meta = std::fs::metadata(path).ok()?;
+    if meta.is_file() {
+        return Some(meta.len()).filter(|bytes| *bytes > 0);
+    }
+    let mut total = 0u64;
+    for entry in std::fs::read_dir(path).ok()?.flatten() {
+        if let Ok(meta) = entry.metadata() {
+            if meta.is_file() {
+                total += meta.len();
+            }
+        }
+    }
+    Some(total).filter(|bytes| *bytes > 0)
+}
+
+/// Reject a backend release that is too old to speak to YouTube today.
+pub fn check_version(tool: &std::path::Path) -> Result<String, MediaError> {
+    let output = std::process::Command::new(tool)
+        .arg("--version")
+        .output()
+        .map_err(|err| MediaError::backend(format!("cannot run yt-dlp: {err}")))?;
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !version_is_recent(&version) {
+        return Err(MediaError {
+            code: 1044,
+            name: "ERR_MEDIA_BACKEND",
+            message: format!(
+                "yt-dlp {version} is too old for YouTube (minimum {MIN_YTDLP_VERSION}); install a current release, for example in ~/.local/bin"
+            ),
+        });
+    }
+    Ok(version)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -711,40 +747,4 @@ mod tests {
         assert_eq!(line.eta, Some(6));
         assert!(parse_progress_line("[download] 10%").is_none());
     }
-}
-
-/// Size of a produced file, or of a playlist directory, in bytes.
-pub fn output_size(path: &std::path::Path) -> Option<u64> {
-    let meta = std::fs::metadata(path).ok()?;
-    if meta.is_file() {
-        return Some(meta.len()).filter(|bytes| *bytes > 0);
-    }
-    let mut total = 0u64;
-    for entry in std::fs::read_dir(path).ok()?.flatten() {
-        if let Ok(meta) = entry.metadata() {
-            if meta.is_file() {
-                total += meta.len();
-            }
-        }
-    }
-    Some(total).filter(|bytes| *bytes > 0)
-}
-
-/// Reject a backend release that is too old to speak to YouTube today.
-pub fn check_version(tool: &std::path::Path) -> Result<String, MediaError> {
-    let output = std::process::Command::new(tool)
-        .arg("--version")
-        .output()
-        .map_err(|err| MediaError::backend(format!("cannot run yt-dlp: {err}")))?;
-    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if !version_is_recent(&version) {
-        return Err(MediaError {
-            code: 1044,
-            name: "ERR_MEDIA_BACKEND",
-            message: format!(
-                "yt-dlp {version} is too old for YouTube (minimum {MIN_YTDLP_VERSION}); install a current release, for example in ~/.local/bin"
-            ),
-        });
-    }
-    Ok(version)
 }
