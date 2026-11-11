@@ -18,14 +18,62 @@ pub const SCHEMA_VERSION: i64 = 2;
 
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
-/// Idempotent migration to schema v2: media metadata for 0.1.0 tasks.
-const MEDIA_COLUMNS: &[(&str, &str)] = &[
-    ("media_kind", "TEXT"),
-    ("media_format", "TEXT"),
-    ("playlist_title", "TEXT"),
-    ("playlist_count", "INTEGER"),
-    ("batch_id", "TEXT"),
-];
+/// Rebuild of `downloads` for schema v2: widens the `download_type` CHECK and adds the
+/// media columns. Running it twice is harmless because the whole batch is guarded by
+/// `user_version`.
+const MEDIA_REBUILD_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS downloads_v2 (
+    id TEXT PRIMARY KEY,
+    url TEXT NOT NULL,
+    final_url TEXT,
+    final_path TEXT NOT NULL,
+    temp_path TEXT,
+    total_bytes INTEGER,
+    downloaded_bytes INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL CHECK(status IN (
+        'pending', 'probing', 'downloading', 'paused',
+        'retrying', 'verifying', 'finalizing',
+        'completed', 'failed', 'cancelled'
+    )),
+    supports_ranges BOOLEAN NOT NULL DEFAULT 0,
+    etag TEXT,
+    last_modified TEXT,
+    content_type TEXT,
+    expected_checksum TEXT,
+    error_code INTEGER,
+    error_message TEXT,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    priority INTEGER NOT NULL DEFAULT 0,
+    queue_name TEXT NOT NULL DEFAULT 'main' REFERENCES queues(name),
+    download_type TEXT NOT NULL DEFAULT 'direct' CHECK(download_type IN (
+        'direct', 'hls', 'dash', 'youtube_video', 'youtube_playlist', 'youtube_audio'
+    )),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP,
+    media_kind TEXT,
+    media_format TEXT,
+    playlist_title TEXT,
+    playlist_count INTEGER,
+    batch_id TEXT
+);
+INSERT OR IGNORE INTO downloads_v2 (
+    id, url, final_url, final_path, temp_path, total_bytes, downloaded_bytes, status,
+    supports_ranges, etag, last_modified, content_type, expected_checksum, error_code,
+    error_message, retry_count, priority, queue_name, download_type, created_at,
+    completed_at, media_kind, media_format, playlist_title, playlist_count, batch_id
+)
+SELECT id, url, final_url, final_path, temp_path, total_bytes, downloaded_bytes, status,
+       supports_ranges, etag, last_modified, content_type, expected_checksum, error_code,
+       error_message, retry_count, priority, queue_name, download_type, created_at,
+       completed_at, NULL, NULL, NULL, NULL, NULL
+FROM downloads;
+DROP TABLE downloads;
+ALTER TABLE downloads_v2 RENAME TO downloads;
+CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads(status);
+CREATE INDEX IF NOT EXISTS idx_downloads_queue ON downloads(queue_name, priority DESC);
+CREATE INDEX IF NOT EXISTS idx_downloads_created_at ON downloads(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_downloads_batch ON downloads(batch_id);
+"#;
 
 /// Errors raised by the persistence layer.
 #[derive(Debug, thiserror::Error)]
@@ -536,21 +584,12 @@ impl Store {
             tx.execute_batch(SCHEMA_SQL)?;
         }
         if current < 2 {
-            // `ALTER TABLE ADD COLUMN` is not idempotent by itself: check each column
-            // first so a partially migrated file is repaired instead of failing.
-            for (name, kind) in MEDIA_COLUMNS {
-                let exists: i64 = tx.query_row(
-                    "SELECT COUNT(*) FROM pragma_table_info('downloads') WHERE name = ?1",
-                    params![name],
-                    |row| row.get(0),
-                )?;
-                if exists == 0 {
-                    tx.execute_batch(&format!("ALTER TABLE downloads ADD COLUMN {name} {kind}"))?;
-                }
-            }
-            tx.execute_batch(
-                "CREATE INDEX IF NOT EXISTS idx_downloads_batch ON downloads(batch_id)",
-            )?;
+            // SQLite cannot alter a CHECK constraint, so the wider `download_type` list
+            // needs a table rebuild. Foreign keys are disabled for the swap; the child
+            // tables keep referencing `downloads` after the rename.
+            tx.execute_batch("PRAGMA foreign_keys = OFF")?;
+            tx.execute_batch(MEDIA_REBUILD_SQL)?;
+            tx.execute_batch("PRAGMA foreign_keys = ON")?;
         }
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;

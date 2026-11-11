@@ -12,6 +12,10 @@ pub mod rpc;
 pub mod secrets;
 pub mod store;
 
+/// Re-export used by the integration tests to build a manager without importing the
+/// module directly.
+pub use self::secrets::{open_with as open_secret_store, SecretStore as SECRET_STORE_TRAIT};
+
 /// Version reported by `system.hello` and `system.status`.
 pub const DAEMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 

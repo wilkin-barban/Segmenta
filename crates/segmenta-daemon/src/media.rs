@@ -326,6 +326,28 @@ pub async fn probe_with(tool: &Path, url: &str, kind: &str) -> Result<ProbeOutco
     parse_probe_json(&value, kind)
 }
 
+/// Turn a backend title into a safe single path component.
+pub fn sanitize_title(title: &str) -> String {
+    let mut cleaned = String::with_capacity(title.len());
+    for ch in title.chars() {
+        match ch {
+            '/' | '\\' | '\0' => cleaned.push('_'),
+            c if c.is_control() => {}
+            c => cleaned.push(c),
+        }
+    }
+    let cleaned = cleaned.trim().trim_matches('.').trim();
+    let cleaned = if cleaned.is_empty() { "media" } else { cleaned };
+    if cleaned.len() <= 120 {
+        return cleaned.to_string();
+    }
+    let mut end = 120;
+    while end > 0 && !cleaned.is_char_boundary(end) {
+        end -= 1;
+    }
+    cleaned[..end].to_string()
+}
+
 /// Kind of media task stored in `downloads.download_type`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MediaTaskKind {
