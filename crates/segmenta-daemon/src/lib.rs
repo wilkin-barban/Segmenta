@@ -7,6 +7,7 @@ pub mod events;
 pub mod ipc;
 pub mod logging;
 pub mod manager;
+pub mod browsers;
 pub mod media;
 pub mod rpc;
 pub mod secrets;

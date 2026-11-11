@@ -44,6 +44,9 @@ readonly REQUIRED_PATHS=(
     "usr/share/metainfo/io.github.wilkin.Segmenta.metainfo.xml"
     "usr/share/icons/hicolor/scalable/apps/io.github.wilkin.Segmenta.svg"
     "usr/share/doc/segmenta/copyright"
+    "usr/share/segmenta/extensions/segmenta-chromium.zip"
+    "usr/share/segmenta/extensions/segmenta-firefox.zip"
+    "usr/share/segmenta/extensions/README"
 )
 
 DEB="${1:-}"
