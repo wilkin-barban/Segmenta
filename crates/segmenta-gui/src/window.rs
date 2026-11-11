@@ -323,6 +323,14 @@ impl SegmentaWindow {
         self.0.search_bar.set_search_mode(visible);
     }
 
+    /// Whether the loading spinner is still painting (regression for the stuck
+    /// "Conectando…" glyph).
+    pub fn loading_spinner_visible(&self) -> bool {
+        // `is_spinning()` turns false when stopped even though GTK still paints the
+        // static glyph, so visibility is the honest signal.
+        self.0.loading_spinner.is_visible()
+    }
+
     /// Whether the search bar is open.
     pub fn search_active(&self) -> bool {
         self.0.search_bar.is_search_mode()
@@ -1163,7 +1171,7 @@ impl Inner {
             eprintln!("segmenta-gui: view -> Loading");
         }
         *self.view_state.borrow_mut() = ViewState::Loading;
-        self.loading_page.set_visible(true);
+        self.loading_spinner.set_visible(true);
         self.loading_spinner.start();
         self.stack.set_visible_child_name("loading");
     }
@@ -1171,11 +1179,15 @@ impl Inner {
     /// Stop the spinner and hide the loading page; a hidden page must not keep an
     /// animation ticking behind the list.
     fn stop_loading(&self) {
+        // Stop the animation and hide the glyph. The page itself is a stack child and
+        // its visibility belongs to `GtkStack`; hiding it by hand confused the stack
+        // and left the spinner painted behind the list.
         self.loading_spinner.stop();
-        self.loading_page.set_visible(false);
+        self.loading_spinner.set_visible(false);
     }
 
     fn set_error(&self, message: String) {
+        self.stack.set_visible_child_name("error");
         self.stop_loading();
         if crate::client::trace_enabled() {
             eprintln!("segmenta-gui: view -> Error({message})");
@@ -1189,7 +1201,6 @@ impl Inner {
             tr(here, Msg::ErrorBody),
             tr(here, Msg::ErrorCommand)
         )));
-        self.stack.set_visible_child_name("error");
     }
 
     /// Retry the connection and reload the view; the error button uses this.
@@ -1262,16 +1273,16 @@ impl Inner {
             ViewState::Empty
         };
         self.empty_page.set_title(filter.empty_title());
-        // Leaving Loading must also stop the spinner: the widget kept animating
-        // behind the list and looked like a stuck "Conectando…".
-        if !matches!(state, ViewState::Loading) {
-            self.stop_loading();
-        }
         match state {
             ViewState::Empty => self.stack.set_visible_child_name("empty"),
             ViewState::Ready => self.stack.set_visible_child_name("list"),
             ViewState::Error(_) => self.stack.set_visible_child_name("error"),
             ViewState::Loading => self.stack.set_visible_child_name("loading"),
+        }
+        // Leaving Loading must stop the spinner *after* the stack switched, otherwise
+        // the stopped glyph stays painted behind the list.
+        if !matches!(state, ViewState::Loading) {
+            self.stop_loading();
         }
         *self.view_state.borrow_mut() = state;
     }
