@@ -83,7 +83,12 @@
         });
         return;
       }
-      if (fn.length <= args.length) {
+      // A callback is always appended above, so callback-style APIs
+      // (chrome.runtime.sendNativeMessage(host, message, callback) declares arity 2)
+      // must settle through that callback. Auto-resolving by arity would answer
+      // `undefined`; only a synchronous API that actually returned a value resolves
+      // from its return.
+      if (typeof returned !== 'undefined' && fn.length <= args.length) {
         finish(returned);
       }
     });

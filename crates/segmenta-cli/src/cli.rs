@@ -202,7 +202,7 @@ fn help_text(locale: segmenta_i18n::Locale) -> String {
              \x20 list [-f all|active|paused|completed|failed] [-l N] [-o N]\n  status <id>\n  pause <id>\n  resume <id>\n\
              \x20 cancel <id> [--delete-file]\n  delete <id> [--delete-file]\n  settings [get|set KEY VALUE ...]\n\
              \x20 queues list|create NAME [--max-active N]|remove NAME|schedule NAME [--start HH:MM] [--stop HH:MM] [--on-complete ACTION]\n\
-             \x20 hello\n  system status|shutdown\n\n\
+             \x20 media probe <url> [--kind video|playlist|stream] [--limit N]\n  media add <url> [--mode video|audio|playlist] [--format-id ID] [--height H] [--limit N]\n  hello\n  system status|shutdown\n\n\
              Global options:\n  --socket PATH   daemon socket (default $SEGMENTA_SOCKET or $XDG_RUNTIME_DIR/segmenta/daemon.sock)\n\
              \x20 --json         machine-readable output\n  --version      print the version\n  --help         this help\n\n\
              Exit codes: 0 success, 1 daemon/protocol error, 2 invalid usage.",
@@ -214,7 +214,7 @@ fn help_text(locale: segmenta_i18n::Locale) -> String {
              \x20 list [-f all|active|paused|completed|failed] [-l N] [-o N]\n  status <id>\n  pause <id>\n  resume <id>\n\
              \x20 cancel <id> [--delete-file]\n  delete <id> [--delete-file]\n  settings [get|set CLAVE VALOR ...]\n\
              \x20 queues list|create NOMBRE [--max-active N]|remove NOMBRE|schedule NOMBRE [--start HH:MM] [--stop HH:MM] [--on-complete ACCION]\n\
-             \x20 hello\n  system status|shutdown\n\n\
+             \x20 media probe <url> [--kind video|playlist|stream] [--limit N]\n  media add <url> [--mode video|audio|playlist] [--format-id ID] [--height H] [--limit N]\n  hello\n  system status|shutdown\n\n\
              Opciones globales:\n  --socket RUTA   socket del daemon (por defecto $SEGMENTA_SOCKET o $XDG_RUNTIME_DIR/segmenta/daemon.sock)\n\
              \x20 --json         salida legible por máquina\n  --version      muestra la versión\n  --help         esta ayuda\n\n\
              Códigos de salida: 0 éxito, 1 error del daemon o del protocolo, 2 uso inválido.",
@@ -226,7 +226,7 @@ fn help_text(locale: segmenta_i18n::Locale) -> String {
              \x20 list [-f all|active|paused|completed|failed] [-l N] [-o N]\n  status <id>\n  pause <id>\n  resume <id>\n\
              \x20 cancel <id> [--delete-file]\n  delete <id> [--delete-file]\n  settings [get|set CHAVE VALOR ...]\n\
              \x20 queues list|create NOME [--max-active N]|remove NOME|schedule NOME [--start HH:MM] [--stop HH:MM] [--on-complete AÇÃO]\n\
-             \x20 hello\n  system status|shutdown\n\n\
+             \x20 media probe <url> [--kind video|playlist|stream] [--limit N]\n  media add <url> [--mode video|audio|playlist] [--format-id ID] [--height H] [--limit N]\n  hello\n  system status|shutdown\n\n\
              Opções globais:\n  --socket CAMINHO   socket do daemon (padrão $SEGMENTA_SOCKET ou $XDG_RUNTIME_DIR/segmenta/daemon.sock)\n\
              \x20 --json         saída legível por máquina\n  --version      mostra a versão\n  --help         esta ajuda\n\n\
              Códigos de saída: 0 sucesso, 1 erro do daemon ou do protocolo, 2 uso inválido.",
