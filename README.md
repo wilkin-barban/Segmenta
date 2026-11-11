@@ -41,12 +41,12 @@ todavía no entra.
 
 ### Opción A — paquete `.deb` (recomendado)
 
-Descargá `segmenta_0.0.1_amd64.deb` y su checksum desde la página de releases, verificá y
+Descargá `segmenta_0.0.1-1_amd64.deb` y su checksum desde la página de releases, verificá y
 instalá:
 
 ```bash
-sha256sum -c segmenta_0.0.1_amd64.deb.sha256
-sudo apt install ./segmenta_0.0.1_amd64.deb
+sha256sum -c segmenta_0.0.1-1_amd64.deb.sha256
+sudo apt install ./segmenta_0.0.1-1_amd64.deb
 systemctl --user daemon-reload
 systemctl --user enable --now segmenta.socket
 ```
@@ -221,8 +221,8 @@ xvfb-run -a cargo test -p segmenta-gui
 # Paquete
 cargo build --release --workspace
 cargo deb -p segmenta-gui --no-build -o dist/
-dpkg-deb --info dist/segmenta_0.0.1_amd64.deb
-sha256sum dist/segmenta_0.0.1_amd64.deb > dist/segmenta_0.0.1_amd64.deb.sha256
+dpkg-deb --info dist/segmenta_0.0.1-1_amd64.deb
+sha256sum dist/segmenta_0.0.1-1_amd64.deb > dist/segmenta_0.0.1-1_amd64.deb.sha256
 ```
 
 ---
