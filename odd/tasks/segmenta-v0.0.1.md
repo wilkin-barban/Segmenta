@@ -383,6 +383,11 @@ FFmpeg 8.0.1, Rust 1.99.1 instalado por rustup, `xvfb` disponible.
 `GNOME 48+ → GNOME 50+` en 04 (26.04 LTS embarca GNOME 50.1) y la nota de CI reescrita: 26.04 es la LTS
 objetiva, ya estable. Commit `docs: retarget release target to Ubuntu 26.04 LTS`.
 
+**L5 — Códigos de error y evento de reinicio.** El motor necesita identificadores numéricos que 07
+no cubre (redirecciones, recurso ausente, cuerpo truncado) y 06 pide notificar
+`download_restarted_due_to_stale_cache`, que 07 no lista. Se agregó la tabla 06 §4.3 y el evento 9 en
+07 §5 antes de implementarlos, como exige 11 §86.
+
 **L4 — Alcance de 0.0.1 decidido.** Cuatro crates obligatorias; el motor expone su servidor de rangos
 de prueba como módulo de `segmenta-core` (feature `testserver`) para que daemon y CLI lo reutilicen sin
 una crate extra. `segmenta-host`/`extension` quedan fuera salvo que T1–T11 estén verdes.
