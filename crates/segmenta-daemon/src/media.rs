@@ -433,10 +433,36 @@ pub struct DownloadPlan {
 /// mode asks for the best single file that already carries both streams; `18` is the
 /// progressive fallback YouTube still serves.
 pub fn muxed_selector(height: Option<u32>) -> String {
+    // Muxed first; YouTube increasingly ships video-only DASH, so fall back to a
+    // video+audio merge before giving up (`398+251` was the only working pair in the
+    // live QA). Plain `b[...]` alone fails with "Requested format is not available".
     match height {
-        Some(height) => format!("b[height<={height}]/18/b[height<={height}]/18/best"),
-        None => "b/18/best".to_string(),
+        Some(height) => {
+            format!("b[height<={height}]/18/bv*[height<={height}]+ba/b[height<={height}]/best")
+        }
+        None => "b/18/bv*+ba/best".to_string(),
     }
+}
+
+/// Minimum `yt-dlp` release known to work against the current YouTube.
+pub const MIN_YTDLP_VERSION: &str = "2026.10.01";
+
+/// Parse a `yt-dlp --version` string (`2026.10.26`).
+pub fn parse_version(raw: &str) -> Option<(u32, u32, u32)> {
+    let mut parts = raw.trim().split('.');
+    let year = parts.next()?.parse().ok()?;
+    let month = parts.next()?.parse().ok()?;
+    let day = parts.next()?.parse().ok()?;
+    Some((year, month, day))
+}
+
+/// Compare a yt-dlp version against [`MIN_YTDLP_VERSION`].
+pub fn version_is_recent(raw: &str) -> bool {
+    let (Some(current), Some(minimum)) = (parse_version(raw), parse_version(MIN_YTDLP_VERSION))
+    else {
+        return true;
+    };
+    current >= minimum
 }
 
 impl DownloadPlan {
@@ -446,7 +472,7 @@ impl DownloadPlan {
             "--no-config".into(),
             "--newline".into(),
             "--no-part".into(),
-            "--continue".into(),
+            "--no-continue".into(),
             "--progress".into(),
             "--progress-template".into(),
             "download:%(progress.downloaded_bytes)s|%(progress.total_bytes)s|%(progress.speed)s|%(progress.eta)s".into(),
@@ -624,15 +650,44 @@ pub async fn run_download(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn old_backends_are_rejected_with_an_actionable_error() {
+        assert!(version_is_recent("2026.10.26"));
+        assert!(!version_is_recent("2026.03.17"));
+        let directory = tempfile::tempdir().unwrap();
+        let tool = directory.path().join("yt-dlp");
+        std::fs::write(&tool, "#!/bin/sh\necho 2026.03.17\n").unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let error = check_version(&tool).unwrap_err();
+        assert_eq!(error.code, 1044);
+        assert!(error.message.contains("too old"));
+    }
+
+    #[test]
+    fn output_size_reads_files_and_playlist_directories() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("a.m4a");
+        std::fs::write(&file, b"0123456789").unwrap();
+        assert_eq!(output_size(&file), Some(10));
+        let playlist = directory.path().join("list");
+        std::fs::create_dir_all(&playlist).unwrap();
+        std::fs::write(playlist.join("1.mp4"), b"12345").unwrap();
+        assert_eq!(output_size(&playlist), Some(5));
+        assert_eq!(output_size(&directory.path().join("missing")), None);
+    }
 
     #[test]
     fn video_selector_prefers_muxed_formats() {
-        // 720p: best muxed at or below 720 first, then 18, never a video-only id.
+        // Live QA: `b[height<=720]` and `18` no longer exist for every video, so the
+        // chain must reach a merged video+audio pair before `best`.
         assert_eq!(
             muxed_selector(Some(720)),
-            "b[height<=720]/18/b[height<=720]/18/best"
+            "b[height<=720]/18/bv*[height<=720]+ba/b[height<=720]/best"
         );
-        assert_eq!(muxed_selector(None), "b/18/best");
+        assert_eq!(muxed_selector(None), "b/18/bv*+ba/best");
         let plan = DownloadPlan {
             kind: MediaTaskKind::YoutubeVideo,
             url: "https://www.youtube.com/watch?v=x".to_string(),
@@ -656,4 +711,40 @@ mod tests {
         assert_eq!(line.eta, Some(6));
         assert!(parse_progress_line("[download] 10%").is_none());
     }
+}
+
+/// Size of a produced file, or of a playlist directory, in bytes.
+pub fn output_size(path: &std::path::Path) -> Option<u64> {
+    let meta = std::fs::metadata(path).ok()?;
+    if meta.is_file() {
+        return Some(meta.len()).filter(|bytes| *bytes > 0);
+    }
+    let mut total = 0u64;
+    for entry in std::fs::read_dir(path).ok()?.flatten() {
+        if let Ok(meta) = entry.metadata() {
+            if meta.is_file() {
+                total += meta.len();
+            }
+        }
+    }
+    Some(total).filter(|bytes| *bytes > 0)
+}
+
+/// Reject a backend release that is too old to speak to YouTube today.
+pub fn check_version(tool: &std::path::Path) -> Result<String, MediaError> {
+    let output = std::process::Command::new(tool)
+        .arg("--version")
+        .output()
+        .map_err(|err| MediaError::backend(format!("cannot run yt-dlp: {err}")))?;
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !version_is_recent(&version) {
+        return Err(MediaError {
+            code: 1044,
+            name: "ERR_MEDIA_BACKEND",
+            message: format!(
+                "yt-dlp {version} is too old for YouTube (minimum {MIN_YTDLP_VERSION}); install a current release, for example in ~/.local/bin"
+            ),
+        });
+    }
+    Ok(version)
 }

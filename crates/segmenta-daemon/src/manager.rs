@@ -1237,6 +1237,8 @@ impl Manager {
         let host = url.host_str().unwrap_or_default().to_string();
         if crate::media::is_youtube(&host) {
             let tool = crate::media::locate_tool("yt-dlp").map_err(Self::media_error)?;
+            let version = crate::media::check_version(&tool).map_err(Self::media_error)?;
+            tracing::info!(host = %host, version = %version, "media backend");
             let outcome = crate::media::probe_with(&tool, url.as_str(), &kind)
                 .await
                 .map_err(Self::media_error)?;
@@ -1299,11 +1301,20 @@ impl Manager {
             "audio" => "m4a",
             _ => "mp4",
         };
-        let final_path = if is_playlist {
-            dir.join(&title)
+        // A pre-existing file made yt-dlp resume into foreign bytes (HTTP 416). Every
+        // media task therefore owns a fresh path: "Title (2).m4a" instead of "Title.m4a".
+        let suggested = if is_playlist {
+            title.clone()
         } else {
-            dir.join(format!("{title}.{extension}"))
+            format!("{title}.{extension}")
         };
+        let final_path = resolve_unique_path(&dir, &suggested).map_err(|err| {
+            RpcError::new(
+                1005,
+                "ERR_DESTINATION_UNWRITABLE",
+                format!("cannot reserve {}: {err}", dir.display()),
+            )
+        })?;
         let task_id = uuid::Uuid::new_v4().to_string();
         let batch_id = if is_playlist {
             Some(uuid::Uuid::new_v4().to_string())
@@ -1492,10 +1503,6 @@ impl Manager {
                         .unwrap_or(last_bytes);
                     let _ = store.update_progress(&id, size, Some(size));
                     let _ = store.set_status(&id, DownloadStatus::Completed, None);
-                    progress
-                        .lock()
-                        .unwrap_or_else(|err| err.into_inner())
-                        .remove(&id);
                     bus.publish(
                         "task_completed",
                         Some(&id),
@@ -1590,14 +1597,9 @@ impl Manager {
         let id = task_id.clone();
         let task_cancel = cancel.clone();
         let handle = tokio::spawn(async move {
-            let mut last = std::time::Instant::now();
             let mut last_downloaded = 0u64;
             let result = crate::media::run_download(&tool, &plan, task_cancel, |line| {
-                if last.elapsed() < std::time::Duration::from_millis(250) {
-                    return;
-                }
-                last = std::time::Instant::now();
-                last_downloaded = line.downloaded;
+                last_downloaded = last_downloaded.max(line.downloaded);
                 let _ = store.update_progress(&id, line.downloaded, line.total);
                 progress
                     .lock()
@@ -1627,8 +1629,20 @@ impl Manager {
             .await;
             match result {
                 Ok(()) => {
+                    // The finished file is the authority: a completed task never reports
+                    // 0 bytes just because yt-dlp did not print a parseable progress line.
+                    let produced = crate::media::output_size(&final_path);
+                    let total = produced
+                        .or(Some(last_downloaded))
+                        .filter(|bytes| *bytes > 0);
+                    if let Some(bytes) = total {
+                        let _ = store.update_progress(&id, bytes, Some(bytes));
+                    }
                     let _ = store.set_status(&id, DownloadStatus::Completed, None);
-                    let _ = store.update_progress(&id, last_downloaded, None);
+                    progress
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .remove(&id);
                     progress
                         .lock()
                         .unwrap_or_else(|err| err.into_inner())
@@ -1638,7 +1652,7 @@ impl Manager {
                         Some(&id),
                         json!({
                             "final_path": final_path.to_string_lossy(),
-                            "total_bytes": last_downloaded,
+                            "total_bytes": total,
                             "checksum_ok": null,
                             "media": true,
                         }),

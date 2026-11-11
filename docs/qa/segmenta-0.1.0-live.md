@@ -30,3 +30,13 @@ de la extensión, así que su SHA no cambia.
 | 4 | Progreso de medios en 0 (bytes/total/speed) | **Corregido**: el runner lee también **stderr** (donde yt-dlp emite `--progress-template`); test con el fake emitiendo por stderr y aserción de `downloaded_bytes > 0` |
 | 5 | 720p falla con 403 | **Mitigado**: modo video usa selector **muxed** `b[height<=H]/18/...` en vez del `format_id` video-only; test unitario del argv |
 | 6 | HLS/DASH no cableado (`1043`) | **Corregido**: `media.probe/add` resuelven manifiestos con `segmenta-core::stream`, descargan fragmentos con progreso y remuxean con `ffmpeg -c copy`; test e2e con fixture HLS generado por ffmpeg y servidor local |
+
+## Segunda ronda de QA en vivo (Chrome for Testing, `--mute-audio`)
+
+| # | Hallazgo | Estado |
+| --- | --- | --- |
+| 7 | `-f "b[height<=720]/18/best"` → `ERROR: Requested format is not available`; sólo hay DASH video-only + audio | **Corregido**: el selector es `b[height<=H]/18/bv*[height<=H]+ba/b[height<=H]/best`; verificado con el `yt-dlp` 2026.10.26 del usuario (`398+251`) |
+| 8 | Destino existente + `--continue`/`--no-part` → HTTP 416 | **Corregido**: cada tarea reserva un nombre único (`resolve_unique_path`) y el runner usa `--no-continue` |
+| 9 | Tareas YouTube completadas con `downloaded_bytes=0` y panel al 0 % | **Corregido**: sin throttle en el callback y, al completar, el tamaño real del archivo/directorio es la fuente de verdad (`output_size`) |
+| 10 | DASH `SegmentList`/`SegmentBase` rechazado (correcto) | **Limitación documentada**: 0.1.0 soporta DASH con `SegmentTemplate`; `SegmentList`/`SegmentBase` quedan fuera con `1043` |
+| 11 | `yt-dlp` 2026.03 del sistema devuelve 403/formatos viejos | **Validación añadida**: `media.probe/add` comparan `yt-dlp --version` con `MIN_YTDLP_VERSION` (2026.10.01) y fallan con `1044` y un mensaje accionable |
