@@ -91,7 +91,22 @@ Quedan dos defectos P2 antes de publicar:
    estado listo y no producir imágenes de carga; su test sólo verifica que los archivos
    existen y no vacíos.
 
-No publicar hasta corregir ambos y repetir esta comprobación.
+## Tercera pasada — candidato `c1fc1ce` (11:56)
+
+Reinstalado el `.deb` de 11:56 (SHA `25db5402…`). Verificado:
+
+- La GUI normal lista la tarea completada.
+- `segmenta list` en es/pt y `--help` están localizados.
+- `--screenshots` en pt-BR es determinista: reporta `captured rows=1 state=Ready`, muestra
+  la tarea y traduce “53 s restante” (`0.0.2-third-pt-light.png`).
+- Logs con `secret_backend="keyring"` y `checksum_ok=None`.
+
+**Sigue pendiente un P2:** el spinner central permanece visible a los 5 s **y a los 12 s**
+en la GUI normal, aunque la tarea ya está listada (`0.0.2-third-normal.png`,
+`0.0.2-third-normal12.png`). Hay que ocultarlo realmente al llegar a `Ready`; el fix de
+`c1fc1ce` no se refleja en el paquete o no cubre ese indicador.
+
+No publicar hasta que el spinner desaparezca y se regenere el `.deb`.
 
 ## Criterio para reintentar
 
