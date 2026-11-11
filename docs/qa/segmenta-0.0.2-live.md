@@ -15,12 +15,12 @@ watch -n 10 cat docs/qa/segmenta-0.0.2-live.md
 | Frente | Estado | Evidencia / commit | Bloqueo |
 | --- | --- | --- | --- |
 | Keyring real, XDG y pause/resume honestos | Implementado, verde local | `134165e`; `tests/manager.rs`, `tests/secret_backend.rs` (15 tests) | Falta QA remoto |
-| i18n es / pt-BR / en | Crate base + ventana principal localizada; CLI y diálogos pendientes | `9b5f606`, `c1516ec`; 4 tests de catálogo | Falta add dialog, preferencias, tooltips y toda la CLI |
+| i18n es / pt-BR / en | Implementado en GUI, diálogos, preferencias, CLI y errores | `3c38151`; catálogo + tests de paridad, `render_locale` y e2e de locale | Falta QA remoto con LANG real |
 | Arranque normal de la GUI | Corregido y probado con socket real | `0beb18a`; `tests/startup.rs` (2 tests, <2 s) | Falta QA remoto |
 | Tema claro/oscuro y capturas | Implementado y capturado | `49d32b7`; `--screenshots`, `docs/qa/screenshots/0.0.2-{light,dark}.png` 1440×900 revisadas | Falta QA remoto |
 | Logging estructurado y redacción | Implementado y verde | `9c1af8b`; `logging.rs` (5 tests), instrumentación de manager/ipc/main | Falta verificar `journalctl` en el remoto |
-| Matriz de botones/acciones | Pendiente | task T12; sin `tests/actions.rs` | Depende de i18n de GUI y de revisar cada handler |
-| Empaquetado 0.0.2 | Pendiente | versión local `0.0.1` | Falta bump, `libsecret-tools` en Depends, build, `.deb` y `check-package.sh` |
+| Matriz de botones/acciones | Implementada (9 tests) | `3c38151`; `tests/actions.rs` + accesores reales | Falta QA remoto de clicks |
+| Empaquetado 0.0.2 | En curso | versión `0.0.2`, `libsecret-tools`, metainfo, CHANGELOG, `check-package.sh` | Falta verificar el `.deb` generado |
 | QA remoto | Limpio en 0.0.1 | `ssh ubuntu`: sin tareas, `~/Descargas`, `allow_local_downloads=false` | Esperando candidato 0.0.2 |
 
 ## Reglas del flujo

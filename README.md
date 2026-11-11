@@ -4,9 +4,29 @@
 > caída para **Ubuntu 26.04 LTS (GNOME 50 / Wayland)**, con daemon propio, CLI y GUI
 > nativa GTK4 + Libadwaita.
 
-**Estado: 0.0.1** — primera release pública. Descarga directa segmentada, usable de punta a
-punta desde la GUI y desde la terminal. Ver [Alcance](#alcance-de-esta-release) para lo que
-todavía no entra.
+**Estado: 0.0.2** — correcciones del QA remoto sobre 0.0.1: keyring real, carpeta XDG, estados
+de pausa/reanudación honestos, arranque de la GUI, logging con redacción, i18n es/pt-BR/en y
+capturas claro/oscuro. Descarga directa segmentada, usable de punta a punta desde la GUI y desde
+la terminal. Ver [Alcance](#alcance-de-esta-release) para lo que todavía no entra.
+
+### Novedades de 0.0.2
+
+- **Keyring real**: `secret-tool` se detecta con un `lookup` (libsecret no tiene `--version`); el
+  backend de archivo ya no se elige solo y, si no hay llavero, `download.add` con credenciales
+  falla con `ERR_KEYRING_UNAVAILABLE` (1031) sin crear la tarea. Los secretos de 0.0.1 se importan
+  al llavero y el archivo se elimina.
+- **Carpeta de descargas XDG**: se respeta `XDG_DOWNLOAD_DIR`, `xdg-user-dir DOWNLOAD` y
+  `~/.config/user-dirs.dirs` (por ejemplo `~/Descargas`); el valor histórico se migra una vez.
+- **Pausa/reanudación honestas**: `pause` sólo acepta tareas en marcha (1011) y `resume` sólo
+  desde pausa/reintento (1003); una tarea pausada informa velocidad 0 y ETA nula.
+- **GUI**: lista la primera instantánea al arrancar (antes quedaba en «Conectando…»), el error del
+  socket muestra `systemctl --user enable --now segmenta.socket` y el botón **Reintentar** reconecta.
+  Apariencia `system/light/dark` y `--screenshots` genera capturas 1440×900 para el QA.
+- **Logging**: `tracing` a stderr/journald con `SEGMENTA_LOG`/`RUST_LOG`, campos `task_id`,
+  `attempt_id`, `status`, `error_code`, `retry` y `duration_ms`, y redacción estricta de
+  credenciales, cookies, cuerpos y query strings.
+- **i18n**: interfaz y CLI en español, portugués (Brasil) e inglés según `LC_ALL`/`LC_MESSAGES`/
+  `LANG`, con inglés como respaldo.
 
 ---
 
@@ -41,12 +61,12 @@ todavía no entra.
 
 ### Opción A — paquete `.deb` (recomendado)
 
-Descargá `segmenta_0.0.1-1_amd64.deb` y su checksum desde la página de releases, verificá y
+Descargá `segmenta_0.0.2-1_amd64.deb` y su checksum desde la página de releases, verificá y
 instalá:
 
 ```bash
-sha256sum -c segmenta_0.0.1-1_amd64.deb.sha256
-sudo apt install ./segmenta_0.0.1-1_amd64.deb
+sha256sum -c segmenta_0.0.2-1_amd64.deb.sha256
+sudo apt install ./segmenta_0.0.2-1_amd64.deb
 systemctl --user daemon-reload
 systemctl --user enable --now segmenta.socket
 ```
@@ -221,8 +241,8 @@ xvfb-run -a cargo test -p segmenta-gui
 # Paquete
 cargo build --release --workspace
 cargo deb -p segmenta-gui --no-build -o dist/
-dpkg-deb --info dist/segmenta_0.0.1-1_amd64.deb
-sha256sum dist/segmenta_0.0.1-1_amd64.deb > dist/segmenta_0.0.1-1_amd64.deb.sha256
+dpkg-deb --info dist/segmenta_0.0.2-1_amd64.deb
+sha256sum dist/segmenta_0.0.2-1_amd64.deb > dist/segmenta_0.0.2-1_amd64.deb.sha256
 ```
 
 ---
