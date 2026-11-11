@@ -120,8 +120,7 @@ pub async fn probe(client: &reqwest::Client, url: &Url) -> Result<serde_json::Va
             .collect();
         let formats: Vec<MediaFormat> = representations
             .iter()
-            .enumerate()
-            .map(|(_index, representation)| MediaFormat {
+            .map(|representation| MediaFormat {
                 format_id: representation.id.clone(),
                 label: representation
                     .height
@@ -239,7 +238,7 @@ pub async fn download(
 
     let mut files: Vec<PathBuf> = Vec::new();
     let mut downloaded = 0u64;
-    let mut fetch = |target: PathBuf, url: Url| {
+    let fetch = |target: PathBuf, url: Url| {
         let client = client.clone();
         async move {
             let response = client
