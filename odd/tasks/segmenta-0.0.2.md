@@ -107,6 +107,58 @@ release está publicada. Criterio: `secret-tool lookup service segmenta key prob
 Sin secretos, `.env`, `target/` ni `.atl/` versionados; árbol limpio al cerrar. Criterio:
 `git status --porcelain` vacío y `git ls-files` sin artefactos.
 
+### S19 — Logging estructurado y auditable
+El daemon usa `tracing` + `tracing-subscriber` con salida a stderr (journald la captura) y filtro
+`RUST_LOG`/`SEGMENTA_LOG` (default `info`). Cada evento de ciclo de vida lleva `task_id`,
+`attempt_id`, `state`, `status`, `error_code`, `retry` y `duration_ms` cuando aplica. La GUI loguea en
+stderr el fallo de conexión con el comando accionable. Criterio: `journalctl --user -u segmenta`
+permite reconstruir un add, una pausa, una reanudación y un fallo; hay test de niveles (`info` no
+emite `debug`) y de que un nivel inválido cae en `info`.
+
+### S20 — Redacción estricta en logs
+Nunca se registran `Authorization`, `Cookie`, `Set-Cookie`, cuerpos, credenciales, secretos del
+keyring ni query strings con tokens. Las URLs se reducen a `scheme://host/path` (sin query ni
+fragment) y los valores sensibles se reemplazan por `[redacted]`. Criterio: tests que loguean una
+URL con `?token=...`, una cabecera `Authorization: Bearer ...`, un par cookie=valor y un JSON con
+`"hash"`/`"password"` y verifican que el texto final no contiene el secreto y sí `[redacted]`.
+
+### S21 — i18n es / pt-BR / en
+Crate `segmenta-i18n` sin dependencias, con catálogos completos y detección por `LC_ALL`,
+`LC_MESSAGES`, `LANG` en ese orden, normalizando `es_*`→`es`, `pt_BR*`→`pt-BR`, `en_*`→`en` y
+`C`/`POSIX`/desconocido→`en`. Toda cadena visible de la GUI (ventana, diálogos, preferencias,
+estados, errores, tooltips y textos accesibles) y de la CLI/errores humanos del daemon sale del
+catálogo. El protocolo JSON-RPC no cambia: los `code` siguen siendo la fuente y el texto se resuelve
+en el cliente. Criterio: tests de detección de locale, de paridad de claves entre los tres catálogos
+y de que no queda texto visible hardcodeado en la GUI.
+
+### S22 — Tema claro/oscuro real
+La apariencia sigue `AdwStyleManager` y una preferencia nueva `appearance` (`system`|`light`|`dark`,
+default `system`) en el catálogo de settings; la UI no fija colores que rompan contraste y la barra de
+segmentos usa el color de acento del tema. Criterio: capturas 1440×900 de ambos temas generadas por
+`segmenta-gui --screenshots <dir>` (nunca a mano), revisión de contraste/foco/selección en ambos y
+test de que `--screenshots` escribe `segmenta-light.png` y `segmenta-dark.png` no vacíos.
+
+### S23 — Arranque normal de la GUI
+Con el daemon activo y una tarea completada, `segmenta-gui` debe listarla en menos de 2 s. Si el socket
+no está disponible, la UI muestra un estado de error accionable con el comando
+`systemctl --user enable --now segmenta.socket`, el motivo y un botón **Reintentar** que reconecta de
+verdad (reintenta la conexión y recarga la lista). Criterio: test de integración con un `UnixListener`
+real que responde `download.list` y otro con un socket ausente que exige el comando y ejercita el
+reintento hasta que el daemon aparece.
+
+### S24 — Todos los controles funcionales
+Ningún control decorativo: cada botón, ítem de menú, fila de la barra lateral, atajo y acción de la
+matriz de controles tiene handler real, estado deshabilitado explicado, feedback visual y etiqueta
+accesible, con test. Si un control no se puede completar en 0.0.2, se quita de la UI y se documenta la
+decisión. Criterio: la matriz de controles de este documento queda cubierta por tests de acción (no
+sólo de renderizado).
+
+### S25 — Capturas y validación visual
+Las capturas viven en `docs/qa/screenshots/` con nombres estables (`0.0.2-light.png`,
+`0.0.2-dark.png`, `0.0.1-dark.png` histórico) y se generan con el modo `--screenshots`, no con
+herramientas externas. Criterio: las dos capturas existen, pesan más de 10 KB, son 1440×900 y se
+revisan contraste, foco, selección, segmentos y estados de error en ambas.
+
 ## Tasks
 
 | ID | Specs | Tarea | Rutas | Test RED |
@@ -118,6 +170,12 @@ Sin secretos, `.env`, `target/` ni `.atl/` versionados; árbol limpio al cerrar.
 | T5 | S12-S13 | Contrato de list/status, puerta de empaquetado y CHANGELOG | `docs/openspec/07`, `packaging/check-package.sh`, `CHANGELOG.md` | script sobre un `.deb` real |
 | T6 | S14 | Bump a 0.0.2 y metainfo | `Cargo.toml`, `crates/segmenta-gui/data/*.xml`, `packaging/` | `--version` y `dpkg-deb -f` |
 | T7 | S15-S17 | Release, instalación remota y limpieza | `dist/`, remoto | comandos de S16 |
+| T8 | S19-S20 | Logging con `tracing`, filtros y redacción estricta | `crates/segmenta-daemon/Cargo.toml`, `src/logging.rs`, `manager.rs`, `ipc.rs`, `main.rs` | `logs_redact_urls_and_headers`, `log_level_defaults_to_info` |
+| T9 | S21 | Crate `segmenta-i18n`, catálogos es/pt-BR/en y detección de locale | `crates/segmenta-i18n/**`, `crates/segmenta-cli/**` | `locale_detection_*`, `catalogs_have_the_same_keys`, `no_hardcoded_visible_strings` |
+| T10 | S22, S25 | Apariencia `system/light/dark`, estilo y modo capturas | `crates/segmenta-gui/src/{app,window,prefs}.rs`, `main.rs` | `screenshots_are_written_for_both_themes` |
+| T11 | S23 | Arranque normal, error accionable y reintento real | `crates/segmenta-gui/src/{client,window}.rs` | `normal_startup_lists_a_completed_task`, `retry_reconnects_after_the_socket_appears` |
+| T12 | S24 | Matriz de controles: handlers, estados y tests de acción | `crates/segmenta-gui/src/**`, `tests/actions.rs` | `button_matrix_is_covered` |
+| T13 | S19-S25 | Documentación, capturas y puerta de release sin publicar | `README.md`, `docs/openspec/*`, `CHANGELOG.md`, `docs/qa/**` | `appstreamcli`/`desktop-file-validate` |
 
 ## Riesgos, rollback y presupuesto
 
@@ -143,6 +201,11 @@ Sin secretos, `.env`, `target/` ni `.atl/` versionados; árbol limpio al cerrar.
 | Máquina de estados | `cargo test -p segmenta-daemon --test ipc` / unitarias del manager | pause/resume por estado, códigos 1011/1003, sin eventos |
 | GUI | `xvfb-run -a cargo test -p segmenta-gui` | `--version`, estado de error con comando y reintento |
 | Empaquetado | `packaging/check-package.sh` | `dpkg-deb --info`, `desktop-file-validate`, `appstreamcli validate`, lintian si existe |
+| Logging | `cargo test -p segmenta-daemon` | redacción de URL/cabeceras/cookies/cuerpos, niveles, campos de ciclo de vida |
+| i18n | `cargo test -p segmenta-i18n` + `-p segmenta-cli` | detección es/pt-BR/en/desconocido, paridad de claves, textos de CLI y errores |
+| GUI arranque | `xvfb-run -a cargo test -p segmenta-gui` | daemon real con tarea completada <2 s, socket ausente con comando + reintento que reconecta |
+| GUI controles | `xvfb-run -a cargo test -p segmenta-gui --test actions` | matriz de botones: cada control dispara su handler, estados deshabilitados y confirmaciones |
+| Capturas | `xvfb-run -a segmenta-gui --screenshots docs/qa/screenshots` | `0.0.2-light.png` y `0.0.2-dark.png` 1440×900 |
 | Remoto | `ssh ubuntu` | instalación, keyring, XDG, descarga 128 MiB + pausa + SHA-256, HTTPS, smoke, pause/resume sobre `failed` |
 
 ## Comandos exactos
@@ -168,9 +231,40 @@ gh release create v0.0.2 dist/segmenta_0.0.2-1_amd64.deb dist/segmenta_0.0.2-1_a
   --title "Segmenta 0.0.2" --notes-file dist/RELEASE_NOTES_0.0.2.md
 ```
 
+## Matriz de controles (S24)
+
+Cada fila necesita handler real, estado deshabilitado explicado cuando corresponda, feedback visual,
+etiqueta/tooltip accesible y un test de acción.
+
+| Control | Acción esperada | Estados | Test |
+| --- | --- | --- | --- |
+| Sidebar Todas/Activas/Pausadas/Completadas/Fallidas | filtra la lista y actualiza contadores reales | siempre activo | `filter_counts_and_rows_match` |
+| `+ Añadir URL` / `Ctrl+N` | abre el diálogo de alta | deshabilitado mientras no hay cliente | `add_dialog_opens_and_cancels` |
+| Diálogo: Elegir carpeta | `GtkFileDialog` y refleja la ruta elegida | activo | `add_dialog_picks_a_folder` |
+| Diálogo: Añadir | valida URL/carpeta/nombre, llama `download.add`, cierra y muestra toast | deshabilitado si la URL está vacía, con motivo | `add_dialog_submits_and_reports_errors` |
+| Diálogo: Cancelar | cierra sin llamar al daemon | activo | `add_dialog_cancel_sends_nothing` |
+| Menú hamburguesa | Preferencias, Recargar, Acerca de | activo | `menu_actions_fire` |
+| Preferencias / `Ctrl+,` | abre; cada fila guarda con `settings.update`; error en toast | activo | `preferences_rows_persist` |
+| Buscar / `Ctrl+F` | abre/cierra la barra, filtra en vivo, limpiar y estado vacío | activo | `search_filters_and_clears` |
+| Fila de la lista | abre el detalle de esa tarea | activo | `row_selection_opens_detail` |
+| Pausar | `download.pause` y refresca estado | visible sólo si `downloading` | `detail_actions_follow_state` |
+| Reanudar | `download.resume` | visible sólo si `paused` | `detail_actions_follow_state` |
+| Cancelar | confirma y `download.cancel` | visible si no es terminal | `destructive_actions_confirm` |
+| Eliminar | confirma y `download.delete` | visible si es terminal o pausada | `destructive_actions_confirm` |
+| Abrir carpeta | `xdg-open` sobre el directorio del archivo | visible si hay ruta | `open_folder_uses_the_parent_directory` |
+| Reintentar (error) | reconecta el cliente y recarga la lista | visible sólo en error | `retry_reconnects_after_the_socket_appears` |
+| Acerca de | `AdwAboutDialog` con versión y licencia | activo | `about_dialog_opens` |
+| Recargar | `download.list` inmediato | activo | `reload_fetches_again` |
+| Quit / `Ctrl+Q` | cierra la ventana y termina | activo | `quit_closes_the_window` |
+| Controles de ventana | minimizar/maximizar/cerrar nativos | según el gestor | smoke de widgets |
+
 ## Criterio de release
 
-`v0.0.2` se etiqueta sólo si: las cuatro puertas locales pasan; el `.deb` valida con
+`v0.0.2` se etiqueta sólo si: las cuatro puertas locales pasan; la GUI normal lista una tarea
+completada en menos de 2 s; existen capturas light/dark revisadas; `LANG=es_ES`, `LANG=pt_BR.UTF-8` y
+`LANG=en_US.UTF-8` muestran la UI en su idioma; `journalctl --user -u segmenta` reconstruye un add,
+una pausa, una reanudación y un fallo sin secretos; la matriz de controles está cubierta por tests de
+acción; el `.deb` valida con
 `check-package.sh`; en el remoto el backend es `keyring`, `segmenta add` sin `-d` cae en
 `~/Descargas`, una descarga segmentada de 128 MiB con pausa y reanudación conserva el SHA-256, la
 descarga HTTPS funciona, el smoke de la GUI pasa y `pause`/`resume` sobre una tarea `failed` fallan
@@ -269,6 +363,13 @@ Release 0.0.2 publica `.deb`, `.sha256` y notas sin tocar el 0.0.1.
 > ## Cierre
 >
 > Reportá: defectos corregidos, tests, instalación remota 0.0.2, descarga/pausa/reanudación, backend keyring, XDG, AppStream, tag/release, limpieza y cualquier limitación real. Si algo no se puede probar por el entorno, decilo explícitamente; no inventes un resultado.
+
+**L3 — Ampliación obligatoria antes de publicar.** El QA visual remoto
+(`docs/qa/segmenta-0.0.2-ui-logging.md`) agrega cinco frentes: logging estructurado con redacción,
+i18n es/pt-BR/en, tema claro/oscuro verificable, arranque normal de la GUI (la ventana quedaba en
+«Conectando…» con una tarea completada) y una auditoría de todos los controles. Se agregan S19-S25,
+T8-T13 y la matriz de controles. **No se publica `v0.0.2` hasta que el usuario instale el `.deb` en
+`ssh ubuntu`, pruebe los controles, capture claro/oscuro y valide i18n/logs, y devuelva el informe.**
 
 **L2 — Estado inicial.** `main` en `8df518a` (release 0.0.1) con `docs/qa/segmenta-0.0.1-e2e.md`
 sin versionar. El remoto `ssh ubuntu` responde; tiene `secret-tool`, `xdg-user-dir`, `appstreamcli` y
