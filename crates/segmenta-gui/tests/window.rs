@@ -247,7 +247,7 @@ fn detail_page_shows_one_block_per_segment() {
             Duration::from_secs(5)
         ));
 
-        assert!(window.select_task("task-1"), "task-1 is not selectable");
+        assert!(window.click_task("task-1"), "task-1 is not selectable");
         assert!(
             pump_until(
                 || window.detail_segment_count() == Some(4),
