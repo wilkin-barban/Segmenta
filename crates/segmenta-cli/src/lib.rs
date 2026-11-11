@@ -1,6 +1,8 @@
-//! Segmenta CLI library: the JSON-RPC client and the human-readable renderers.
+//! Segmenta CLI library: the JSON-RPC client, the renderers and the command surface.
 //!
-//! The binary in `main.rs` is a thin clap shell; both layers are testable on their own.
+//! The crate ships two identical binaries, `segmenta-cli` and `segmenta`, so both the
+//! documented OpenSpec name and the short name work after installing the .deb.
 
+pub mod cli;
 pub mod client;
 pub mod render;

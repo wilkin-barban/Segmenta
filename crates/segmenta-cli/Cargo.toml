@@ -16,6 +16,10 @@ path = "src/lib.rs"
 name = "segmenta-cli"
 path = "src/main.rs"
 
+[[bin]]
+name = "segmenta"
+path = "src/bin/segmenta.rs"
+
 [dependencies]
 clap.workspace = true
 serde.workspace = true
