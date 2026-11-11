@@ -129,9 +129,21 @@ pub fn clamp_limit(limit: Option<u32>) -> Result<usize, MediaError> {
 }
 
 /// Whether the URL is an allowed public media URL.
-pub fn validate_media_url(raw: &str) -> Result<url::Url, MediaError> {
+///
+/// `allow_local` mirrors the SSRF setting: with it enabled, loopback `http://` fixtures
+/// are accepted (tests and explicit user opt-in); public media is https only.
+pub fn validate_media_url_with(raw: &str, allow_local: bool) -> Result<url::Url, MediaError> {
     let parsed = url::Url::parse(raw).map_err(|err| MediaError::invalid(err.to_string()))?;
-    if parsed.scheme() != "https" {
+    let loopback = matches!(
+        parsed.host_str().unwrap_or_default(),
+        "127.0.0.1" | "localhost" | "::1"
+    );
+    let accepted = match parsed.scheme() {
+        "https" => true,
+        "http" => allow_local && loopback,
+        _ => false,
+    };
+    if !accepted {
         return Err(MediaError::invalid("media URLs must use https"));
     }
     let host = parsed.host_str().unwrap_or_default();
@@ -142,6 +154,11 @@ pub fn validate_media_url(raw: &str) -> Result<url::Url, MediaError> {
         return Err(MediaError::invalid("media URLs must not embed credentials"));
     }
     Ok(parsed)
+}
+
+/// https-only variant used by callers without settings access.
+pub fn validate_media_url(raw: &str) -> Result<url::Url, MediaError> {
+    validate_media_url_with(raw, false)
 }
 
 /// Whether the host is a YouTube host.
