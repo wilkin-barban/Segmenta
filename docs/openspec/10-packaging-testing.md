@@ -62,8 +62,10 @@ sudo apt install build-essential pkg-config libgtk-4-dev libadwaita-1-dev \
 cargo install cargo-deb
 ```
 
-`ffmpeg` es una dependencia de ejecución sólo para HLS/DASH y se comprueba con `ffmpeg -version` al
-usar la Fase 5; el motor directo no lo necesita. `libsecret` se usa vía D-Bus/Secret Service; no se
+`ffmpeg` es una dependencia de ejecución sólo para HLS/DASH (v1 exige FFmpeg >= 7.0, con el
+demuxer/muxer correspondiente) y se comprueba con `ffmpeg -version` al usar la Fase 5; el motor
+directo no lo necesita. La licencia de FFmpeg debe revisarse antes de distribuir un binario que lo
+enlace; el `.deb` puede declararlo como recomendación en lugar de dependencia obligatoria. `libsecret` se usa vía D-Bus/Secret Service; no se
 enlaza una biblioteca que guarde secretos en SQLite. La versión de Ubuntu de desarrollo se fija en CI
 cuando 26.10 aún no sea estable.
 

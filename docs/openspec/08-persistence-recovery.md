@@ -123,6 +123,14 @@ PRAGMA wal_autocheckpoint = 1000;
 -- Versión del esquema
 PRAGMA user_version = 1;
 
+CREATE TABLE IF NOT EXISTS queues (
+    name TEXT PRIMARY KEY,
+    max_active INTEGER NOT NULL DEFAULT 1 CHECK(max_active BETWEEN 1 AND 8),
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT OR IGNORE INTO queues(name, max_active) VALUES ('main', 3);
+
 CREATE TABLE IF NOT EXISTS downloads (
     id TEXT PRIMARY KEY,
     url TEXT NOT NULL,
@@ -145,7 +153,7 @@ CREATE TABLE IF NOT EXISTS downloads (
     error_message TEXT,
     retry_count INTEGER NOT NULL DEFAULT 0,
     priority INTEGER NOT NULL DEFAULT 0,
-    queue_name TEXT NOT NULL DEFAULT 'main',
+    queue_name TEXT NOT NULL DEFAULT 'main' REFERENCES queues(name),
     download_type TEXT NOT NULL DEFAULT 'direct' CHECK(download_type IN ('direct', 'hls', 'dash')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP
