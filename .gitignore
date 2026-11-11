@@ -1,0 +1,6 @@
+/target
+/dist
+/.atl
+*.deb
+*.sha256
+.env
