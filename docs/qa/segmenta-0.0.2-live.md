@@ -17,7 +17,7 @@ watch -n 10 cat docs/qa/segmenta-0.0.2-live.md
 | Keyring real, XDG y pause/resume honestos | Implementado, pendiente QA remoto | `134165e`; tests manager/secrets | Ninguno local |
 | i18n es / pt-BR / en | Crate base commiteado; GUI/CLI en curso | `9b5f606`; `crates/segmenta-i18n` | Workers de localización fallaron; falta integrar en toda la UI |
 | Arranque normal de la GUI | Corregido en código; pendiente verificación remota | `0beb18a`; `tests/startup.rs` | Falta probar contra daemon real en `ssh ubuntu` |
-| Tema claro/oscuro y capturas | En curso | `screenshots.rs` sin commitear; se itera con `--screenshots` | Compilación/permisos de captura; capturas 0.0.2 aún no existen |
+| Tema claro/oscuro y capturas | Capturas generadas y revisadas | `screenshots.rs` en curso; `docs/qa/screenshots/0.0.2-{light,dark}.png` 1440×900 | Falta commit de `screenshots.rs` y validación remota del `.deb` |
 | Logging estructurado y redacción | Pendiente | Sin `logging.rs`; task T8 | Worker de logging falló; el agente principal debe retomarlo |
 | Matriz de botones/acciones | Pendiente | Sin `tests/actions.rs`; task T12 | Depende de GUI/i18n |
 | Empaquetado 0.0.2 | Pendiente | Versión local `0.0.1`; solo `.deb` 0.0.1 | Falta bump, build y `.deb` |
