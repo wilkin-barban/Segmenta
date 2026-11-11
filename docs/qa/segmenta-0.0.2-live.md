@@ -14,14 +14,17 @@ watch -n 10 cat docs/qa/segmenta-0.0.2-live.md
 
 | Frente | Estado | Evidencia / commit | Bloqueo |
 | --- | --- | --- | --- |
-| Keyring real, XDG y pause/resume honestos | Implementado, verde local | `134165e`; `tests/manager.rs`, `tests/secret_backend.rs` (15 tests) | Falta QA remoto |
-| i18n es / pt-BR / en | **Parcial; falla en QA remoto** | `3c38151`; tabla traducida, pero estados `failed/completed` y `--help` siguen en inglés; ETA PT en español | Corregir estados, ayuda y ETA |
-| Arranque normal de la GUI | **Falla en QA remoto (P1)** | `0beb18a`; conecta el socket (`active_connections=3`) pero queda en “Conectando…” y no lista tareas | Corregir el camino de conexión real; `--smoke` no alcanza |
-| Tema claro/oscuro y capturas | Implementado; capturas revisadas | `49d32b7`; `--screenshots`, `docs/qa/screenshots/0.0.2-{light,dark}.png` 1440×900 | La GUI normal sigue bloqueada antes de mostrar datos |
-| Logging estructurado y redacción | **Verificado en remoto con P2** | `9c1af8b`; journal reconstruye add/pause/resume/failed; sin secretos | `secret_backend` y `checksum_ok` salen `[redacted]` aunque no son secretos |
-| Matriz de botones/acciones | 9 tests locales verdes | `3c38151`; `tests/actions.rs` | No se pudo probar en remoto porque la GUI no carga |
-| Empaquetado 0.0.2 | Generado y validado; **no aprobado** | `dist/segmenta_0.0.2-1_amd64.deb` (3.8 MB); `check-package.sh`: 10/10 paths, AppStream y desktop OK | La QA remota rechazó la release |
-| QA remoto | **Ejecutado: NO PUBLICAR** | `docs/qa/segmenta-0.0.2-e2e.md`; GUI normal atascada + i18n parcial | Corregir P1 y repetir el ciclo |
+| Keyring real, XDG y pause/resume honestos | Publicado y verificado | `134165e`; `tests/manager.rs`, `tests/secret_backend.rs`; keyring y `~/Descargas` en remoto | Ninguno |
+| i18n es / pt-BR / en | Publicado y verificado | `3c38151`, `1403268`; estados/`--help`/ETA localizados en es/pt | Ninguno |
+| Arranque normal de la GUI | Publicado y verificado | `6bc4aad`, `1403268`; lista tareas y spinner eliminado; captura sin cursor | Ninguno |
+| Tema claro/oscuro y capturas | Publicado y verificado | `49d32b7`, `bd19874`; `--screenshots` `rows=1 state=Ready` | Ninguno |
+| Logging estructurado y redacción | Publicado y verificado | `9c1af8b`; `secret_backend`/`checksum_ok` visibles; sin secretos | Ninguno |
+| Matriz de botones/acciones | Publicado; 10 suites GUI | `tests/actions.rs`; gates 37 suites | Ninguno |
+| Empaquetado 0.0.2 | **Publicado** | `.deb` 3.931.124 B, SHA `d76131fe…`; check-package 10/10 | Ninguno |
+| QA remoto | **APTO y publicado** | `docs/qa/segmenta-0.0.2-e2e.md`, quinta pasada | Ninguno |
+
+Release: <https://github.com/wilkin-barban/Segmenta/releases/tag/v0.0.2> · tag `v0.0.2` ·
+assets `.deb` + `.sha256` verificados.
 
 ## Reglas del flujo
 
