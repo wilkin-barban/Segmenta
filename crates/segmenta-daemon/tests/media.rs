@@ -19,6 +19,15 @@ fn fake_tool(dir: &Path) -> std::path::PathBuf {
     let path = dir.join("yt-dlp");
     let body = r#"#!/bin/sh
 printf '%s\n' "$@" > "$FAKE_ARGS"
+case "$*" in
+  *--playlist-end*)
+    cat <<JSON
+{"_type":"playlist","title":"Demo List","entries":[
+  {"title":"One","duration":10,"webpage_url":"https://www.youtube.com/watch?v=one"},
+  {"title":"Two","duration":20,"webpage_url":"https://www.youtube.com/watch?v=two"}]}
+JSON
+    exit 0 ;;
+esac
 for arg in "$@"; do
   if [ "$arg" = "-J" ]; then
     cat <<JSON
@@ -153,6 +162,25 @@ async fn probe_add_playlist_and_private_media() {
         segmenta_daemon::store::DownloadStatus::Completed
     );
     assert!(Path::new(&second.final_path).exists());
+
+    // Probing a playlist must stop at the requested bound: a full `-J` walk aborts
+    // when a later entry is private (the PL590/PLbpi failures in live QA).
+    let probed_playlist = manager
+        .call(
+            "media.probe",
+            Some(json!({"url":"https://www.youtube.com/playlist?list=PL1","kind":"playlist","limit":2})),
+        )
+        .await
+        .expect("playlist probe");
+    let probe_args = std::fs::read_to_string(&args_file).unwrap_or_default();
+    assert!(
+        probe_args.contains("--playlist-end\n2"),
+        "argv: {probe_args} json: {probed_playlist}"
+    );
+    assert_eq!(
+        probed_playlist["playlist"]["count"], 2,
+        "json: {probed_playlist}"
+    );
 
     let added = manager
         .call(

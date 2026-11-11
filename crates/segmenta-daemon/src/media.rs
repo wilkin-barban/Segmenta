@@ -320,10 +320,20 @@ pub fn locate_tool(name: &str) -> Result<PathBuf, MediaError> {
 }
 
 /// Run `yt-dlp -J` and parse the result.
-pub async fn probe_with(tool: &Path, url: &str, kind: &str) -> Result<ProbeOutcome, MediaError> {
-    let output = Command::new(tool)
-        .arg("--no-config")
-        .arg("--no-warnings")
+pub async fn probe_with(
+    tool: &Path,
+    url: &str,
+    kind: &str,
+    limit: Option<usize>,
+) -> Result<ProbeOutcome, MediaError> {
+    let mut command = Command::new(tool);
+    command.arg("--no-config").arg("--no-warnings");
+    // A full `-J` walk fails when any later entry is private or unavailable, so the
+    // probe stops at the requested playlist bound (`--playlist-end N`).
+    if let Some(limit) = limit.filter(|_| kind == "playlist") {
+        command.arg("--playlist-end").arg(limit.to_string());
+    }
+    let output = command
         .arg("-J")
         .arg(url)
         .stdin(Stdio::null())

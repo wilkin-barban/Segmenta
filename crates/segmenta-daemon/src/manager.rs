@@ -1232,14 +1232,19 @@ impl Manager {
         )
         .map_err(Self::media_error)?;
         let kind = params.kind.unwrap_or_else(|| "video".to_string());
-        // Validate the limit even when the probe does not use it yet.
-        let _limit = crate::media::clamp_limit(params.limit).map_err(Self::media_error)?;
+        let limit = crate::media::clamp_limit(params.limit).map_err(Self::media_error)?;
         let host = url.host_str().unwrap_or_default().to_string();
         if crate::media::is_youtube(&host) {
             let tool = crate::media::locate_tool("yt-dlp").map_err(Self::media_error)?;
             let version = crate::media::check_version(&tool).map_err(Self::media_error)?;
             tracing::info!(host = %host, version = %version, "media backend");
-            let outcome = crate::media::probe_with(&tool, url.as_str(), &kind)
+            // Probing a playlist stops at the bound: later private entries abort `-J`.
+            let probe_limit = if kind == "playlist" {
+                Some(limit)
+            } else {
+                None
+            };
+            let outcome = crate::media::probe_with(&tool, url.as_str(), &kind, probe_limit)
                 .await
                 .map_err(Self::media_error)?;
             tracing::info!(host = %host, kind = %outcome.kind, formats = outcome.formats.len(), "media.probe");
@@ -1277,7 +1282,12 @@ impl Manager {
         } else {
             "video"
         };
-        let probe = crate::media::probe_with(&tool, url.as_str(), kind_hint)
+        let probe_limit = if kind_hint == "playlist" {
+            Some(crate::media::clamp_limit(params.playlist_limit).map_err(Self::media_error)?)
+        } else {
+            None
+        };
+        let probe = crate::media::probe_with(&tool, url.as_str(), kind_hint, probe_limit)
             .await
             .map_err(Self::media_error)?;
 
