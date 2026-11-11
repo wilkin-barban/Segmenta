@@ -1,6 +1,10 @@
 //! `segmenta` command line surface: clap parsing, dispatch and exit codes.
 //!
 //! Exit codes: `0` success, `1` daemon/protocol failure, `2` invalid usage (clap).
+//!
+//! Every human word printed by the CLI comes from the [`segmenta_i18n`] catalog; the
+//! locale is resolved once in [`main`] and threaded down explicitly. Paths, commands,
+//! codes, method names and clap's own `--help` text are never translated.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -8,6 +12,7 @@ use std::process::ExitCode;
 use crate::client::{Client, ClientError};
 use crate::render;
 use clap::{Parser, Subcommand};
+use segmenta_i18n::{tr, Locale, Msg};
 use serde_json::{json, Value};
 
 #[derive(Parser, Debug)]
@@ -153,7 +158,11 @@ enum SystemAction {
 
 /// Resolve a task id: full UUIDs pass through, a unique prefix is expanded using
 /// `download.list` so the 8-character id printed by `segmenta list` is enough.
-fn resolve_task_id(client: &mut Client, given: &str) -> Result<String, ClientError> {
+fn resolve_task_id(
+    client: &mut Client,
+    locale: Locale,
+    given: &str,
+) -> Result<String, ClientError> {
     if given.len() >= 36 {
         return Ok(given.to_string());
     }
@@ -170,13 +179,13 @@ fn resolve_task_id(client: &mut Client, given: &str) -> Result<String, ClientErr
     let matches: Vec<&String> = ids.iter().filter(|id| id.starts_with(given)).collect();
     match matches.as_slice() {
         [only] => Ok((*only).clone()),
-        [] => Err(ClientError::Rpc {
-            code: 1001,
-            message: format!("no task starting with `{given}`"),
-        }),
-        many => Err(ClientError::Protocol(format!(
-            "`{given}` matches {} tasks; use a longer prefix",
-            many.len()
+        [] => Err(ClientError::Usage(format!(
+            "{} `{given}`",
+            tr(locale, Msg::CliShortIdUnknown)
+        ))),
+        _ => Err(ClientError::Usage(format!(
+            "`{given}` {}",
+            tr(locale, Msg::CliShortIdAmbiguous)
         ))),
     }
 }
@@ -184,7 +193,8 @@ fn resolve_task_id(client: &mut Client, given: &str) -> Result<String, ClientErr
 /// Parse the arguments and run one command.
 pub fn main() -> ExitCode {
     let cli = Cli::parse();
-    match run(cli) {
+    let locale = segmenta_i18n::current();
+    match run(cli, locale) {
         Ok(text) => {
             print!("{text}");
             ExitCode::SUCCESS
@@ -196,12 +206,12 @@ pub fn main() -> ExitCode {
     }
 }
 
-fn run(cli: Cli) -> Result<String, ClientError> {
+fn run(cli: Cli, locale: Locale) -> Result<String, ClientError> {
     let socket = cli
         .socket
         .clone()
         .unwrap_or_else(crate::client::default_socket_path);
-    let mut client = Client::connect(&socket)?;
+    let mut client = Client::connect_with(&socket, locale)?;
     let json_out = cli.json;
     let mut out = String::new();
 
@@ -239,8 +249,9 @@ fn run(cli: Cli) -> Result<String, ClientError> {
                 let mut map = serde_json::Map::new();
                 for header in headers {
                     let Some((key, value)) = header.split_once(':') else {
-                        return Err(ClientError::Protocol(format!(
-                            "header `{header}` must be \"Name: value\""
+                        return Err(ClientError::Usage(format!(
+                            "{}: `{header}`",
+                            tr(locale, Msg::CliHeaderUsage)
                         )));
                     };
                     map.insert(
@@ -255,9 +266,12 @@ fn run(cli: Cli) -> Result<String, ClientError> {
                 out.push_str(&format!("{result}\n"));
             } else {
                 out.push_str(&format!(
-                    "added {}\n  file: {}\n  status: {}\n",
+                    "{} {}\n  {}: {}\n  {}: {}\n",
+                    tr(locale, Msg::CliAdded),
                     result["task_id"].as_str().unwrap_or("-"),
+                    tr(locale, Msg::CliFile),
                     result["filename"].as_str().unwrap_or("-"),
+                    tr(locale, Msg::CliStatus),
                     result["status"].as_str().unwrap_or("pending"),
                 ));
             }
@@ -276,37 +290,45 @@ fn run(cli: Cli) -> Result<String, ClientError> {
             } else {
                 let views: Vec<segmenta_daemon::rpc::DownloadView> = serde_json::from_value(result)
                     .map_err(|err| {
-                        ClientError::Protocol(format!("unexpected download.list payload: {err}"))
+                        ClientError::Protocol(
+                            tr(locale, Msg::InvalidDaemonResponse)
+                                .replace("{error}", &err.to_string()),
+                        )
                     })?;
-                out.push_str(&render::render_table(&views));
+                out.push_str(&render::render_table(locale, &views));
             }
         }
         Command::Status { task_id } => {
-            let task_id = resolve_task_id(&mut client, &task_id)?;
+            let task_id = resolve_task_id(&mut client, locale, &task_id)?;
             let result = client.call("download.status", json!({ "task_id": task_id }))?;
             if json_out {
                 out.push_str(&format!("{result}\n"));
             } else {
                 let view: segmenta_daemon::rpc::DownloadView = serde_json::from_value(result)
                     .map_err(|err| {
-                        ClientError::Protocol(format!("unexpected download.status payload: {err}"))
+                        ClientError::Protocol(
+                            tr(locale, Msg::InvalidDaemonResponse)
+                                .replace("{error}", &err.to_string()),
+                        )
                     })?;
-                out.push_str(&render::render_status(&view));
+                out.push_str(&render::render_status(locale, &view));
             }
         }
         Command::Pause { task_id } => {
-            let task_id = resolve_task_id(&mut client, &task_id)?;
+            let task_id = resolve_task_id(&mut client, locale, &task_id)?;
             let result = client.call("download.pause", json!({ "task_id": task_id }))?;
             out.push_str(&format!(
-                "paused {}\n",
+                "{} {}\n",
+                tr(locale, Msg::CliPaused),
                 result["task_id"].as_str().unwrap_or("-")
             ));
         }
         Command::Resume { task_id } => {
-            let task_id = resolve_task_id(&mut client, &task_id)?;
+            let task_id = resolve_task_id(&mut client, locale, &task_id)?;
             let result = client.call("download.resume", json!({ "task_id": task_id }))?;
             out.push_str(&format!(
-                "resumed {} ({})\n",
+                "{} {} ({})\n",
+                tr(locale, Msg::CliResumed),
                 result["task_id"].as_str().unwrap_or("-"),
                 result["status"].as_str().unwrap_or("-")
             ));
@@ -315,13 +337,15 @@ fn run(cli: Cli) -> Result<String, ClientError> {
             task_id,
             delete_file,
         } => {
-            let task_id = resolve_task_id(&mut client, &task_id)?;
+            let task_id = resolve_task_id(&mut client, locale, &task_id)?;
             let result = client.call(
                 "download.cancel",
                 json!({ "task_id": task_id, "delete_file": delete_file }),
             )?;
+            // `file_deleted` is the protocol field name, kept verbatim on purpose.
             out.push_str(&format!(
-                "cancelled {} (file deleted: {})\n",
+                "{} {} (file_deleted: {})\n",
+                tr(locale, Msg::CliCancelled),
                 result["task_id"].as_str().unwrap_or("-"),
                 result["file_deleted"].as_bool().unwrap_or(false)
             ));
@@ -330,13 +354,15 @@ fn run(cli: Cli) -> Result<String, ClientError> {
             task_id,
             delete_file,
         } => {
-            let task_id = resolve_task_id(&mut client, &task_id)?;
+            let task_id = resolve_task_id(&mut client, locale, &task_id)?;
             let result = client.call(
                 "download.delete",
                 json!({ "task_id": task_id, "delete_file": delete_file }),
             )?;
+            // `deleted` is the protocol field name, kept verbatim on purpose.
             out.push_str(&format!(
-                "deleted {} (removed: {})\n",
+                "{} {} (deleted: {})\n",
+                tr(locale, Msg::CliDeleted),
                 result["task_id"].as_str().unwrap_or("-"),
                 result["deleted"].as_bool().unwrap_or(false)
             ));
@@ -351,15 +377,11 @@ fn run(cli: Cli) -> Result<String, ClientError> {
                 }
             }
             Some(SettingsAction::Set { pairs }) => {
-                if pairs.is_empty() {
-                    return Err(ClientError::Protocol(
-                        "settings set needs at least one KEY VALUE pair".to_string(),
-                    ));
-                }
-                if pairs.len() % 2 != 0 {
-                    return Err(ClientError::Protocol(
-                        "settings set expects KEY VALUE pairs".to_string(),
-                    ));
+                if pairs.is_empty() || pairs.len() % 2 != 0 {
+                    return Err(ClientError::Usage(format!(
+                        "settings set {}",
+                        tr(locale, Msg::CliPairUsage)
+                    )));
                 }
                 let mut patch = serde_json::Map::new();
                 for pair in pairs.chunks(2) {
@@ -383,7 +405,7 @@ fn run(cli: Cli) -> Result<String, ClientError> {
                 if json_out {
                     out.push_str(&format!("{result}\n"));
                 } else {
-                    out.push_str(&render::render_queues(&result));
+                    out.push_str(&render::render_queues(locale, &result));
                 }
             }
             QueueAction::Create { name, max_active } => {
@@ -391,15 +413,17 @@ fn run(cli: Cli) -> Result<String, ClientError> {
                     "queue.create",
                     json!({ "name": name, "max_active": max_active }),
                 )?;
+                // `max_active` is the protocol field name, kept verbatim on purpose.
                 out.push_str(&format!(
-                    "created queue {} (max_active {})\n",
+                    "{} {} (max_active {})\n",
+                    tr(locale, Msg::CliQueueCreated),
                     result["name"].as_str().unwrap_or("-"),
                     result["max_active"].as_u64().unwrap_or(0)
                 ));
             }
             QueueAction::Remove { name } => {
                 client.call("queue.remove", json!({ "name": name }))?;
-                out.push_str(&format!("removed queue {name}\n"));
+                out.push_str(&format!("{} {name}\n", tr(locale, Msg::CliQueueRemoved)));
             }
             QueueAction::Schedule {
                 name,
@@ -425,8 +449,10 @@ fn run(cli: Cli) -> Result<String, ClientError> {
                 out.push_str(&format!("{result}\n"));
             } else {
                 out.push_str(&format!(
-                    "segmenta daemon {} (protocol v{})\n",
+                    "{} {} ({} v{})\n",
+                    tr(locale, Msg::CliHello),
                     result["daemon_version"].as_str().unwrap_or("-"),
+                    tr(locale, Msg::CliProtocol),
                     result["protocol_version"].as_u64().unwrap_or(0)
                 ));
             }
@@ -438,18 +464,23 @@ fn run(cli: Cli) -> Result<String, ClientError> {
                     out.push_str(&format!("{result}\n"));
                 } else {
                     out.push_str(&format!(
-                        "daemon:      {}\nuptime:      {} s\nmemory:      {}\nconnections: {}\nsecrets:     {}\n",
+                        "{:<12} {}\n{:<12} {} s\n{:<12} {}\n{:<12} {}\n{:<12} {}\n",
+                        format!("{}:", tr(locale, Msg::DaemonVersion)),
                         result["daemon_version"].as_str().unwrap_or("-"),
+                        format!("{}:", tr(locale, Msg::CliUptime)),
                         result["uptime_seconds"].as_u64().unwrap_or(0),
+                        format!("{}:", tr(locale, Msg::CliMemory)),
                         render::format_bytes(result["memory_bytes"].as_u64().unwrap_or(0)),
+                        format!("{}:", tr(locale, Msg::CliConnections)),
                         result["active_connections"].as_u64().unwrap_or(0),
+                        format!("{}:", tr(locale, Msg::CliSecrets)),
                         result["secret_backend"].as_str().unwrap_or("-"),
                     ));
                 }
             }
             SystemAction::Shutdown => {
                 client.call("system.shutdown", json!({}))?;
-                out.push_str("daemon stopped\n");
+                out.push_str(&format!("{}\n", tr(locale, Msg::CliDaemonStopped)));
             }
         },
     }

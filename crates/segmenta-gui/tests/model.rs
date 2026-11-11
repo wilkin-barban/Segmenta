@@ -8,6 +8,7 @@ use segmenta_gui::model::{
     format_bytes, format_eta, format_speed, Counts, DownloadItem, DownloadStatus, DownloadStore,
     Filter, ProgressUpdate, SegmentItem, SeqStatus, Settings,
 };
+use segmenta_i18n::Locale;
 
 fn row(task_id: &str, status: &str) -> DownloadItem {
     serde_json::from_value(json!({
@@ -267,13 +268,13 @@ fn spanish_units_and_labels() {
     assert_eq!(format_eta(Some(45)), "Quedan 45 s");
     assert_eq!(format_eta(Some(90)), "Quedan 1 min");
     assert_eq!(format_eta(Some(3700)), "Quedan 1 h 1 min");
-    assert_eq!(DownloadStatus::Downloading.label_es(), "Descargando");
-    assert_eq!(DownloadStatus::Paused.label_es(), "Pausada");
-    assert_eq!(DownloadStatus::Completed.label_es(), "Completada");
-    assert_eq!(DownloadStatus::Failed.label_es(), "Fallida");
-    assert_eq!(DownloadStatus::Pending.label_es(), "En espera");
-    assert_eq!(Filter::All.label_es(), "Todas");
-    assert_eq!(Filter::Active.label_es(), "Activas");
+    assert_eq!(DownloadStatus::Downloading.label(Locale::Es), "Descargando");
+    assert_eq!(DownloadStatus::Paused.label(Locale::Es), "Pausada");
+    assert_eq!(DownloadStatus::Completed.label(Locale::Es), "Completada");
+    assert_eq!(DownloadStatus::Failed.label(Locale::Es), "Fallida");
+    assert_eq!(DownloadStatus::Pending.label(Locale::Es), "En espera");
+    assert_eq!(Filter::All.label(Locale::Es), "Todas");
+    assert_eq!(Filter::Active.label(Locale::Es), "Activas");
 }
 
 #[test]

@@ -1,6 +1,24 @@
 //! Human-readable rendering for the CLI: sizes, speeds, ETAs, tables and segment bars.
+//!
+//! Every human word comes from the [`segmenta_i18n`] catalog through [`tr`], and each
+//! renderer takes an explicit [`Locale`] so tests never mutate the process environment.
+//! Values owned by the daemon (task ids, URLs, paths, queue names, protocol status words,
+//! stable codes) are printed verbatim and never translated.
+//!
+//! Catalog gaps left in English on purpose: the status block keeps the `ranges`, `error`
+//! labels and the `yes`/`no` values, and the queue table keeps its `SLOTS` column, because
+//! the catalog has no key for them yet.
 
 use segmenta_daemon::rpc::DownloadView;
+use segmenta_i18n::{tr, ErrorText, Locale, Msg};
+
+/// Width of the `label:` column of the detail blocks.
+const LABEL_WIDTH: usize = 12;
+
+/// A padded `label:` for the key/value blocks.
+fn label(locale: Locale, msg: Msg) -> String {
+    format!("{:<LABEL_WIDTH$}", format!("{}:", tr(locale, msg)))
+}
 
 /// Format a byte count with binary units.
 pub fn format_bytes(bytes: u64) -> String {
@@ -64,13 +82,19 @@ fn truncate(text: &str, width: usize) -> String {
 }
 
 /// Render the `list` table.
-pub fn render_table(rows: &[DownloadView]) -> String {
+pub fn render_table(locale: Locale, rows: &[DownloadView]) -> String {
     if rows.is_empty() {
-        return "No downloads.\n".to_string();
+        return format!("{}\n", tr(locale, Msg::CliNoDownloads));
     }
     let header = format!(
         "{:<8}  {:<11}  {:>6}  {:>10}  {:>10}  {:>8}  {}",
-        "ID", "STATUS", "PROG", "SIZE", "SPEED", "ETA", "NAME"
+        tr(locale, Msg::CliTableId),
+        tr(locale, Msg::CliTableStatus),
+        tr(locale, Msg::CliTableProgress),
+        tr(locale, Msg::CliTableSize),
+        tr(locale, Msg::CliTableSpeed),
+        tr(locale, Msg::CliTableEta),
+        tr(locale, Msg::CliTableName),
     );
     let mut out = String::new();
     out.push_str(&header);
@@ -95,43 +119,68 @@ pub fn render_table(rows: &[DownloadView]) -> String {
 }
 
 /// Render one download in detail, including a per-segment bar.
-pub fn render_status(view: &DownloadView) -> String {
+pub fn render_status(locale: Locale, view: &DownloadView) -> String {
     let mut out = String::new();
-    out.push_str(&format!("task:      {}\n", view.task_id));
-    out.push_str(&format!("url:       {}\n", view.url));
-    out.push_str(&format!("file:      {}\n", view.final_path));
-    out.push_str(&format!("status:    {}\n", view.status));
     out.push_str(&format!(
-        "progress:  {} of ",
-        format_bytes(view.downloaded_bytes)
+        "{}{}\n",
+        label(locale, Msg::CliTableId),
+        view.task_id
     ));
-    out.push_str(
-        &view
-            .total_bytes
-            .map(format_bytes)
-            .unwrap_or_else(|| "unknown".to_string()),
-    );
-    out.push('\n');
+    out.push_str(&format!("{}{}\n", label(locale, Msg::UrlLabel), view.url));
     out.push_str(&format!(
-        "speed:     {}   eta: {}\n",
+        "{}{}\n",
+        label(locale, Msg::CliFile),
+        view.final_path
+    ));
+    out.push_str(&format!(
+        "{}{}\n",
+        label(locale, Msg::CliStatus),
+        view.status
+    ));
+    let total = view
+        .total_bytes
+        .map(format_bytes)
+        .unwrap_or_else(|| tr(locale, Msg::UnknownSize).to_string());
+    out.push_str(&format!(
+        "{}{} / {}\n",
+        label(locale, Msg::CliTableProgress),
+        format_bytes(view.downloaded_bytes),
+        total
+    ));
+    out.push_str(&format!(
+        "{}{}   {}{}\n",
+        label(locale, Msg::Speed),
         format_speed(view.speed_bps),
+        label(locale, Msg::Eta),
         format_eta(view.eta_seconds)
     ));
+    // `ranges` has no catalog key yet; the label and its yes/no stay English on purpose.
     out.push_str(&format!(
-        "ranges:    {}   queue: {}   retries: {}\n",
+        "ranges: {}  {}: {}  {}: {}\n",
         if view.supports_ranges { "yes" } else { "no" },
+        tr(locale, Msg::Queues),
         view.queue_name,
-        view.retry_count
+        tr(locale, Msg::MaxRetries),
+        view.retry_count,
     ));
     if let Some(message) = &view.error_message {
-        out.push_str(&format!(
-            "error:     {} ({})\n",
-            message,
-            view.error_code.unwrap_or(0)
-        ));
+        // The daemon keeps the code as the source of truth; the client resolves the text.
+        let text = match view
+            .error_code
+            .and_then(ErrorText::from_code)
+            .map(|error| (segmenta_i18n::tr_error(locale, error), view.error_code))
+        {
+            Some((localized, Some(code))) => format!("{localized} (code {code})"),
+            Some((localized, None)) => localized.to_string(),
+            None => match view.error_code {
+                Some(code) => format!("{message} (code {code})"),
+                None => message.clone(),
+            },
+        };
+        out.push_str(&format!("error:     {text}\n"));
     }
     if !view.segments.is_empty() {
-        out.push_str("segments:  ");
+        out.push_str(&label(locale, Msg::Segments));
         for segment in &view.segments {
             let width = segment.end_offset - segment.start_offset + 1;
             let written = segment
@@ -156,6 +205,9 @@ pub fn render_status(view: &DownloadView) -> String {
 }
 
 /// Render the settings object as `key = value` lines.
+///
+/// Keys and values come from the daemon: there is no human word of the CLI here, so the
+/// output is identical in every locale.
 pub fn render_settings(settings: &serde_json::Value) -> String {
     let Some(map) = settings.as_object() else {
         return format!("{settings}\n");
@@ -173,20 +225,25 @@ pub fn render_settings(settings: &serde_json::Value) -> String {
 }
 
 /// Render the queue list.
-pub fn render_queues(queues: &serde_json::Value) -> String {
+pub fn render_queues(locale: Locale, queues: &serde_json::Value) -> String {
     let Some(rows) = queues.as_array() else {
         return format!("{queues}\n");
     };
     if rows.is_empty() {
-        return "No queues.\n".to_string();
+        return format!("{}\n", tr(locale, Msg::CliNoQueues));
     }
+    // The `SLOTS` column has no catalog key yet and stays English on purpose.
     let mut out = format!(
-        "{:<16} {:>6} {:>7} {:>7} {:>7}\n",
-        "NAME", "SLOTS", "ACTIVE", "PENDING", "PAUSED"
+        "{:<16} {:>6} {:>10} {:>10} {:>10}\n",
+        tr(locale, Msg::CliTableName),
+        "SLOTS",
+        tr(locale, Msg::FilterActive),
+        tr(locale, Msg::StatusPending),
+        tr(locale, Msg::StatusPaused),
     );
     for row in rows {
         out.push_str(&format!(
-            "{:<16} {:>6} {:>7} {:>7} {:>7}\n",
+            "{:<16} {:>6} {:>10} {:>10} {:>10}\n",
             row["name"].as_str().unwrap_or("-"),
             row["max_active"].as_u64().unwrap_or(0),
             row["active"].as_u64().unwrap_or(0),
@@ -259,8 +316,8 @@ mod tests {
 
     #[test]
     fn the_table_lists_a_row_per_download_and_handles_empty() {
-        assert_eq!(render_table(&[]), "No downloads.\n");
-        let table = render_table(&[view()]);
+        assert_eq!(render_table(Locale::En, &[]), "No downloads.\n");
+        let table = render_table(Locale::En, &[view()]);
         assert!(table.starts_with("ID "));
         assert!(table.contains("c1f7a28e"));
         assert!(table.contains("downloading"));
@@ -270,13 +327,18 @@ mod tests {
 
     #[test]
     fn status_renders_segments_and_errors() {
+        let download = view();
+        let text = render_status(Locale::En, &download);
+        assert!(text.contains("c1f7a28e-8b1b-4f9e-9d22-29f123456789"));
+        assert!(text.contains("[####....]"));
+        // A known code is resolved in the client and keeps the code visible.
         let mut download = view();
-        let text = render_status(&download);
-        assert!(text.contains("task:      c1f7a28e-8b1b-4f9e-9d22-29f123456789"));
-        assert!(text.contains("segments:  [####....]"));
         download.error_message = Some("disk full".to_string());
         download.error_code = Some(1006);
-        assert!(render_status(&download).contains("disk full (1006)"));
+        assert!(render_status(Locale::En, &download).contains("Not enough disk space (code 1006)"));
+        // An unknown code falls back to the daemon message.
+        download.error_code = Some(4242);
+        assert!(render_status(Locale::En, &download).contains("disk full (code 4242)"));
     }
 
     #[test]

@@ -40,7 +40,7 @@ maintainer = "Wilkin Barban Rosabal <barbanwilkin@gmail.com>"
 copyright = "2026, Wilkin Barban Rosabal"
 license-file = ["../../LICENSE", "0"]
 extended-description = "Segmenta downloads HTTP and HTTPS files with several connections at once, writes every byte at its final offset and keeps the segment table in SQLite so a download survives a pause, a crash or a reboot. This package installs the download daemon (systemd user units), the segmenta CLI and the GTK4/Libadwaita desktop client."
-depends = "$auto, libgtk-4-1, libadwaita-1-0"
+depends = "$auto, libgtk-4-1, libadwaita-1-0, libsecret-tools"
 recommends = "ffmpeg"
 assets = [
     ["../../target/release/segmenta-gui", "usr/bin/", "755"],

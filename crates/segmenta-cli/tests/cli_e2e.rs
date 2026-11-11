@@ -97,6 +97,26 @@ impl Sandbox {
         }
     }
 
+    /// Run the CLI in `lang`, clearing the locale variables that would win over it.
+    fn cli_in(&self, lang: &str, args: &[&str]) -> Output {
+        let output = Command::new(binary("segmenta-cli"))
+            .env("XDG_DATA_HOME", self.root.path().join("data"))
+            .env("XDG_RUNTIME_DIR", self.root.path().join("run"))
+            .env("HOME", self.root.path().join("home"))
+            .env("SEGMENTA_SOCKET", self.socket())
+            .env_remove("LC_ALL")
+            .env_remove("LC_MESSAGES")
+            .env("LANG", lang)
+            .args(args)
+            .output()
+            .expect("run segmenta-cli");
+        Output {
+            code: output.status.code().unwrap_or(-1),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        }
+    }
+
     /// Wait until `check` returns something, or panic with the daemon log.
     fn wait<T>(&self, label: &str, timeout: Duration, mut check: impl FnMut() -> Option<T>) -> T {
         let started = Instant::now();
@@ -429,6 +449,54 @@ fn a_ten_megabyte_download_survives_a_daemon_kill_and_matches_its_checksum() {
     let status = sandbox.cli_one(&["status", &task_id]);
     assert_eq!(status.code, 0);
     assert!(status.stdout.contains("completed"));
+}
+
+#[test]
+fn the_cli_is_localized_from_the_environment() {
+    let sandbox = Sandbox::new();
+    let _daemon = sandbox.daemon();
+
+    // A pending task is enough to print the table; nothing is downloaded.
+    let added = sandbox.cli_in(
+        "es_ES.UTF-8",
+        &["add", "--no-start", "https://example.test/ubuntu.iso"],
+    );
+    assert_eq!(added.code, 0, "add failed: {}", added.stderr);
+    assert!(
+        added.stdout.contains("añadida"),
+        "the add line must be Spanish: {}",
+        added.stdout
+    );
+
+    let es = sandbox.cli_in("es_ES.UTF-8", &["list"]);
+    assert_eq!(es.code, 0, "list failed: {}", es.stderr);
+    let header = es.stdout.lines().next().unwrap_or_default();
+    assert!(header.contains("ESTADO"), "stdout: {}", es.stdout);
+    assert!(header.contains("TAMAÑO"), "stdout: {}", es.stdout);
+
+    let pt = sandbox.cli_in("pt_BR.UTF-8", &["list"]);
+    assert_eq!(pt.code, 0, "list failed: {}", pt.stderr);
+    let header = pt.stdout.lines().next().unwrap_or_default();
+    assert!(header.contains("STATUS"), "stdout: {}", pt.stdout);
+    assert!(header.contains("TAMANHO"), "stdout: {}", pt.stdout);
+    assert!(
+        !pt.stdout.contains("TAMAÑO"),
+        "pt-BR must not fall back to Spanish: {}",
+        pt.stdout
+    );
+
+    // `--json` stays machine-readable in every locale: no localized word at all.
+    let json = sandbox.cli_in("es_ES.UTF-8", &["--json", "list"]);
+    assert_eq!(json.code, 0, "json list failed: {}", json.stderr);
+    let rows: Vec<Value> = serde_json::from_str(json.stdout.trim()).expect("list is JSON");
+    assert_eq!(rows.len(), 1, "stdout: {}", json.stdout);
+    for word in ["ESTADO", "TAMAÑO", "añadida", "archivo"] {
+        assert!(
+            !json.stdout.contains(word),
+            "the JSON payload leaked `{word}`: {}",
+            json.stdout
+        );
+    }
 }
 
 #[test]

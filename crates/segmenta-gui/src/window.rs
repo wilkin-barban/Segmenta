@@ -76,6 +76,8 @@ struct Inner {
     query: RefCell<String>,
     queue: RefCell<Option<String>>,
     view_state: RefCell<ViewState>,
+    add_dialog: RefCell<Option<adw::Dialog>>,
+    confirm_dialog: RefCell<Option<adw::AlertDialog>>,
     last_error: RefCell<Option<String>>,
     settings: RefCell<Settings>,
     bus: RequestBus,
@@ -160,6 +162,8 @@ impl SegmentaWindow {
             query: RefCell::new(String::new()),
             queue: RefCell::new(None),
             view_state: RefCell::new(ViewState::Loading),
+            add_dialog: RefCell::new(None),
+            confirm_dialog: RefCell::new(None),
             last_error: RefCell::new(None),
             settings: RefCell::new(Settings::default()),
             bus: RequestBus::new(),
@@ -263,15 +267,108 @@ impl SegmentaWindow {
         let window = self.0.window.clone();
         let client = Arc::clone(&self.0.client);
         let handle = self.clone();
-        add_dialog::present(
+        let dialog = add_dialog::present(
             &window,
             client,
             defaults,
             Rc::new(move |filename: String| {
-                handle.0.toast(&format!("Añadida: {filename}"));
+                handle
+                    .0
+                    .toast(&tr(locale(), Msg::ToastAdded).replace("{filename}", &filename));
                 handle.0.reload_all();
             }),
         );
+        *self.0.add_dialog.borrow_mut() = Some(dialog);
+    }
+
+    /// Whether the "add download" dialog is open (used by the action tests).
+    pub fn add_dialog_open(&self) -> bool {
+        self.0
+            .add_dialog
+            .borrow()
+            .as_ref()
+            .map(|dialog| dialog.is_visible())
+            .unwrap_or(false)
+    }
+
+    /// Close the "add download" dialog without sending anything.
+    pub fn close_add_dialog(&self) {
+        if let Some(dialog) = self.0.add_dialog.borrow_mut().take() {
+            dialog.close();
+        }
+    }
+
+    /// Set the search text the way the search entry does.
+    pub fn set_query(&self, query: &str) {
+        *self.0.query.borrow_mut() = query.to_string();
+        self.0.refill();
+    }
+
+    /// Toggle the search bar (the `win.search` action body).
+    pub fn toggle_search(&self) {
+        let visible = !self.0.search_bar.is_search_mode();
+        self.0.search_bar.set_search_mode(visible);
+    }
+
+    /// Whether the search bar is open.
+    pub fn search_active(&self) -> bool {
+        self.0.search_bar.is_search_mode()
+    }
+
+    /// Detail actions currently offered for the selected task.
+    pub fn detail_actions(&self) -> Vec<String> {
+        let Some(item) = self.detail() else {
+            return Vec::new();
+        };
+        let mut actions = Vec::new();
+        if item.status.can_pause() {
+            actions.push("pause".to_string());
+        }
+        if item.status.can_resume() {
+            actions.push("resume".to_string());
+        }
+        if item.status.can_cancel() {
+            actions.push("cancel".to_string());
+        }
+        if item.status.can_delete() {
+            actions.push("delete".to_string());
+        }
+        if !item.final_path.is_empty() {
+            actions.push("open_folder".to_string());
+        }
+        actions
+    }
+
+    /// Ask for confirmation to delete the selected task (does not mutate anything).
+    pub fn begin_delete(&self) {
+        self.0.begin_delete_selected();
+    }
+
+    /// Whether a confirmation dialog is waiting for an answer.
+    pub fn confirmation_pending(&self) -> bool {
+        self.0
+            .confirm_dialog
+            .borrow()
+            .as_ref()
+            .map(|dialog| dialog.is_visible())
+            .unwrap_or(false)
+    }
+
+    /// Dismiss the pending confirmation without accepting it.
+    pub fn dismiss_confirmation(&self) {
+        if let Some(dialog) = self.0.confirm_dialog.borrow_mut().take() {
+            dialog.force_close();
+        }
+    }
+
+    /// Actions the window exposes (menu and toolbar wiring).
+    pub fn action_names(&self) -> Vec<String> {
+        self.0
+            .window
+            .list_actions()
+            .into_iter()
+            .map(|name| name.to_string())
+            .collect()
     }
 
     /// Opens the preferences dialog.
@@ -312,7 +409,7 @@ impl Inner {
 
         let add_button = gtk::Button::with_label(tr(locale(), Msg::AddUrl));
         add_button.add_css_class("suggested-action");
-        add_button.set_tooltip_text(Some("Añadir una descarga (Ctrl+N)"));
+        add_button.set_tooltip_text(Some(tr(locale(), Msg::MenuAddTooltip)));
         header.pack_start(&add_button);
         let add_handle = Rc::downgrade(self);
         add_button.connect_clicked(move |_| {
@@ -338,9 +435,15 @@ impl Inner {
         });
 
         let menu = gtk::gio::Menu::new();
-        menu.append(Some("Preferencias"), Some("win.preferences"));
-        menu.append(Some("Acerca de"), Some("win.about"));
-        menu.append(Some("Salir"), Some("app.quit"));
+        menu.append(Some(tr(locale(), Msg::AddUrl)), Some("win.add"));
+        menu.append(Some(tr(locale(), Msg::Reload)), Some("win.reload"));
+        menu.append(Some(tr(locale(), Msg::Search)), Some("win.search"));
+        menu.append(
+            Some(tr(locale(), Msg::Preferences)),
+            Some("win.preferences"),
+        );
+        menu.append(Some(tr(locale(), Msg::About)), Some("win.about"));
+        menu.append(Some(tr(locale(), Msg::Quit)), Some("app.quit"));
         let menu_button = gtk::MenuButton::new();
         menu_button.set_icon_name("open-menu-symbolic");
         menu_button.set_menu_model(Some(&menu));
@@ -391,7 +494,7 @@ impl Inner {
 
         let sidebar = self.build_sidebar();
         let sidebar_page = adw::NavigationPage::builder()
-            .title("Descargas")
+            .title(tr(locale(), Msg::WindowTitle))
             .child(&sidebar)
             .build();
 
@@ -401,7 +504,7 @@ impl Inner {
         content_toolbar.set_content(Some(&self.stack));
 
         let content_page = adw::NavigationPage::builder()
-            .title("Descargas")
+            .title(tr(locale(), Msg::WindowTitle))
             .child(&content_toolbar)
             .build();
 
@@ -415,7 +518,7 @@ impl Inner {
         // The navigation view owns the split view so a selected row can push a
         // full detail page with its own header bar and back button.
         let root_page = adw::NavigationPage::builder()
-            .title("Descargas")
+            .title(tr(locale(), Msg::WindowTitle))
             .child(&split)
             .build();
         root_page.set_tag(Some("downloads"));
@@ -680,7 +783,9 @@ impl Inner {
         let handle = Rc::downgrade(self);
         reload.connect_activate(move |_, _| {
             if let Some(inner) = handle.upgrade() {
+                inner.set_loading();
                 inner.reload_all();
+                inner.load_settings();
             }
         });
         self.window.add_action(&reload);
@@ -836,9 +941,9 @@ impl Inner {
                         self.refill();
                         self.update_detail();
                     }
-                    Err(err) => {
-                        self.set_error(format!("Respuesta inválida del daemon al listar: {err}"))
-                    }
+                    Err(err) => self.set_error(
+                        tr(locale(), Msg::InvalidListResponse).replace("{error}", &err.to_string()),
+                    ),
                 },
                 Err(err) => self.set_error(err.ui_message()),
             },
@@ -1410,9 +1515,9 @@ impl Inner {
                 return;
             };
             inner.confirm(
-                "¿Cancelar la descarga?",
-                "Se detendrá la transferencia y la tarea quedará como cancelada.",
-                "Cancelar la descarga",
+                tr(locale(), Msg::ConfirmCancelTitle),
+                tr(locale(), Msg::ConfirmCancelBodyLong),
+                tr(locale(), Msg::Cancel),
                 true,
                 Rc::new({
                     let inner = Rc::clone(&inner);
@@ -1435,9 +1540,9 @@ impl Inner {
                 return;
             };
             inner.confirm(
-                "¿Eliminar de la lista?",
-                "Se borrará el registro de la tarea. El archivo descargado no se toca.",
-                "Eliminar",
+                tr(locale(), Msg::ConfirmDeleteTitle),
+                tr(locale(), Msg::ConfirmDeleteBodyLong),
+                tr(locale(), Msg::Delete),
                 true,
                 Rc::new({
                     let inner = Rc::clone(&inner);
@@ -1502,14 +1607,43 @@ impl Inner {
             alert.set_response_appearance("accept", adw::ResponseAppearance::Destructive);
         }
         let window = self.window.clone();
+        *self.confirm_dialog.borrow_mut() = Some(alert.clone());
+        let pending = Rc::downgrade(self);
         alert.choose(
             Some(&window),
             None::<&gtk::gio::Cancellable>,
             move |response| {
+                if let Some(inner) = pending.upgrade() {
+                    *inner.confirm_dialog.borrow_mut() = None;
+                }
                 if response == "accept" {
                     on_accept();
                 }
             },
+        );
+    }
+
+    /// Ask for confirmation before deleting the selected task (the detail button path).
+    fn begin_delete_selected(self: &Rc<Self>) {
+        let Some(item) = SegmentaWindow(Rc::clone(self)).detail() else {
+            return;
+        };
+        let task = item.task_id.clone();
+        let handle = Rc::downgrade(self);
+        self.confirm(
+            tr(locale(), Msg::ConfirmDeleteTitle),
+            tr(locale(), Msg::ConfirmDeleteBodyLong),
+            tr(locale(), Msg::Delete),
+            true,
+            Rc::new(move || {
+                if let Some(inner) = handle.upgrade() {
+                    inner.request(
+                        "download.delete",
+                        json!({ "task_id": task, "delete_file": false }),
+                        Pending::Delete(task.clone()),
+                    );
+                }
+            }),
         );
     }
 }
