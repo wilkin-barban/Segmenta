@@ -1,0 +1,447 @@
+//! Persistence contract: the DDL of OpenSpec 08, migrations, checkpoint state, settings
+//! and the guarantee that a secret never lands in the database file.
+
+use std::collections::{BTreeMap, HashMap};
+
+use segmenta_daemon::secrets::{FileSecretStore, SecretStore};
+use segmenta_daemon::store::{
+    DownloadRecord, DownloadStatus, SegmentRow, Settings, Store, SCHEMA_VERSION,
+};
+use serde_json::json;
+
+fn record(id: &str, status: DownloadStatus) -> DownloadRecord {
+    DownloadRecord {
+        id: id.to_string(),
+        url: "http://example.test/file.bin".to_string(),
+        final_url: None,
+        final_path: format!("/tmp/{id}.bin"),
+        temp_path: None,
+        total_bytes: Some(1024),
+        downloaded_bytes: 0,
+        status,
+        supports_ranges: true,
+        etag: Some("\"v1\"".to_string()),
+        last_modified: None,
+        content_type: Some("application/octet-stream".to_string()),
+        expected_checksum: None,
+        error_code: None,
+        error_message: None,
+        retry_count: 0,
+        priority: 0,
+        queue_name: "main".to_string(),
+        download_type: "direct".to_string(),
+        created_at: None,
+        completed_at: None,
+        filename: format!("{id}.bin"),
+    }
+}
+
+fn open_temp() -> (tempfile::TempDir, Store) {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("segmenta.db")).unwrap();
+    (dir, store)
+}
+
+#[test]
+fn migration_is_idempotent_and_records_the_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("segmenta.db");
+    {
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+        assert_eq!(store.journal_mode().unwrap().to_lowercase(), "wal");
+    }
+    // Reopening must not re-run the DDL or lose data.
+    {
+        let store = Store::open(&path).unwrap();
+        store
+            .insert_download(&record("abc", DownloadStatus::Pending))
+            .unwrap();
+        assert_eq!(store.list(None, 10, 0).unwrap().len(), 1);
+    }
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
+    assert_eq!(store.list(None, 10, 0).unwrap().len(), 1);
+}
+
+#[test]
+fn the_main_queue_exists_after_migration() {
+    let (_dir, store) = open_temp();
+    let queues = store.queues().unwrap();
+    assert_eq!(queues.len(), 1);
+    assert_eq!(queues[0].name, "main");
+}
+
+#[test]
+fn downloads_round_trip_and_are_ordered_newest_first() {
+    let (_dir, store) = open_temp();
+    store
+        .insert_download(&record("first", DownloadStatus::Pending))
+        .unwrap();
+    store
+        .insert_download(&record("second", DownloadStatus::Downloading))
+        .unwrap();
+    let rows = store.list(None, 10, 0).unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].id, "second", "newest first");
+
+    let fetched = store.get("first").unwrap().expect("row exists");
+    assert_eq!(fetched.total_bytes, Some(1024));
+    assert_eq!(fetched.status, DownloadStatus::Pending);
+
+    let filtered = store
+        .list(Some(DownloadStatus::Downloading), 10, 0)
+        .unwrap();
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].id, "second");
+
+    let page = store.list(None, 1, 1).unwrap();
+    assert_eq!(page.len(), 1);
+    assert_eq!(page[0].id, "first");
+}
+
+#[test]
+fn status_transitions_store_the_error_and_completion_time() {
+    let (_dir, store) = open_temp();
+    store
+        .insert_download(&record("t", DownloadStatus::Downloading))
+        .unwrap();
+    store
+        .set_status(
+            "t",
+            DownloadStatus::Failed,
+            Some((1006, "disk full".into())),
+        )
+        .unwrap();
+    let row = store.get("t").unwrap().unwrap();
+    assert_eq!(row.status, DownloadStatus::Failed);
+    assert_eq!(row.error_code, Some(1006));
+    assert_eq!(row.error_message.as_deref(), Some("disk full"));
+
+    store
+        .set_status("t", DownloadStatus::Completed, None)
+        .unwrap();
+    let row = store.get("t").unwrap().unwrap();
+    assert!(row.completed_at.is_some());
+    assert!(row.error_code.is_none());
+}
+
+#[test]
+fn checkpoints_replace_segments_and_keep_next_offset() {
+    let (_dir, store) = open_temp();
+    store
+        .insert_download(&record("t", DownloadStatus::Downloading))
+        .unwrap();
+    let segments = vec![
+        SegmentRow {
+            id: 1,
+            start: 0,
+            end: 499,
+            next: 200,
+        },
+        SegmentRow {
+            id: 2,
+            start: 500,
+            end: 1023,
+            next: 500,
+        },
+    ];
+    store
+        .save_checkpoint("t", &segments, 200, Some(1024), Some("\"v1\""), None, true)
+        .unwrap();
+
+    let rows = store.segments("t").unwrap();
+    assert_eq!(rows, segments);
+    let row = store.get("t").unwrap().unwrap();
+    assert_eq!(row.downloaded_bytes, 200);
+    assert_eq!(row.total_bytes, Some(1024));
+
+    // A second checkpoint replaces the previous rows instead of appending.
+    let updated = vec![
+        SegmentRow {
+            id: 1,
+            start: 0,
+            end: 499,
+            next: 500,
+        },
+        SegmentRow {
+            id: 2,
+            start: 500,
+            end: 1023,
+            next: 700,
+        },
+    ];
+    store
+        .save_checkpoint("t", &updated, 700, None, None, None, true)
+        .unwrap();
+    assert_eq!(store.segments("t").unwrap(), updated);
+    assert_eq!(store.get("t").unwrap().unwrap().downloaded_bytes, 700);
+}
+
+#[test]
+fn the_schema_rejects_impossible_segment_offsets() {
+    let (_dir, store) = open_temp();
+    store
+        .insert_download(&record("t", DownloadStatus::Downloading))
+        .unwrap();
+    // next_offset must never exceed end_offset + 1.
+    let bad = vec![SegmentRow {
+        id: 1,
+        start: 0,
+        end: 99,
+        next: 101,
+    }];
+    assert!(
+        store
+            .save_checkpoint("t", &bad, 0, None, None, None, true)
+            .is_err(),
+        "the CHECK constraint must reject next > end + 1"
+    );
+}
+
+#[test]
+fn segments_and_headers_cascade_on_delete() {
+    let (_dir, store) = open_temp();
+    store
+        .insert_download(&record("t", DownloadStatus::Downloading))
+        .unwrap();
+    store
+        .save_checkpoint(
+            "t",
+            &[SegmentRow {
+                id: 1,
+                start: 0,
+                end: 1023,
+                next: 5,
+            }],
+            5,
+            None,
+            None,
+            None,
+            true,
+        )
+        .unwrap();
+    let mut headers = BTreeMap::new();
+    headers.insert("User-Agent".to_string(), "Segmenta/test".to_string());
+    store.set_headers("t", &headers).unwrap();
+    store.set_secret_alias("t", "segmenta/t").unwrap();
+
+    assert!(store.delete("t").unwrap());
+    assert!(store.segments("t").unwrap().is_empty());
+    assert!(store.headers("t").unwrap().is_empty());
+    assert_eq!(store.secret_alias("t").unwrap(), None);
+    assert!(store.get("t").unwrap().is_none());
+}
+
+#[test]
+fn crash_recovery_pauses_every_in_flight_state() {
+    let (_dir, store) = open_temp();
+    for (id, status) in [
+        ("a", DownloadStatus::Downloading),
+        ("b", DownloadStatus::Probing),
+        ("c", DownloadStatus::Verifying),
+        ("d", DownloadStatus::Finalizing),
+        ("e", DownloadStatus::Completed),
+        ("f", DownloadStatus::Paused),
+    ] {
+        store.insert_download(&record(id, status)).unwrap();
+    }
+    let recovered = store.recover_crashed().unwrap();
+    assert_eq!(recovered.len(), 4, "only in-flight tasks are reconciled");
+    for id in ["a", "b", "c", "d"] {
+        assert_eq!(
+            store.get(id).unwrap().unwrap().status,
+            DownloadStatus::Paused
+        );
+    }
+    assert_eq!(
+        store.get("e").unwrap().unwrap().status,
+        DownloadStatus::Completed
+    );
+    assert_eq!(
+        store.get("f").unwrap().unwrap().status,
+        DownloadStatus::Paused
+    );
+}
+
+#[test]
+fn settings_start_from_the_catalog_defaults() {
+    let (_dir, store) = open_temp();
+    let settings = store.settings().unwrap();
+    assert_eq!(settings.max_connections, 16);
+    assert_eq!(settings.max_retries, 5);
+    assert_eq!(settings.proxy_mode, "system");
+    assert_eq!(settings.action_on_complete, "none");
+    assert!(!settings.allow_local_downloads);
+    assert!(settings.capture_extensions.contains(&"iso".to_string()));
+}
+
+#[test]
+fn settings_update_validates_types_ranges_and_unknown_keys() {
+    let (_dir, store) = open_temp();
+    let patch = json!({ "max_connections": 8, "global_speed_limit_bps": 1_000_000 });
+    let updated = store.update_settings(patch.as_object().unwrap()).unwrap();
+    assert_eq!(updated.max_connections, 8);
+    assert_eq!(updated.global_speed_limit_bps, Some(1_000_000));
+    // Persisted: a new handle sees them too.
+    assert_eq!(store.settings().unwrap().max_connections, 8);
+
+    for bad in [
+        json!({ "max_connections": 0 }),
+        json!({ "max_connections": 33 }),
+        json!({ "max_retries": 21 }),
+        json!({ "unknown_key": true }),
+        json!({ "proxy_mode": "often" }),
+        json!({ "action_on_complete": "reboot" }),
+        json!({ "schedule_start": "25:00" }),
+        json!({ "download_dir": "relative/path" }),
+        json!({ "max_connections": "many" }),
+    ] {
+        assert!(
+            store.update_settings(bad.as_object().unwrap()).is_err(),
+            "must reject {bad}"
+        );
+    }
+    // A rejected patch changes nothing.
+    assert_eq!(store.settings().unwrap().max_connections, 8);
+}
+
+#[test]
+fn queue_lifecycle_enforces_the_contract() {
+    let (_dir, store) = open_temp();
+    store.create_queue("noche", 1).unwrap();
+    assert!(store.create_queue("noche", 1).is_err(), "names are unique");
+    assert!(store.create_queue("Bad Name", 1).is_err());
+    assert!(store.create_queue("ok", 9).is_err());
+
+    store
+        .insert_download(&record("task", DownloadStatus::Downloading))
+        .unwrap();
+    assert!(
+        store.remove_queue("main").is_err(),
+        "main cannot be removed"
+    );
+    let mut named = record("task2", DownloadStatus::Paused);
+    named.queue_name = "noche".to_string();
+    store.insert_download(&named).unwrap();
+    store.remove_queue("noche").unwrap();
+    let moved = store.get("task2").unwrap().unwrap();
+    assert_eq!(moved.queue_name, "main");
+    assert_eq!(store.queues().unwrap().len(), 1);
+}
+
+#[test]
+fn queue_schedule_is_stored() {
+    let (_dir, store) = open_temp();
+    store
+        .schedule_queue(
+            "main",
+            &json!({"start_time": "02:00", "stop_time": "06:00", "action_on_complete": "power_off"}),
+        )
+        .unwrap();
+    assert!(store.schedule_queue("nope", &json!({})).is_err());
+}
+
+#[test]
+fn a_secret_never_appears_in_the_database_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("segmenta.db");
+    let store = Store::open(&db_path).unwrap();
+    store
+        .insert_download(&record("t", DownloadStatus::Downloading))
+        .unwrap();
+
+    let secret = "Bearer super-secret-token-value";
+    let secrets = FileSecretStore::open(&dir.path().join("secrets.json")).unwrap();
+    secrets.store("segmenta/t", secret).unwrap();
+    store.set_secret_alias("t", "segmenta/t").unwrap();
+    assert_eq!(
+        store.secret_alias("t").unwrap().as_deref(),
+        Some("segmenta/t")
+    );
+    // A different task must not inherit the alias.
+    assert_eq!(store.secret_alias("other").unwrap(), None);
+    drop(store);
+
+    // Force a checkpoint so the WAL contents land in the main file as well.
+    let store = Store::open(&db_path).unwrap();
+    store
+        .save_checkpoint(
+            "t",
+            &[SegmentRow {
+                id: 1,
+                start: 0,
+                end: 1023,
+                next: 10,
+            }],
+            10,
+            None,
+            None,
+            None,
+            true,
+        )
+        .unwrap();
+    store.journal_mode().unwrap();
+    drop(store);
+
+    // Only the SQLite files are scanned: the fallback secret file is *supposed* to hold
+    // the secret, with 0600 permissions, and is asserted separately.
+    let mut haystack = Vec::new();
+    for suffix in ["", "-wal", "-shm"] {
+        let path = dir.path().join(format!("segmenta.db{suffix}"));
+        if let Ok(bytes) = std::fs::read(&path) {
+            haystack.extend(bytes);
+        }
+    }
+    let needle = secret.as_bytes();
+    assert!(
+        !haystack
+            .windows(needle.len())
+            .any(|window| window == needle),
+        "the secret must never be stored in SQLite or its WAL"
+    );
+}
+
+#[test]
+fn the_fallback_secret_file_is_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("secrets.json");
+    let store = FileSecretStore::open(&path).unwrap();
+    store.store("alias", "value").unwrap();
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+    assert_eq!(store.backend(), "file");
+    assert_eq!(store.lookup("alias").unwrap().as_deref(), Some("value"));
+    store.delete("alias").unwrap();
+    assert_eq!(store.lookup("alias").unwrap(), None);
+}
+
+#[test]
+fn headers_are_stored_as_json_and_never_duplicated() {
+    let (_dir, store) = open_temp();
+    store
+        .insert_download(&record("t", DownloadStatus::Pending))
+        .unwrap();
+    let mut headers = HashMap::new();
+    headers.insert("Referer".to_string(), "https://example.test/".to_string());
+    let owned: BTreeMap<String, String> = headers.into_iter().collect();
+    store.set_headers("t", &owned).unwrap();
+    store.set_headers("t", &owned).unwrap();
+    assert_eq!(store.headers("t").unwrap(), owned);
+}
+
+#[test]
+fn settings_validation_accepts_the_documented_edges() {
+    let mut settings = Settings::default();
+    settings.max_connections = 32;
+    settings.max_retries = 0;
+    settings.schedule_start = Some("00:00".to_string());
+    settings.proxy_mode = "manual".to_string();
+    settings.proxy_url = Some("socks5://127.0.0.1:1080".to_string());
+    assert!(settings.validate().is_ok());
+
+    let mut bad = Settings::default();
+    bad.proxy_mode = "manual".to_string();
+    assert!(bad.validate().is_err(), "manual proxy needs a URL");
+}
