@@ -20,8 +20,8 @@ watch -n 10 cat docs/qa/segmenta-0.0.2-live.md
 | Tema claro/oscuro y capturas | Implementado y capturado | `49d32b7`; `--screenshots`, `docs/qa/screenshots/0.0.2-{light,dark}.png` 1440×900 revisadas | Falta QA remoto |
 | Logging estructurado y redacción | Implementado y verde | `9c1af8b`; `logging.rs` (5 tests), instrumentación de manager/ipc/main | Falta verificar `journalctl` en el remoto |
 | Matriz de botones/acciones | Implementada (9 tests) | `3c38151`; `tests/actions.rs` + accesores reales | Falta QA remoto de clicks |
-| Empaquetado 0.0.2 | En curso | versión `0.0.2`, `libsecret-tools`, metainfo, CHANGELOG, `check-package.sh` | Falta verificar el `.deb` generado |
-| QA remoto | Limpio en 0.0.1 | `ssh ubuntu`: sin tareas, `~/Descargas`, `allow_local_downloads=false` | Esperando candidato 0.0.2 |
+| Empaquetado 0.0.2 | Generado y validado | `dist/segmenta_0.0.2-1_amd64.deb` (3.925.828 B, sha256 `857fbbc3…e3357`); `check-package.sh`: 10/10 paths, AppStream y desktop OK | Pendiente instalación/QA remoto; no publicado |
+| QA remoto | Pendiente | candidato `dist/segmenta_0.0.2-1_amd64.deb` listo | El usuario instala y devuelve informe; no se publica antes |
 
 ## Reglas del flujo
 
