@@ -14,22 +14,27 @@
 #      reported for the reviewer, they never flip the gate by themselves).
 #
 # Usage:
-#   packaging/check-package.sh dist/segmenta_0.0.2-1_amd64.deb [expected-version]
+#   packaging/check-package.sh dist/segmenta_0.1.0-1_amd64.deb [expected-version]
 #
-# The expected version defaults to 0.0.2 and can also be set with
+# The expected version defaults to 0.1.0 and can also be set with
 # SEGMENTA_EXPECTED_VERSION. Exits non-zero on the first hard failure and always
 # prints a one-line summary.
 #
 set -euo pipefail
 
 readonly EXPECTED_PACKAGE="segmenta"
-readonly EXPECTED_VERSION="${2:-${SEGMENTA_EXPECTED_VERSION:-0.0.2}}"
+readonly EXPECTED_VERSION="${2:-${SEGMENTA_EXPECTED_VERSION:-0.1.0}}"
 
 readonly REQUIRED_PATHS=(
     "usr/bin/segmenta"
     "usr/bin/segmenta-cli"
     "usr/bin/segmenta-daemon"
     "usr/bin/segmenta-gui"
+    "usr/bin/segmenta-host"
+    "etc/opt/chrome/native-messaging-hosts/io.github.wilkin.segmenta.json"
+    "etc/chromium/native-messaging-hosts/io.github.wilkin.segmenta.json"
+    "etc/opt/edge/native-messaging-hosts/io.github.wilkin.segmenta.json"
+    "usr/lib/mozilla/native-messaging-hosts/io.github.wilkin.segmenta.json"
     "usr/lib/systemd/user/segmenta.service"
     "usr/lib/systemd/user/segmenta.socket"
     "usr/share/applications/io.github.wilkin.Segmenta.desktop"

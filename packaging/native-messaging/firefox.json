@@ -1,0 +1,9 @@
+{
+  "name": "io.github.wilkin.segmenta",
+  "description": "Segmenta native messaging host",
+  "path": "/usr/bin/segmenta-host",
+  "type": "stdio",
+  "allowed_extensions": [
+    "segmenta@wilkin.github.io"
+  ]
+}
