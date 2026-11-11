@@ -24,5 +24,9 @@ thiserror.workspace = true
 segmenta-daemon = { path = "../segmenta-daemon" }
 
 [dev-dependencies]
-tempfile.workspace = true
+hex.workspace = true
 segmenta-core = { path = "../segmenta-core", features = ["testserver"] }
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
