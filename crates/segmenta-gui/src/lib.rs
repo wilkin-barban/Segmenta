@@ -5,6 +5,7 @@ pub mod app;
 pub mod client;
 pub mod model;
 pub mod prefs;
+pub mod screenshots;
 pub mod segment_view;
 pub mod window;
 

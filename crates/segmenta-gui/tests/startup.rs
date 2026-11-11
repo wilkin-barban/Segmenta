@@ -178,10 +178,7 @@ fn serve(stream: UnixStream, rows: Vec<Value>) {
             }),
             "settings.get" => settings_payload(),
             "download.list" => Value::Array(rows.clone()),
-            "download.status" => rows
-                .first()
-                .cloned()
-                .unwrap_or(Value::Null),
+            "download.status" => rows.first().cloned().unwrap_or(Value::Null),
             "system.status" => json!({
                 "daemon_version": "0.0.2",
                 "uptime_seconds": 1u64,
@@ -224,10 +221,7 @@ fn normal_startup_lists_a_completed_task_in_under_two_seconds() {
         let client: Arc<dyn Client> = Arc::new(UnixClient::connect(path));
         let started = Instant::now();
         let window = SegmentaWindow::new(&application, client);
-        let listed = pump_until(
-            || window.rows().len() == 1,
-            Duration::from_secs(5),
-        );
+        let listed = pump_until(|| window.rows().len() == 1, Duration::from_secs(5));
         let elapsed = started.elapsed();
         assert!(listed, "the completed task never appeared");
         assert!(

@@ -24,6 +24,44 @@ const SMOKE_TOTAL: u64 = 4_000_000_000;
 
 fn main() -> glib::ExitCode {
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|arg| arg == "--version" || arg == "-V") {
+        println!("segmenta-gui {}", env!("CARGO_PKG_VERSION"));
+        return glib::ExitCode::SUCCESS;
+    }
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        println!(
+            "segmenta-gui {}\n\n\
+             Usage: segmenta-gui [--smoke] [--screenshots DIR] [--version]\n\n\
+             --smoke             build the window with a synthetic download and exit\n\
+             --screenshots DIR   write the light and dark 1440x900 QA captures\n\
+             --version           print the version and exit",
+            env!("CARGO_PKG_VERSION")
+        );
+        return glib::ExitCode::SUCCESS;
+    }
+    if let Some(position) = args.iter().position(|arg| arg == "--screenshots") {
+        let Some(dir) = args.get(position + 1) else {
+            eprintln!("segmenta-gui: --screenshots needs a directory");
+            return glib::ExitCode::FAILURE;
+        };
+        // The toolkit must exist before any widget is built.
+        if let Err(err) = gtk::init() {
+            eprintln!("segmenta-gui: cannot open the display: {err}");
+            return glib::ExitCode::FAILURE;
+        }
+        return match segmenta_gui::screenshots::capture(std::path::Path::new(dir)) {
+            Ok(paths) => {
+                for path in paths {
+                    println!("wrote {}", path.display());
+                }
+                glib::ExitCode::SUCCESS
+            }
+            Err(err) => {
+                eprintln!("segmenta-gui: {err}");
+                glib::ExitCode::FAILURE
+            }
+        };
+    }
     if args.iter().any(|arg| arg == "--smoke") {
         return run_smoke();
     }
