@@ -114,8 +114,8 @@ Enviado por la extensión de navegador, la GUI o la CLI para registrar una nueva
   "id": "req-001",
   "method": "download.add",
   "params": {
-    "url": "https://example.com/iso/ubuntu-26.10-desktop.iso",
-    "filename": "ubuntu-26.10-desktop.iso",
+    "url": "https://example.com/iso/ubuntu-26.04-desktop.iso",
+    "filename": "ubuntu-26.04-desktop.iso",
     "destination_dir": "/home/usuario/Descargas",
     "headers": {
       "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0",
@@ -144,7 +144,7 @@ Enviado por la extensión de navegador, la GUI o la CLI para registrar una nueva
   "result": {
     "task_id": "c1f7a28e-8b1b-4f9e-9d22-29f123456789",
     "status": "probing",
-    "filename": "ubuntu-26.10-desktop.iso"
+    "filename": "ubuntu-26.04-desktop.iso"
   }
 }
 ```

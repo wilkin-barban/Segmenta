@@ -12,7 +12,7 @@
 
 ## 1. Decisión del Stack Tecnológico
 
-Para garantizar que Segmenta sea ultrarrápido, consuma menos de 30 MB de RAM y se integre sin fisuras en Ubuntu 26.10, la arquitectura tecnológica seleccionada es:
+Para garantizar que Segmenta sea ultrarrápido, consuma menos de 30 MB de RAM y se integre sin fisuras en Ubuntu 26.04, la arquitectura tecnológica seleccionada es:
 
 * **Lenguaje Principal:** **Rust** (edición 2021/2024).
   * *Justificación:* Gestión de memoria sin pausas de Garbage Collector (esencial cuando 32 conexiones transfieren a 1 Gbps), concurrencia asíncrona de alto rendimiento con `tokio`, acceso directo y seguro a llamadas POSIX del kernel (`libc`), y bindings oficiales de GNOME de primer nivel (`gtk4-rs`, `libadwaita-rs`).

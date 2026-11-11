@@ -33,7 +33,7 @@ existan dos versiones del mismo esquema.
 - SQLite WAL con migraciones versionadas, secretos en GNOME Keyring/cookies por tarea.
 - Extensión MV3 para Chrome/Chromium/Brave/Edge y Firefox, con manifiestos separados.
 - HLS/DASH **públicos y sin cifrar**: VOD, fMP4/TS, init segment y audio/video separados.
-- Empaquetado `.deb` para Ubuntu 26.10, unidad systemd de usuario, `.desktop`, AppStream y
+- Empaquetado `.deb` para Ubuntu 26.04, unidad systemd de usuario, `.desktop`, AppStream y
   manifiestos nativos de sistema.
 - Límite global de velocidad, colas básicas, programador horario y post-procesamiento sin shell.
 

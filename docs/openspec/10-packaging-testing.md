@@ -2,7 +2,7 @@
 
 > **Especificación:** OPENSPEC-SEGMENTA-010  
 > **Versión:** 1.0.0  
-> **Área:** Configuración de Build Cargo, Empaquetado `.deb` para Ubuntu 26.10, Suite de Pruebas y Benchmarks
+> **Área:** Configuración de Build Cargo, Empaquetado `.deb` para Ubuntu 26.04, Suite de Pruebas y Benchmarks
 >
 > **Alcance de entrega v1:** paquete `.deb` y árbol `cargo` reproducible. Flatpak/Snap/AppImage
 > quedan fuera de v1; el Native Messaging fuera del sandbox no se resuelve con un manifiesto
@@ -52,7 +52,7 @@ tempfile = "3.12"
 
 ---
 
-## 2. Empaquetado para Ubuntu 26.10 (`.deb`; Flatpak fuera de v1)
+## 2. Empaquetado para Ubuntu 26.04 (`.deb`; Flatpak fuera de v1)
 
 ### 2.0. Dependencias del sistema
 
@@ -67,7 +67,7 @@ demuxer/muxer correspondiente) y se comprueba con `ffmpeg -version` al usar la F
 directo no lo necesita. La licencia de FFmpeg debe revisarse antes de distribuir un binario que lo
 enlace; el `.deb` puede declararlo como recomendación en lugar de dependencia obligatoria. `libsecret` se usa vía D-Bus/Secret Service; no se
 enlaza una biblioteca que guarde secretos en SQLite. La versión de Ubuntu de desarrollo se fija en CI
-cuando 26.10 aún no sea estable.
+sobre Ubuntu 26.04 LTS, la LTS objetiva de esta release.
 
 ### 2.1. Estructura de Instalación del Paquete Debian (`.deb`)
 Construido mediante `cargo-deb`, el paquete instala los siguientes archivos en el sistema:
@@ -223,7 +223,7 @@ Cada pull request debe pasar, como mínimo:
 
 - `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings` y `cargo test --workspace`;
 - tests de integración con `wiremock` y un servidor local de rangos;
-- build del `.deb` en un contenedor Ubuntu 26.10 (o la versión LTS fijada para desarrollo);
+- build del `.deb` en un contenedor Ubuntu 26.04 (o la versión LTS fijada para desarrollo);
 - validación de enlaces de documentación y de que `README`/`openspec` no tengan rutas muertas;
 - un job separado para la extensión (lint del manifest, build del ZIP/XPI) cuando exista código.
 

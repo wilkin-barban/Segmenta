@@ -9,7 +9,7 @@
 **Segmenta** nace para llenar el vacío de un gestor de descargas aceleradas de grado comercial en Linux. Muchos usuarios de Ubuntu dependen de extensiones básicas o herramientas CLI (como `aria2` o `wget`), pero ninguna integra en un único flujo de trabajo:
 1. **Segmentación dinámica en caliente (Dynamic File Splitting)**: Subdivisión de partes en tiempo real sin requerir una fase de ensamblado posterior.
 2. **Captura profunda en el navegador (WebExtension Manifest V3)**: Detección inteligente de descargas, captura de cookies de sesión, headers HTTP (`User-Agent`, `Referer`, `Authorization`) e intercepción de flujos de streaming (HLS / MPEG-DASH).
-3. **Experiencia de Usuario Nativa para Ubuntu 26.10**: Interfaz moderna basada en **GTK4 + Libadwaita**, respetando las Human Interface Guidelines (HIG) de GNOME, con soporte completo para Wayland, temas claro/oscuro del sistema y visualización de conexiones concurrentes en tiempo real.
+3. **Experiencia de Usuario Nativa para Ubuntu 26.04**: Interfaz moderna basada en **GTK4 + Libadwaita**, respetando las Human Interface Guidelines (HIG) de GNOME, con soporte completo para Wayland, temas claro/oscuro del sistema y visualización de conexiones concurrentes en tiempo real.
 
 ---
 
