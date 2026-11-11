@@ -7,15 +7,13 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use futures_util::future::BoxFuture;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::broadcast;
 
 use crate::events::EventBus;
-use crate::rpc::{
-    read_frame, resync_notification, FrameError, Request, Response, RpcError,
-};
+use crate::rpc::{read_frame, resync_notification, FrameError, Request, Response, RpcError};
 
 /// Capacity of the per-client event buffer. A client that falls further behind gets
 /// `system.resync_required` instead of stale events.
@@ -67,7 +65,11 @@ impl IpcServer {
     ///
     /// SAFETY contract: `LISTEN_FDS == 1` and `LISTEN_PID` matches this process, which
     /// [`systemd_listen_fd`] checks before this function is called.
-    pub fn from_systemd(fd: std::os::unix::io::RawFd, path: &Path, bus: Arc<EventBus>) -> std::io::Result<IpcServer> {
+    pub fn from_systemd(
+        fd: std::os::unix::io::RawFd,
+        path: &Path,
+        bus: Arc<EventBus>,
+    ) -> std::io::Result<IpcServer> {
         use std::os::unix::io::FromRawFd;
         // SAFETY: the caller guarantees the descriptor is a listening Unix socket owned
         // by this process after the fork from systemd.

@@ -4,8 +4,8 @@
 //! the CLI, the GUI and the integration tests share the same contract types.
 
 pub mod events;
-pub mod manager;
 pub mod ipc;
+pub mod manager;
 pub mod rpc;
 pub mod secrets;
 pub mod store;

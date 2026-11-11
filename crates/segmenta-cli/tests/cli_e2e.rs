@@ -7,14 +7,18 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use serde_json::Value;
 use segmenta_core::testserver::{RangeServer, ServerConfig};
+use serde_json::Value;
 
 const MB: usize = 1024 * 1024;
 
 fn binary(name: &str) -> PathBuf {
     let exe = std::env::current_exe().expect("test binary path");
-    let dir = exe.parent().expect("deps dir").parent().expect("target dir");
+    let dir = exe
+        .parent()
+        .expect("deps dir")
+        .parent()
+        .expect("target dir");
     let candidate = dir.join(name);
     assert!(
         candidate.exists(),
@@ -183,7 +187,6 @@ impl Daemon {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
-
 }
 
 impl Drop for Daemon {
@@ -253,11 +256,19 @@ fn settings_round_trip_and_validation_errors_exit_one() {
     // Out of range and unknown keys are rejected with a usage-level failure.
     let bad = sandbox.cli_one(&["settings", "set", "max_connections", "99"]);
     assert_eq!(bad.code, 1, "stdout: {}", bad.stdout);
-    assert!(bad.stderr.contains("max_connections"), "stderr: {}", bad.stderr);
+    assert!(
+        bad.stderr.contains("max_connections"),
+        "stderr: {}",
+        bad.stderr
+    );
 
     let unknown = sandbox.cli_one(&["settings", "set", "nonsense", "1"]);
     assert_eq!(unknown.code, 1);
-    assert!(unknown.stderr.contains("unknown setting"), "{}", unknown.stderr);
+    assert!(
+        unknown.stderr.contains("unknown setting"),
+        "{}",
+        unknown.stderr
+    );
 }
 
 #[test]
@@ -298,7 +309,11 @@ fn add_pause_resume_and_cancel_round_trip() {
     let path = Path::new(task["final_path"].as_str().unwrap());
     let downloaded = std::fs::read(path).expect("downloaded file");
     assert_eq!(downloaded.len(), 4 * MB);
-    assert_eq!(sha256(&downloaded), expected, "the file must match the source");
+    assert_eq!(
+        sha256(&downloaded),
+        expected,
+        "the file must match the source"
+    );
 
     // Segments are contiguous and cover the whole file.
     let segments = task["segments"].as_array().expect("segments");
@@ -377,7 +392,9 @@ fn a_ten_megabyte_download_survives_a_daemon_kill_and_matches_its_checksum() {
     let _daemon = sandbox.daemon();
     let task = sandbox.wait("the task after restart", Duration::from_secs(10), || {
         let listed = sandbox.list();
-        let task = listed.into_iter().find(|row| row["task_id"] == task_id.as_str());
+        let task = listed
+            .into_iter()
+            .find(|row| row["task_id"] == task_id.as_str());
         task.filter(|task| task["status"] == "paused")
     });
     let recovered_bytes = task["downloaded_bytes"].as_u64().unwrap_or(0);

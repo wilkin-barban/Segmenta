@@ -3,7 +3,7 @@
 use std::io::{Error, ErrorKind};
 use std::os::unix::fs::FileExt;
 
-use segmenta_core::disk::{DiskWriter, PreallocOutcome, pwrite_all_with, preallocate_with};
+use segmenta_core::disk::{preallocate_with, pwrite_all_with, DiskWriter, PreallocOutcome};
 
 fn eintr() -> Error {
     Error::from(ErrorKind::Interrupted)
@@ -71,7 +71,12 @@ fn preallocation_falls_back_when_the_filesystem_cannot_fallocate() {
         },
     )
     .unwrap();
-    assert_eq!(outcome, PreallocOutcome::Truncate { free_bytes: 1_000_000 });
+    assert_eq!(
+        outcome,
+        PreallocOutcome::Truncate {
+            free_bytes: 1_000_000
+        }
+    );
     assert!(truncated, "the fallback must set the file length");
 
     // The same fallback refuses to continue when the space is not there.
@@ -94,7 +99,10 @@ fn offsets_are_honoured_without_a_seek_cursor() {
 
     // A writer keeps its own descriptor: writing elsewhere does not move this one.
     use std::io::Write as _;
-    let mut other = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+    let mut other = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
     other.write_all(b"!").unwrap();
     writer.pwrite_all(b"X", 5).unwrap();
     assert_eq!(&std::fs::read(&path).unwrap()[..10], b"helloXorld");

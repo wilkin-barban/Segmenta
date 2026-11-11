@@ -160,8 +160,14 @@ pub fn split_at(donor: SegmentRange, next: u64, midpoint: u64) -> SplitOutcome {
         return SplitOutcome::Rejected(SplitReject::MidpointNotSplittable);
     }
     SplitOutcome::Accepted {
-        donor: SegmentRange { start: donor.start, end: midpoint },
-        new_segment: SegmentRange { start: midpoint + 1, end: donor.end },
+        donor: SegmentRange {
+            start: donor.start,
+            end: midpoint,
+        },
+        new_segment: SegmentRange {
+            start: midpoint + 1,
+            end: donor.end,
+        },
         clamped_next: midpoint + 1,
     }
 }

@@ -201,7 +201,11 @@ async fn serve_connection(mut stream: TcpStream, shared: Arc<Shared>) -> std::io
     let text = String::from_utf8_lossy(&buf).to_string();
     let mut lines = text.split("\r\n");
     let request_line = lines.next().unwrap_or_default().to_string();
-    let path = request_line.split_whitespace().nth(1).unwrap_or("/").to_string();
+    let path = request_line
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("/")
+        .to_string();
     let mut headers = HashMap::new();
     for line in lines {
         if line.is_empty() {
@@ -218,7 +222,11 @@ async fn serve_connection(mut stream: TcpStream, shared: Arc<Shared>) -> std::io
 
     let (config, etag, last_modified) = {
         let config = shared.config.lock().unwrap();
-        (config.clone(), config.etag.clone(), config.last_modified.clone())
+        (
+            config.clone(),
+            config.etag.clone(),
+            config.last_modified.clone(),
+        )
     };
 
     if let Some(status) = config.force_status {
@@ -228,9 +236,8 @@ async fn serve_connection(mut stream: TcpStream, shared: Arc<Shared>) -> std::io
             404 => "Not Found",
             _ => "Error",
         };
-        let mut head = format!(
-            "HTTP/1.1 {status} {reason}\r\nContent-Length: 0\r\nConnection: close\r\n"
-        );
+        let mut head =
+            format!("HTTP/1.1 {status} {reason}\r\nContent-Length: 0\r\nConnection: close\r\n");
         if let Some(retry_after) = &config.retry_after {
             head.push_str(&format!("Retry-After: {retry_after}\r\n"));
         }
@@ -249,9 +256,8 @@ async fn serve_connection(mut stream: TcpStream, shared: Arc<Shared>) -> std::io
 
     let total = config.body.len() as u64;
     if total == 0 {
-        let mut head = String::from(
-            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nAccept-Ranges: bytes\r\n",
-        );
+        let mut head =
+            String::from("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nAccept-Ranges: bytes\r\n");
         if let Some(etag) = &etag {
             head.push_str(&format!("ETag: {etag}\r\n"));
         }
@@ -275,10 +281,13 @@ async fn serve_connection(mut stream: TcpStream, shared: Arc<Shared>) -> std::io
         }
     };
 
-    let use_range = config.supports_ranges && !config.chunked && requested.is_some() && !validator_stale;
+    let use_range =
+        config.supports_ranges && !config.chunked && requested.is_some() && !validator_stale;
     let (status, body_start, body_end) = if use_range {
         let (start, end) = requested.unwrap();
-        let end = end.unwrap_or(total.saturating_sub(1)).min(total.saturating_sub(1));
+        let end = end
+            .unwrap_or(total.saturating_sub(1))
+            .min(total.saturating_sub(1));
         if total == 0 || start >= total || start > end {
             let head = format!(
                 "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{total}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
@@ -291,8 +300,19 @@ async fn serve_connection(mut stream: TcpStream, shared: Arc<Shared>) -> std::io
         (200u16, 0, total.saturating_sub(1))
     };
 
-    let body_len = if total == 0 { 0 } else { body_end - body_start + 1 };
-    let mut head = format!("HTTP/1.1 {status} {}\r\n", if status == 206 { "Partial Content" } else { "OK" });
+    let body_len = if total == 0 {
+        0
+    } else {
+        body_end - body_start + 1
+    };
+    let mut head = format!(
+        "HTTP/1.1 {status} {}\r\n",
+        if status == 206 {
+            "Partial Content"
+        } else {
+            "OK"
+        }
+    );
     head.push_str("Accept-Ranges: bytes\r\n");
     if status == 206 {
         head.push_str(&format!(

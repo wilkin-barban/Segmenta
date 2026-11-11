@@ -41,7 +41,11 @@ fn public_addresses_are_allowed() {
 fn only_http_and_https_schemes_are_accepted() {
     assert!(validate_scheme(&Url::parse("https://example.com/a").unwrap()).is_ok());
     assert!(validate_scheme(&Url::parse("http://example.com/a").unwrap()).is_ok());
-    for bad in ["ftp://example.com/a", "file:///etc/passwd", "data:text/plain,x"] {
+    for bad in [
+        "ftp://example.com/a",
+        "file:///etc/passwd",
+        "data:text/plain,x",
+    ] {
         let err = validate_scheme(&Url::parse(bad).unwrap()).unwrap_err();
         assert_eq!(err.err_name(), "ERR_INVALID_URL", "{bad}");
     }

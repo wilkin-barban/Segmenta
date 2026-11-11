@@ -7,23 +7,22 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::sync::{mpsc, watch};
 
 use segmenta_core::engine::{
-    Canceller, DownloadSpec, EngineConfig, EngineEvent, ResumeState, SegmentStateRecord,
-    TaskOutcome, run as run_engine,
+    run as run_engine, Canceller, DownloadSpec, EngineConfig, EngineEvent, ResumeState,
+    SegmentStateRecord, TaskOutcome,
 };
 use segmenta_core::filename::{resolve_unique_path, sanitize_filename, suggest_filename};
 use segmenta_core::probe::HttpConfig;
-use segmenta_core::{CoreError, planner};
+use segmenta_core::{planner, CoreError};
 
 use crate::events::EventBus;
-use crate::ipc::{RpcHandler, hello_result};
+use crate::ipc::{hello_result, RpcHandler};
 use crate::rpc::{
     AddDownloadParams, CancelParams, ChecksumParam, DeleteParams, DownloadView, ListParams,
-    QueueCreateParams, QueueRemoveParams, QueueScheduleParams, RpcError, SegmentView,
-    TaskIdParams,
+    QueueCreateParams, QueueRemoveParams, QueueScheduleParams, RpcError, SegmentView, TaskIdParams,
 };
 use crate::secrets::SecretStore;
 use crate::store::{
@@ -249,7 +248,10 @@ impl Manager {
             RpcError::new(
                 1005,
                 "ERR_DESTINATION_UNWRITABLE",
-                format!("cannot pick a file name in {}: {err}", destination_dir.display()),
+                format!(
+                    "cannot pick a file name in {}: {err}",
+                    destination_dir.display()
+                ),
             )
         })?;
 
@@ -292,11 +294,11 @@ impl Manager {
             completed_at: None,
             filename: suggested,
         };
-        self.store
-            .insert_download(&record)
-            .map_err(store_error)?;
+        self.store.insert_download(&record).map_err(store_error)?;
         if !headers.is_empty() {
-            self.store.set_headers(&task_id, &headers).map_err(store_error)?;
+            self.store
+                .set_headers(&task_id, &headers)
+                .map_err(store_error)?;
         }
         if let Some(secret) = secret {
             let alias = format!("download/{task_id}");
@@ -411,7 +413,13 @@ impl Manager {
         self.running
             .lock()
             .unwrap_or_else(|err| err.into_inner())
-            .insert(task_id.to_string(), RunningTask { cancel, handle: join });
+            .insert(
+                task_id.to_string(),
+                RunningTask {
+                    cancel,
+                    handle: join,
+                },
+            );
         self.store
             .set_status(task_id, DownloadStatus::Downloading, None)
             .map_err(store_error)?;
@@ -497,12 +505,7 @@ impl Manager {
             self.store
                 .set_status(task_id, DownloadStatus::Paused, None)
                 .map_err(store_error)?;
-            self.publish_state(
-                task_id,
-                record.status.as_str(),
-                "paused",
-                None,
-            );
+            self.publish_state(task_id, record.status.as_str(), "paused", None);
         }
         let record = self
             .store
@@ -565,12 +568,7 @@ impl Manager {
             }
         }
         self.cleanup_secret(&params.task_id);
-        self.publish_state(
-            &params.task_id,
-            record.status.as_str(),
-            "cancelled",
-            None,
-        );
+        self.publish_state(&params.task_id, record.status.as_str(), "cancelled", None);
         Ok(json!({
             "task_id": params.task_id,
             "status": "cancelled",
@@ -650,8 +648,7 @@ impl Manager {
 
     fn settings_get(&self) -> Result<Value, RpcError> {
         let settings = self.settings();
-        serde_json::to_value(settings)
-            .map_err(|err| RpcError::internal(err.to_string()))
+        serde_json::to_value(settings).map_err(|err| RpcError::internal(err.to_string()))
     }
 
     fn settings_update(&self, params: Option<Value>) -> Result<Value, RpcError> {
@@ -707,9 +704,7 @@ impl Manager {
         self.store
             .create_queue(&params.name, params.max_active)
             .map_err(|err| match err {
-                StoreError::Queue(message) => {
-                    RpcError::invalid_params(message)
-                }
+                StoreError::Queue(message) => RpcError::invalid_params(message),
                 other => store_error(other),
             })?;
         Ok(json!({ "name": params.name, "max_active": params.max_active }))
@@ -758,7 +753,10 @@ fn memory_bytes() -> u64 {
         return 0;
     };
     let mut fields = contents.split_whitespace();
-    let pages: u64 = fields.nth(1).and_then(|value| value.parse().ok()).unwrap_or(0);
+    let pages: u64 = fields
+        .nth(1)
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
     pages.saturating_mul(4096)
 }
 

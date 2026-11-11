@@ -101,7 +101,10 @@ pub fn render_status(view: &DownloadView) -> String {
     out.push_str(&format!("url:       {}\n", view.url));
     out.push_str(&format!("file:      {}\n", view.final_path));
     out.push_str(&format!("status:    {}\n", view.status));
-    out.push_str(&format!("progress:  {} of ", format_bytes(view.downloaded_bytes)));
+    out.push_str(&format!(
+        "progress:  {} of ",
+        format_bytes(view.downloaded_bytes)
+    ));
     out.push_str(
         &view
             .total_bytes
@@ -177,7 +180,10 @@ pub fn render_queues(queues: &serde_json::Value) -> String {
     if rows.is_empty() {
         return "No queues.\n".to_string();
     }
-    let mut out = format!("{:<16} {:>6} {:>7} {:>7} {:>7}\n", "NAME", "SLOTS", "ACTIVE", "PENDING", "PAUSED");
+    let mut out = format!(
+        "{:<16} {:>6} {:>7} {:>7} {:>7}\n",
+        "NAME", "SLOTS", "ACTIVE", "PENDING", "PAUSED"
+    );
     for row in rows {
         out.push_str(&format!(
             "{:<16} {:>6} {:>7} {:>7} {:>7}\n",

@@ -31,6 +31,9 @@ pub async fn sha256_file(path: &Path) -> Result<String> {
         Ok(hex::encode(hasher.finalize()))
     })
     .await
-    .map_err(|err| CoreError::Io { kind: std::io::ErrorKind::Other, message: err.to_string() })??;
+    .map_err(|err| CoreError::Io {
+        kind: std::io::ErrorKind::Other,
+        message: err.to_string(),
+    })??;
     Ok(digest)
 }

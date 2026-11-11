@@ -3,8 +3,8 @@
 //! One token bucket is shared by every worker of every task: the limit is global, not
 //! per connection. A rate of `None`/`0` means unlimited.
 
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// Tokens accumulated between two refills, capped by the burst capacity.
@@ -78,9 +78,10 @@ impl TokenBucket {
                     None
                 } else {
                     // Sleep only for the deficit: a rate change is picked up next round.
-                    Some(Duration::from_secs_f64((need - state.tokens) / rate as f64).max(
-                        Duration::from_millis(1),
-                    ))
+                    Some(
+                        Duration::from_secs_f64((need - state.tokens) / rate as f64)
+                            .max(Duration::from_millis(1)),
+                    )
                 }
             };
             match wait {

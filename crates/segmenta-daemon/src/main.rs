@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use clap::Parser;
 use segmenta_daemon::events::EventBus;
-use segmenta_daemon::ipc::{IpcServer, systemd_listen_fd};
+use segmenta_daemon::ipc::{systemd_listen_fd, IpcServer};
 use segmenta_daemon::manager::Manager;
 use segmenta_daemon::secrets;
 use segmenta_daemon::store::Store;
@@ -56,7 +56,10 @@ fn main() -> ExitCode {
 }
 
 async fn serve(args: Args) -> Result<(), String> {
-    let data_dir = args.data_dir.clone().unwrap_or_else(segmenta_daemon::data_dir);
+    let data_dir = args
+        .data_dir
+        .clone()
+        .unwrap_or_else(segmenta_daemon::data_dir);
     let runtime_dir = segmenta_daemon::runtime_dir();
     std::fs::create_dir_all(&data_dir)
         .map_err(|err| format!("cannot create {}: {err}", data_dir.display()))?;
@@ -85,13 +88,15 @@ async fn serve(args: Args) -> Result<(), String> {
     }
 
     let db_path = data_dir.join("segmenta.db");
-    let store = Arc::new(
-        Store::open(&db_path).map_err(|err| format!("cannot open the database: {err}"))?,
-    );
+    let store =
+        Arc::new(Store::open(&db_path).map_err(|err| format!("cannot open the database: {err}"))?);
     let secrets = Arc::from(
         secrets::open_default(&data_dir).map_err(|err| format!("cannot open secrets: {err}"))?,
     );
-    let socket_path = args.socket.clone().unwrap_or_else(segmenta_daemon::socket_path);
+    let socket_path = args
+        .socket
+        .clone()
+        .unwrap_or_else(segmenta_daemon::socket_path);
     let bus = Arc::new(EventBus::new());
     let server = match systemd_listen_fd().filter(|_| args.systemd) {
         Some(fd) => IpcServer::from_systemd(fd, &socket_path, Arc::clone(&bus)),
@@ -133,7 +138,7 @@ async fn serve(args: Args) -> Result<(), String> {
 }
 
 async fn terminate_signal() {
-    use tokio::signal::unix::{SignalKind, signal};
+    use tokio::signal::unix::{signal, SignalKind};
     if let Ok(mut stream) = signal(SignalKind::terminate()) {
         stream.recv().await;
     } else {

@@ -35,8 +35,5 @@ async fn digest_of_an_empty_file_is_the_empty_digest() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("empty.bin");
     File::create(&path).unwrap();
-    assert_eq!(
-        sha256_file(&path).await.unwrap(),
-        sha256_hex(b""),
-    );
+    assert_eq!(sha256_file(&path).await.unwrap(), sha256_hex(b""),);
 }

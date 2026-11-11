@@ -3,9 +3,9 @@
 
 use std::time::Duration;
 
-use segmenta_core::probe::{HttpConfig, ProbeOutcome, Session, TransferMode, probe};
-use segmenta_core::testserver::{RangeServer, ServerConfig};
 use reqwest::header::HeaderValue;
+use segmenta_core::probe::{probe, HttpConfig, ProbeOutcome, Session, TransferMode};
+use segmenta_core::testserver::{RangeServer, ServerConfig};
 use url::Url;
 
 fn local_config() -> HttpConfig {
@@ -28,7 +28,10 @@ async fn probe_detects_range_support_and_sends_the_contract_headers() {
     };
     assert_eq!(info.mode, TransferMode::Segmented { total: 1024 });
     assert_eq!(info.etag.as_deref(), Some("\"v1\""));
-    assert_eq!(info.content_type.as_deref(), Some("application/octet-stream"));
+    assert_eq!(
+        info.content_type.as_deref(),
+        Some("application/octet-stream")
+    );
     assert!(info.content_disposition.is_some());
     assert_eq!(info.final_url, server.url());
 
@@ -87,7 +90,12 @@ async fn probe_reads_retry_after_for_429() {
 
 #[tokio::test]
 async fn probe_classifies_server_failures_and_missing_resources() {
-    for (status, expected) in [(503u16, "retry"), (404, "gone"), (410, "gone"), (401, "auth")] {
+    for (status, expected) in [
+        (503u16, "retry"),
+        (404, "gone"),
+        (410, "gone"),
+        (401, "auth"),
+    ] {
         let server = RangeServer::start(ServerConfig {
             body: payload(10),
             force_status: Some(status),
@@ -142,7 +150,8 @@ async fn probe_follows_redirects_and_drops_credentials_across_origins() {
     .await;
 
     let mut cfg = local_config();
-    cfg.headers.insert("referer", HeaderValue::from_static("https://origin.test/"));
+    cfg.headers
+        .insert("referer", HeaderValue::from_static("https://origin.test/"));
     cfg.sensitive_headers
         .insert("authorization", HeaderValue::from_static("Bearer secret"));
 
@@ -170,7 +179,10 @@ async fn if_range_returns_206_for_the_current_validator_and_200_for_a_stale_one(
     let server = RangeServer::with_body(payload(4096)).await;
     let session = Session::open(&local_config(), &server.url()).await.unwrap();
 
-    let response = session.request(Some((0, 99)), Some("\"v1\"")).await.unwrap();
+    let response = session
+        .request(Some((0, 99)), Some("\"v1\""))
+        .await
+        .unwrap();
     assert_eq!(response.status(), 206);
     assert_eq!(
         response
@@ -180,8 +192,15 @@ async fn if_range_returns_206_for_the_current_validator_and_200_for_a_stale_one(
         Some("bytes 0-99/4096")
     );
 
-    let stale = session.request(Some((0, 99)), Some("\"v0\"")).await.unwrap();
-    assert_eq!(stale.status(), 200, "a stale validator restarts the download");
+    let stale = session
+        .request(Some((0, 99)), Some("\"v0\""))
+        .await
+        .unwrap();
+    assert_eq!(
+        stale.status(),
+        200,
+        "a stale validator restarts the download"
+    );
     server.shutdown().await;
 }
 
