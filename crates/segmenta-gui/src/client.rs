@@ -334,6 +334,11 @@ const RECONNECT_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Delay between worker polls.
 const WORKER_TICK: std::time::Duration = std::time::Duration::from_millis(50);
+/// Verbose diagnostics for the connection path (`SEGMENTA_GUI_LOG=1`).
+pub fn trace_enabled() -> bool {
+    std::env::var_os("SEGMENTA_GUI_LOG").is_some_and(|value| value != "0")
+}
+
 /// How long a queued job waits for the first connection before the UI gets an error.
 const CONNECT_GRACE: std::time::Duration = std::time::Duration::from_millis(1500);
 /// Bound of the pre-connection queue.
@@ -589,6 +594,9 @@ impl Worker {
     }
 
     fn serve(&mut self, job: Job) {
+        if trace_enabled() {
+            eprintln!("segmenta-gui: serve {} (connected={})", job.method, self.stream.is_some());
+        }
         if self.stream.is_none() {
             // Queue instead of failing: the UI issues `download.list` before the first
             // connection can possibly succeed (socket activation, slow hello).
@@ -606,6 +614,16 @@ impl Worker {
             return;
         }
         let result = self.call(&job.method, job.params);
+        if trace_enabled() {
+            match &result {
+                Ok(value) => eprintln!(
+                    "segmenta-gui: {} ok ({} bytes)",
+                    job.method,
+                    value.to_string().len()
+                ),
+                Err(err) => eprintln!("segmenta-gui: {} failed: {}", job.method, err.ui_message()),
+            }
+        }
         if let Err(ClientError::Unavailable(detail)) = &result {
             let detail = detail.clone();
             self.drop_connection(detail);

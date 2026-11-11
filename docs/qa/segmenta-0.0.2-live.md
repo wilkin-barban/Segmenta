@@ -49,3 +49,11 @@ watch -n 10 cat docs/qa/segmenta-0.0.2-live.md
 - [ ] `journalctl --user -u segmenta` reconstruye add/pause/resume/error sin secretos.
 - [ ] `.deb` 0.0.2 + SHA-256 instalado y probado en `ssh ubuntu`.
 - [ ] Tag `v0.0.2`, GitHub Release, `main` limpio y espacio liberado.
+
+## Correcciones tras el QA remoto de 0.0.2 (2026-11-11)
+
+| Bloqueo | Causa | Fix | Evidencia |
+| --- | --- | --- | --- |
+| GUI normal queda en «Conectando…» | El `activate` creaba el `SegmentaWindow` (envoltorio de `Rc<Inner>`) y lo descartaba: GTK mantenía el widget, pero moría el estado con el tick que procesa las respuestas. | `app::build_window_for_client` registra la ventana en `OPEN_WINDOWS` (thread-local). | Reproducido con el daemon real local: antes no había `finish reload`; ahora `download.list ok (3 rows)` y la lista se pinta. Test `the_production_window_is_kept_alive_by_the_application`. |
+| i18n: estados crudos, `--help` en inglés, ETA en español | El CLI imprimía el protocolo tal cual y clap no localiza; la GUI componía «Quedan 53 s». | `render::status_label` traduce el estado; `--help` sale de `help_text(locale)`; `format_eta` devuelve sólo la duración y la etiqueta sale del catálogo. | `render_locale` (6 tests: estados es/pt-BR/en, help es/pt/en), test de modelo para la línea de progreso. |
+| Redacción excesiva | `is_sensitive` hacía coincidencia por subcadena y «secret» atrapaba `secret_backend`; «checksum» ocultaba `checksum_ok`. | Coincidencia exacta o por sufijo (`_token`, `_secret`, `_password`, `_api_key`, `_cookie`). | Tests de `logging.rs`: `secret_backend=keyring` y `checksum_ok=true` visibles, `access_token` redactado. |

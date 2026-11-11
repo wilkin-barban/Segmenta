@@ -81,6 +81,23 @@ fn truncate(text: &str, width: usize) -> String {
     format!("{head}…")
 }
 
+/// Localized label for the protocol status word.
+pub fn status_label(locale: Locale, status: &str) -> &'static str {
+    use segmenta_i18n::Msg;
+    let message = match status {
+        "pending" => Msg::StatusPending,
+        "probing" => Msg::StatusProbing,
+        "downloading" => Msg::StatusDownloading,
+        "paused" => Msg::StatusPaused,
+        "verifying" => Msg::StatusVerifying,
+        "completed" => Msg::StatusCompleted,
+        "failed" => Msg::StatusFailed,
+        "cancelled" => Msg::StatusCancelled,
+        _ => Msg::StatusUnknown,
+    };
+    segmenta_i18n::tr(locale, message)
+}
+
 /// Render the `list` table.
 pub fn render_table(locale: Locale, rows: &[DownloadView]) -> String {
     if rows.is_empty() {
@@ -107,7 +124,7 @@ pub fn render_table(locale: Locale, rows: &[DownloadView]) -> String {
         out.push_str(&format!(
             "{:<8}  {:<11}  {:>6}  {:>10}  {:>10}  {:>8}  {}\n",
             short_id(&view.task_id),
-            view.status,
+            status_label(locale, &view.status),
             format_progress(view),
             size,
             format_speed(view.speed_bps),
@@ -135,7 +152,7 @@ pub fn render_status(locale: Locale, view: &DownloadView) -> String {
     out.push_str(&format!(
         "{}{}\n",
         label(locale, Msg::CliStatus),
-        view.status
+        status_label(locale, &view.status)
     ));
     let total = view
         .total_bytes

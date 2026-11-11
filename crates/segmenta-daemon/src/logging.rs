@@ -26,7 +26,6 @@ const SENSITIVE: &[&str] = &[
     "api_key",
     "apikey",
     "body",
-    "checksum",
 ];
 
 /// Placeholder written instead of a sensitive value.
@@ -77,7 +76,18 @@ pub fn default_filter() -> EnvFilter {
 pub fn is_sensitive(name: &str) -> bool {
     // Header names use dashes, setting keys use underscores: normalize both.
     let lowered = name.to_ascii_lowercase().replace('-', "_");
-    SENSITIVE.iter().any(|needle| lowered.contains(needle))
+    // Exact names or a sensitive suffix; substring matching would hide audit fields
+    // such as `secret_backend` or `checksum_ok`.
+    lowered
+        .split(['.', '/', ':'])
+        .last()
+        .map(|last| SENSITIVE.contains(&last) || has_sensitive_suffix(last))
+        .unwrap_or(false)
+}
+
+fn has_sensitive_suffix(name: &str) -> bool {
+    const SUFFIXES: &[&str] = &["_token", "_secret", "_password", "_passwd", "_api_key", "_cookie"];
+    SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
 }
 
 /// Reduce a URL to `scheme://host/path`, dropping query, fragment and userinfo.
@@ -257,6 +267,10 @@ mod tests {
         assert_eq!(redact_field("Authorization", "Bearer abc"), REDACTED);
         assert_eq!(redact_field("set-cookie", "a=b"), REDACTED);
         assert_eq!(redact_field("x-api-key", "abc"), REDACTED);
+        // Audit fields are not secrets and must stay readable.
+        assert_eq!(redact_field("secret_backend", "keyring"), "keyring");
+        assert_eq!(redact_field("checksum_ok", "true"), "true");
+        assert_eq!(redact_field("access_token", "abc"), REDACTED);
         assert_eq!(redact_field("Referer", "https://x/"), "https://x/");
         assert_eq!(redact_field("note", "a\nb"), "a?b");
         let headers = redact_headers([("Authorization", "Bearer abc"), ("Accept", "text/plain")]);

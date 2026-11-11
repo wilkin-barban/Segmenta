@@ -196,17 +196,27 @@ impl DownloadItem {
     pub fn size_line(&self) -> String {
         match self.total_bytes {
             Some(total) => format!(
-                "{} de {}",
+                "{} {} {}",
                 format_bytes(self.downloaded_bytes),
+                segmenta_i18n::tr(segmenta_i18n::current(), segmenta_i18n::Msg::Of),
                 format_bytes(total)
             ),
             None => format_bytes(self.downloaded_bytes),
         }
     }
 
-    /// `80.0 MB/s · Quedan 25 s · 2.0 GB de 4.0 GB`.
+    /// `80.0 MB/s · 25 s left · 2.0 GB of 4.0 GB` (labels localized).
     pub fn progress_line(&self) -> String {
-        let mut parts = vec![format_speed(self.speed_bps), format_eta(self.eta_seconds)];
+        let locale = segmenta_i18n::current();
+        let eta = match self.eta_seconds {
+            Some(seconds) if seconds > 0 => format!(
+                "{} {}",
+                format_eta(Some(seconds)),
+                segmenta_i18n::tr(locale, segmenta_i18n::Msg::Eta).to_lowercase()
+            ),
+            _ => format_eta(self.eta_seconds),
+        };
+        let mut parts = vec![format_speed(self.speed_bps), eta];
         let size = self.size_line();
         if !size.is_empty() {
             parts.push(size);
@@ -571,9 +581,9 @@ pub fn format_speed(bytes_per_second: u64) -> String {
 pub fn format_eta(seconds: Option<u64>) -> String {
     match seconds {
         None | Some(0) => "—".to_string(),
-        Some(seconds) if seconds < 60 => format!("Quedan {seconds} s"),
-        Some(seconds) if seconds < 3600 => format!("Quedan {} min", seconds / 60),
-        Some(seconds) => format!("Quedan {} h {} min", seconds / 3600, (seconds % 3600) / 60),
+        Some(seconds) if seconds < 60 => format!("{seconds} s"),
+        Some(seconds) if seconds < 3600 => format!("{} min", seconds / 60),
+        Some(seconds) => format!("{} h {} min", seconds / 3600, (seconds % 3600) / 60),
     }
 }
 

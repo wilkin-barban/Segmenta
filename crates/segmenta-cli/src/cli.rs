@@ -156,6 +156,49 @@ enum SystemAction {
     Shutdown,
 }
 
+
+/// Localized `--help` (clap's own help is English-only).
+fn help_text(locale: segmenta_i18n::Locale) -> String {
+    match locale {
+        segmenta_i18n::Locale::En => format!(
+            "segmenta {version}\n\nUsage: segmenta [--socket PATH] [--json] <command> [options]\n\n\
+             Commands:\n  add <url> [--dir DIR] [--name NAME] [-c N] [-H \"Name: value\"] [--sha256 HEX] [-q QUEUE] [-p N] [--no-start]\n\
+             \x20 list [-f all|active|paused|completed|failed] [-l N] [-o N]\n  status <id>\n  pause <id>\n  resume <id>\n\
+             \x20 cancel <id> [--delete-file]\n  delete <id> [--delete-file]\n  settings [get|set KEY VALUE ...]\n\
+             \x20 queues list|create NAME [--max-active N]|remove NAME|schedule NAME [--start HH:MM] [--stop HH:MM] [--on-complete ACTION]\n\
+             \x20 hello\n  system status|shutdown\n\n\
+             Global options:\n  --socket PATH   daemon socket (default $SEGMENTA_SOCKET or $XDG_RUNTIME_DIR/segmenta/daemon.sock)\n\
+             \x20 --json         machine-readable output\n  --version      print the version\n  --help         this help\n\n\
+             Exit codes: 0 success, 1 daemon/protocol error, 2 invalid usage.",
+            version = env!("CARGO_PKG_VERSION")
+        ),
+        segmenta_i18n::Locale::Es => format!(
+            "segmenta {version}\n\nUso: segmenta [--socket RUTA] [--json] <comando> [opciones]\n\n\
+             Comandos:\n  add <url> [--dir CARPETA] [--name NOMBRE] [-c N] [-H \"Nombre: valor\"] [--sha256 HEX] [-q COLA] [-p N] [--no-start]\n\
+             \x20 list [-f all|active|paused|completed|failed] [-l N] [-o N]\n  status <id>\n  pause <id>\n  resume <id>\n\
+             \x20 cancel <id> [--delete-file]\n  delete <id> [--delete-file]\n  settings [get|set CLAVE VALOR ...]\n\
+             \x20 queues list|create NOMBRE [--max-active N]|remove NOMBRE|schedule NOMBRE [--start HH:MM] [--stop HH:MM] [--on-complete ACCION]\n\
+             \x20 hello\n  system status|shutdown\n\n\
+             Opciones globales:\n  --socket RUTA   socket del daemon (por defecto $SEGMENTA_SOCKET o $XDG_RUNTIME_DIR/segmenta/daemon.sock)\n\
+             \x20 --json         salida legible por máquina\n  --version      muestra la versión\n  --help         esta ayuda\n\n\
+             Códigos de salida: 0 éxito, 1 error del daemon o del protocolo, 2 uso inválido.",
+            version = env!("CARGO_PKG_VERSION")
+        ),
+        segmenta_i18n::Locale::PtBr => format!(
+            "segmenta {version}\n\nUso: segmenta [--socket CAMINHO] [--json] <comando> [opções]\n\n\
+             Comandos:\n  add <url> [--dir PASTA] [--name NOME] [-c N] [-H \"Nome: valor\"] [--sha256 HEX] [-q FILA] [-p N] [--no-start]\n\
+             \x20 list [-f all|active|paused|completed|failed] [-l N] [-o N]\n  status <id>\n  pause <id>\n  resume <id>\n\
+             \x20 cancel <id> [--delete-file]\n  delete <id> [--delete-file]\n  settings [get|set CHAVE VALOR ...]\n\
+             \x20 queues list|create NOME [--max-active N]|remove NOME|schedule NOME [--start HH:MM] [--stop HH:MM] [--on-complete AÇÃO]\n\
+             \x20 hello\n  system status|shutdown\n\n\
+             Opções globais:\n  --socket CAMINHO   socket do daemon (padrão $SEGMENTA_SOCKET ou $XDG_RUNTIME_DIR/segmenta/daemon.sock)\n\
+             \x20 --json         saída legível por máquina\n  --version      mostra a versão\n  --help         esta ajuda\n\n\
+             Códigos de saída: 0 sucesso, 1 erro do daemon ou do protocolo, 2 uso inválido.",
+            version = env!("CARGO_PKG_VERSION")
+        ),
+    }
+}
+
 /// Resolve a task id: full UUIDs pass through, a unique prefix is expanded using
 /// `download.list` so the 8-character id printed by `segmenta list` is enough.
 fn resolve_task_id(
@@ -192,6 +235,11 @@ fn resolve_task_id(
 
 /// Parse the arguments and run one command.
 pub fn main() -> ExitCode {
+    // `--help` must follow LC_ALL/LC_MESSAGES/LANG like every other visible string.
+    if std::env::args().any(|arg| arg == "--help" || arg == "-h") {
+        println!("{}", help_text(segmenta_i18n::current()));
+        return ExitCode::SUCCESS;
+    }
     let cli = Cli::parse();
     let locale = segmenta_i18n::current();
     match run(cli, locale) {

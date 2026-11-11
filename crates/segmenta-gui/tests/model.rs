@@ -265,14 +265,21 @@ fn spanish_units_and_labels() {
     assert_eq!(format_speed(0), "—");
     assert_eq!(format_eta(None), "—");
     assert_eq!(format_eta(Some(0)), "—");
-    assert_eq!(format_eta(Some(45)), "Quedan 45 s");
-    assert_eq!(format_eta(Some(90)), "Quedan 1 min");
-    assert_eq!(format_eta(Some(3700)), "Quedan 1 h 1 min");
+    // `format_eta` returns the duration only; the label is localized by the caller.
+    assert_eq!(format_eta(Some(45)), "45 s");
+    assert_eq!(format_eta(Some(90)), "1 min");
+    assert_eq!(format_eta(Some(3700)), "1 h 1 min");
     assert_eq!(DownloadStatus::Downloading.label(Locale::Es), "Descargando");
     assert_eq!(DownloadStatus::Paused.label(Locale::Es), "Pausada");
     assert_eq!(DownloadStatus::Completed.label(Locale::Es), "Completada");
     assert_eq!(DownloadStatus::Failed.label(Locale::Es), "Fallida");
     assert_eq!(DownloadStatus::Pending.label(Locale::Es), "En espera");
+    // The progress line must not keep Spanish words in other locales.
+    let mut item = row("eta", "downloading");
+    item.eta_seconds = Some(53);
+    let line = item.progress_line();
+    assert!(!line.contains("Quedan"), "{line}");
+    assert!(line.contains("remaining") || line.contains("restante"), "{line}");
     assert_eq!(Filter::All.label(Locale::Es), "Todas");
     assert_eq!(Filter::Active.label(Locale::Es), "Activas");
 }
