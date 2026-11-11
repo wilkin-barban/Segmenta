@@ -1628,6 +1628,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "segmenta-host"
+version = "0.0.2"
+dependencies = [
+ "futures-util",
+ "libc",
+ "segmenta-daemon",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "segmenta-i18n"
 version = "0.0.2"
 
