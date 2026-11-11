@@ -1232,7 +1232,8 @@ impl Manager {
         )
         .map_err(Self::media_error)?;
         let kind = params.kind.unwrap_or_else(|| "video".to_string());
-        let limit = crate::media::clamp_limit(params.limit).map_err(Self::media_error)?;
+        // Validate the limit even when the probe does not use it yet.
+        let _limit = crate::media::clamp_limit(params.limit).map_err(Self::media_error)?;
         let host = url.host_str().unwrap_or_default().to_string();
         if crate::media::is_youtube(&host) {
             let tool = crate::media::locate_tool("yt-dlp").map_err(Self::media_error)?;

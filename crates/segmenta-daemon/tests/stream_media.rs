@@ -3,7 +3,6 @@
 //! The fixture is produced by ffmpeg itself so the concat/remux path runs on real
 //! media; if ffmpeg is unavailable the test reports the limitation instead of failing.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
