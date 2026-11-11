@@ -21,6 +21,7 @@ path = "src/main.rs"
 glib = "0.22"
 gtk = { package = "gtk4", version = "0.11", features = ["v4_10"] }
 libadwaita = { version = "0.9", features = ["v1_5"] }
+segmenta-i18n.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

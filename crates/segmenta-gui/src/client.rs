@@ -63,6 +63,10 @@ pub enum ClientEvent {
 pub trait Client: Send + Sync {
     fn request(&self, method: &str, params: Value) -> Result<Value, ClientError>;
     fn poll_event(&self) -> Option<ClientEvent>;
+    /// Drop the current connection and try again immediately.
+    ///
+    /// The default is a no-op so fakes do not need to model reconnection.
+    fn reconnect(&self) {}
 }
 
 /// In-memory fake of the daemon used by the GUI tests and by `--smoke`.
@@ -319,6 +323,10 @@ const RECONNECT_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Delay between worker polls.
 const WORKER_TICK: std::time::Duration = std::time::Duration::from_millis(50);
+/// How long a queued job waits for the first connection before the UI gets an error.
+const CONNECT_GRACE: std::time::Duration = std::time::Duration::from_millis(1500);
+/// Bound of the pre-connection queue.
+const PENDING_LIMIT: usize = 256;
 
 /// `$SEGMENTA_SOCKET`, else `$XDG_RUNTIME_DIR/segmenta/daemon.sock`.
 pub fn socket_path() -> std::path::PathBuf {
@@ -344,6 +352,7 @@ struct Job {
 /// spawned thread and `poll_event` reads an in-memory queue.
 pub struct UnixClient {
     jobs: std::sync::mpsc::Sender<Job>,
+    control: std::sync::mpsc::Sender<()>,
     events: Arc<Mutex<VecDeque<ClientEvent>>>,
     path: std::path::PathBuf,
 }
@@ -352,12 +361,15 @@ impl UnixClient {
     /// Connects to `path` (retrying in the background) and returns the handle.
     pub fn connect(path: std::path::PathBuf) -> UnixClient {
         let (jobs, job_rx) = std::sync::mpsc::channel::<Job>();
+        let (control, control_rx) = std::sync::mpsc::channel::<()>();
         let events = Arc::new(Mutex::new(VecDeque::new()));
         let worker = Worker {
             path: path.clone(),
             stream: None,
             buffer: Vec::new(),
             jobs: job_rx,
+            control: control_rx,
+            pending: VecDeque::new(),
             events: Arc::clone(&events),
             next_id: 0,
             last_error: None,
@@ -367,7 +379,12 @@ impl UnixClient {
             .name("segmenta-ipc".to_string())
             .spawn(move || worker.run())
             .ok();
-        UnixClient { jobs, events, path }
+        UnixClient {
+            jobs,
+            control,
+            events,
+            path,
+        }
     }
 
     /// Connects to the path from the environment.
@@ -407,6 +424,11 @@ impl Client for UnixClient {
             .unwrap_or_else(|err| err.into_inner())
             .pop_front()
     }
+
+    fn reconnect(&self) {
+        // The worker drops the stream and reconnects on its next tick.
+        let _ = self.control.send(());
+    }
 }
 
 /// State owned by the worker thread.
@@ -415,6 +437,10 @@ struct Worker {
     stream: Option<std::os::unix::net::UnixStream>,
     buffer: Vec<u8>,
     jobs: std::sync::mpsc::Receiver<Job>,
+    control: std::sync::mpsc::Receiver<()>,
+    /// Jobs received before the socket existed. They are served as soon as the
+    /// connection (and its `system.hello`) succeeds, instead of being rejected.
+    pending: VecDeque<Job>,
     events: Arc<Mutex<VecDeque<ClientEvent>>>,
     next_id: u64,
     last_error: Option<String>,
@@ -424,6 +450,11 @@ struct Worker {
 impl Worker {
     fn run(mut self) {
         loop {
+            if self.control.try_recv().is_ok() {
+                self.stream = None;
+                self.buffer.clear();
+                self.last_attempt = None;
+            }
             if self.stream.is_none() {
                 self.try_connect();
             }
@@ -441,9 +472,34 @@ impl Worker {
                     Ok(()) => {}
                     Err(err) => self.drop_connection(err),
                 }
+            } else {
+                self.fail_pending_after_grace();
             }
 
             std::thread::sleep(WORKER_TICK);
+        }
+    }
+
+    /// Answer the oldest queued job with the connection error once the grace period
+    /// expires, so a dead daemon produces a fast, actionable error instead of a hang.
+    fn fail_pending_after_grace(&mut self) {
+        if self.pending.is_empty() {
+            return;
+        }
+        let waited = self
+            .last_attempt
+            .map(|attempt| attempt.elapsed())
+            .unwrap_or_default();
+        if waited < CONNECT_GRACE {
+            return;
+        }
+        let detail = self
+            .last_error
+            .clone()
+            .unwrap_or_else(|| format!("{}: not connected", self.path.display()));
+        let jobs = std::mem::take(&mut self.pending);
+        for job in jobs {
+            let _ = job.reply.send(Err(ClientError::Unavailable(detail.clone())));
         }
     }
 
@@ -456,6 +512,12 @@ impl Worker {
 
     fn report_disconnect(&mut self, detail: String) {
         if self.last_error.as_deref() != Some(detail.as_str()) {
+            // The UI shows the actionable state; stderr keeps the diagnostic for the
+            // operator (`systemctl --user enable --now segmenta.socket`).
+            eprintln!(
+                "segmenta-gui: ipc connection to {} failed: {detail}",
+                self.path.display()
+            );
             self.last_error = Some(detail.clone());
             self.emit(ClientEvent::Disconnected(detail));
         }
@@ -469,7 +531,13 @@ impl Worker {
 
     fn try_connect(&mut self) {
         if let Some(last) = self.last_attempt {
-            if last.elapsed() < RECONNECT_DELAY {
+            // Queued work must not wait for the 2 s backoff.
+            let delay = if self.pending.is_empty() {
+                RECONNECT_DELAY
+            } else {
+                std::time::Duration::from_millis(50)
+            };
+            if last.elapsed() < delay {
                 return;
             }
         }
@@ -491,6 +559,11 @@ impl Worker {
             Ok(_) => {
                 self.last_error = None;
                 self.emit(ClientEvent::Connected);
+                // Serve whatever the UI asked for before the socket existed.
+                let queued = std::mem::take(&mut self.pending);
+                for job in queued {
+                    self.serve(job);
+                }
             }
             Err(err) => self.drop_connection(err.ui_message()),
         }
@@ -498,11 +571,16 @@ impl Worker {
 
     fn serve(&mut self, job: Job) {
         if self.stream.is_none() {
-            let detail = self
-                .last_error
-                .clone()
-                .unwrap_or_else(|| format!("{}: no conectado", self.path.display()));
-            let _ = job.reply.send(Err(ClientError::Unavailable(detail)));
+            // Queue instead of failing: the UI issues `download.list` before the first
+            // connection can possibly succeed (socket activation, slow hello).
+            if self.pending.len() >= PENDING_LIMIT {
+                if let Some(dropped) = self.pending.pop_front() {
+                    let _ = dropped.reply.send(Err(ClientError::Unavailable(
+                        "demasiadas peticiones en espera".to_string(),
+                    )));
+                }
+            }
+            self.pending.push_back(job);
             return;
         }
         let result = self.call(&job.method, job.params);
