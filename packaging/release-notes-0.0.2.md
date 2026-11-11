@@ -115,13 +115,16 @@ journalctl --user -u segmenta -n 50 --no-pager
 
 ## Estado del QA
 
-El paquete está validado en local con `packaging/check-package.sh` (`dpkg-deb --info`,
-`desktop-file-validate`, `appstreamcli validate --no-net` y `lintian` si está instalado) y con la
-suite de tests del workspace. **La validación remota de este `.deb` está pendiente**: falta
-instalarlo en `ssh ubuntu`, confirmar `secret_backend=keyring`, la carpeta `~/Descargas`, la
-descarga segmentada con pausa/reanudación y SHA-256, la descarga HTTPS, `segmenta-gui --smoke`
-bajo Xvfb, los tres idiomas y los logs en `journalctl`. Hasta ese informe el tag `v0.0.2` y la
-publicación quedan sin efecto.
+Validado en local con `packaging/check-package.sh` (`dpkg-deb --info`,
+`desktop-file-validate`, `appstreamcli validate --no-net` y `lintian` si está instalado),
+37 suites del workspace y 10 suites de GUI bajo Xvfb. Validado en el remoto Ubuntu 26.04
+(`ssh ubuntu`): `secret_backend=keyring`, `~/Descargas`, HTTPS, descarga segmentada de 32 MB
+con pausa/reanudación y SHA-256, rechazo de pause/resume en tareas fallidas (1011/1003),
+GUI normal con tarea completada, i18n es/pt-BR/en, capturas deterministas y logs sin secretos.
+El informe completo está en `docs/qa/segmenta-0.0.2-e2e.md`.
+
+Artefacto probado: `segmenta_0.0.2-1_amd64.deb` (3.931.124 B), SHA-256
+`d76131fed3d5a4bb92caa44fa5d772fb48c136eb2d4372bce02ff3ea8f531bcd`.
 
 ## Checksum
 
