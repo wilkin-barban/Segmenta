@@ -282,8 +282,14 @@ pub struct Settings {
     pub download_dir: String,
     /// Category to directory overrides.
     pub category_dirs: BTreeMap<String, String>,
+    /// Capture browser downloads whose extension is listed.
+    pub capture_enabled: bool,
     /// Extensions captured by the browser extension.
     pub capture_extensions: Vec<String>,
+    /// Capture `.torrent` downloads instead of letting the browser keep them.
+    pub capture_torrents: bool,
+    /// Capture `magnet:` links from the context menu and the system handler.
+    pub capture_magnet: bool,
     /// Domains that must never be captured.
     pub domain_denylist: Vec<String>,
     /// Scheduler start time `HH:MM`.
@@ -315,6 +321,9 @@ impl Default for Settings {
             autostart: false,
             download_dir: default_download_dir(),
             category_dirs: BTreeMap::new(),
+            capture_enabled: true,
+            capture_torrents: true,
+            capture_magnet: true,
             capture_extensions: vec![
                 "7z", "avi", "bin", "bz2", "deb", "dmg", "flac", "gz", "iso", "m4a", "mkv", "mp3",
                 "mp4", "mpeg", "msi", "ogg", "pdf", "rar", "tar", "tgz", "webm", "wav", "xz",
@@ -413,6 +422,9 @@ pub const SETTING_KEYS: &[&str] = &[
     "download_dir",
     "category_dirs",
     "capture_extensions",
+    "capture_enabled",
+    "capture_torrents",
+    "capture_magnet",
     "domain_denylist",
     "schedule_start",
     "schedule_stop",
@@ -472,6 +484,36 @@ impl Settings {
                 return Err(StoreError::Invalid(
                     "global_speed_limit_bps must not exceed 1 GiB/s".to_string(),
                 ));
+            }
+        }
+        // Browser capture: normalize the approved list/bounds instead of trusting the UI.
+        if self.capture_extensions.len() > 200 {
+            return Err(StoreError::Invalid(
+                "capture_extensions must not exceed 200 entries".to_string(),
+            ));
+        }
+        for token in &self.capture_extensions {
+            if segmenta_core::rules::normalize_extension(token).is_none() {
+                return Err(StoreError::Invalid(format!(
+                    "invalid capture extension: {token}"
+                )));
+            }
+        }
+        if self.domain_denylist.len() > 500 {
+            return Err(StoreError::Invalid(
+                "domain_denylist must not exceed 500 entries".to_string(),
+            ));
+        }
+        for host in &self.domain_denylist {
+            let valid = !host.is_empty()
+                && host.len() <= 253
+                && host
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':'));
+            if !valid {
+                return Err(StoreError::Invalid(format!(
+                    "invalid denylist host: {host}"
+                )));
             }
         }
         if self.max_retries > 20 {

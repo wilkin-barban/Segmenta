@@ -20,6 +20,7 @@ pub mod planner;
 pub mod probe;
 pub mod ratelimit;
 pub mod retry;
+pub mod rules;
 pub mod stream;
 pub mod urlssrf;
 
