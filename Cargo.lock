@@ -1574,6 +1574,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "segmenta-i18n"
+version = "0.0.1"
+
+[[package]]
 name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"

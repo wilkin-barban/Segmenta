@@ -108,18 +108,72 @@ impl SecretStore for FileSecretStore {
 }
 
 /// Secrets in the Secret Service through `secret-tool` (libsecret CLI).
-pub struct KeyringSecretStore;
+pub struct KeyringSecretStore {
+    tool: PathBuf,
+}
 
 impl KeyringSecretStore {
-    /// Whether `secret-tool` exists in `PATH`.
-    pub fn available() -> bool {
-        Command::new("secret-tool")
-            .arg("--version")
+    /// Use a specific `secret-tool` binary.
+    pub fn with_tool(tool: PathBuf) -> KeyringSecretStore {
+        KeyringSecretStore { tool }
+    }
+
+    /// Detect the binary from `SEGMENTA_SECRET_TOOL` or `PATH`.
+    ///
+    /// `secret-tool` has no `--version` flag (libsecret 0.21 exits 2 for it), so
+    /// availability is probed with a `lookup` that is allowed to answer "not found".
+    pub fn detect() -> Option<KeyringSecretStore> {
+        let tool = std::env::var_os("SEGMENTA_SECRET_TOOL")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_SECRET_TOOL));
+        KeyringSecretStore::probe_tool(&tool).then(|| KeyringSecretStore::with_tool(tool))
+    }
+
+    /// Whether `tool` behaves like a usable libsecret CLI.
+    pub fn probe_tool(tool: &Path) -> bool {
+        let output = Command::new(tool)
+            .args(["lookup", "service", "segmenta", "key", PROBE_ALIAS])
+            .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false)
+            .output();
+        match output {
+            // 0: a secret exists; 1: no secret — both prove the tool works.
+            Ok(output) => matches!(output.status.code(), Some(0) | Some(1)),
+            Err(_) => false,
+        }
+    }
+}
+
+/// Binary looked up in `PATH` when the environment does not override it.
+const DEFAULT_SECRET_TOOL: &str = "secret-tool";
+/// Alias used only to probe the backend; it is never written.
+const PROBE_ALIAS: &str = "__segmenta_probe__";
+
+/// Backend used when no Secret Service is reachable.
+///
+/// It never writes a plaintext fallback: storing a secret fails with
+/// [`SecretError::Unavailable`] and the caller must pause or reject the task with
+/// `ERR_KEYRING_UNAVAILABLE` (OpenSpec 08).
+pub struct UnavailableSecretStore;
+
+impl SecretStore for UnavailableSecretStore {
+    fn backend(&self) -> &'static str {
+        "unavailable"
+    }
+
+    fn store(&self, _alias: &str, _secret: &str) -> Result<(), SecretError> {
+        Err(SecretError::Unavailable(
+            "no Secret Service: install libsecret-tools and unlock the keyring".to_string(),
+        ))
+    }
+
+    fn lookup(&self, _alias: &str) -> Result<Option<String>, SecretError> {
+        Ok(None)
+    }
+
+    fn delete(&self, _alias: &str) -> Result<(), SecretError> {
+        Ok(())
     }
 }
 
@@ -129,7 +183,7 @@ impl SecretStore for KeyringSecretStore {
     }
 
     fn store(&self, alias: &str, secret: &str) -> Result<(), SecretError> {
-        let mut child = Command::new("secret-tool")
+        let mut child = Command::new(&self.tool)
             .args([
                 "store",
                 "--label",
@@ -161,7 +215,7 @@ impl SecretStore for KeyringSecretStore {
     }
 
     fn lookup(&self, alias: &str) -> Result<Option<String>, SecretError> {
-        let output = Command::new("secret-tool")
+        let output = Command::new(&self.tool)
             .args(["lookup", "service", "segmenta", "key", alias])
             .output()
             .map_err(|err| SecretError::Unavailable(err.to_string()))?;
@@ -179,7 +233,7 @@ impl SecretStore for KeyringSecretStore {
     }
 
     fn delete(&self, alias: &str) -> Result<(), SecretError> {
-        let _ = Command::new("secret-tool")
+        let _ = Command::new(&self.tool)
             .args(["clear", "service", "segmenta", "key", alias])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -188,14 +242,69 @@ impl SecretStore for KeyringSecretStore {
     }
 }
 
-/// Pick the best available backend for this session.
+/// Pick the best available backend for this session: keyring or nothing.
+///
+/// The plaintext file backend is never selected automatically. If the 0.0.1 fallback
+/// file exists and the keyring works, its entries are imported and the file removed.
 pub fn open_default(data_dir: &Path) -> Result<Box<dyn SecretStore>, SecretError> {
-    if KeyringSecretStore::available() {
-        return Ok(Box::new(KeyringSecretStore));
+    open_with(data_dir, KeyringSecretStore::detect())
+}
+
+/// Same as [`open_default`] with an explicit keyring choice (tests and diagnostics).
+pub fn open_with(
+    data_dir: &Path,
+    keyring: Option<KeyringSecretStore>,
+) -> Result<Box<dyn SecretStore>, SecretError> {
+    match keyring {
+        Some(keyring) => {
+            migrate_legacy_file(&keyring, data_dir);
+            Ok(Box::new(keyring))
+        }
+        None => Ok(Box::new(UnavailableSecretStore)),
     }
-    Ok(Box::new(FileSecretStore::open(
-        &data_dir.join("secrets.json"),
-    )?))
+}
+
+/// Move every alias of the 0.0.1 `secrets.json` into the keyring, then delete the file.
+///
+/// A partial failure leaves the file untouched: losing a secret silently is worse than
+/// asking the user to unlock the keyring and retry.
+fn migrate_legacy_file(keyring: &KeyringSecretStore, data_dir: &Path) {
+    let path = data_dir.join("secrets.json");
+    let Ok(bytes) = std::fs::read(&path) else {
+        return;
+    };
+    let Ok(entries) = serde_json::from_slice::<BTreeMap<String, String>>(&bytes) else {
+        eprintln!(
+            "segmenta-daemon: {} is not a legacy secret file; leaving it untouched",
+            path.display()
+        );
+        return;
+    };
+    if entries.is_empty() {
+        let _ = std::fs::remove_file(&path);
+        return;
+    }
+    for (alias, secret) in &entries {
+        if let Err(err) = keyring.store(alias, secret) {
+            eprintln!(
+                "segmenta-daemon: could not import {alias} into the keyring ({err}); keeping {} for a later attempt",
+                path.display()
+            );
+            return;
+        }
+    }
+    match std::fs::remove_file(&path) {
+        Ok(()) => eprintln!(
+            "segmenta-daemon: imported {} secret(s) from {} into the keyring",
+            entries.len(),
+            path.display()
+        ),
+        Err(err) => eprintln!(
+            "segmenta-daemon: migrated {} secret(s) but could not remove {}: {err}",
+            entries.len(),
+            path.display()
+        ),
+    }
 }
 
 fn set_mode(path: &Path, mode: u32) -> std::io::Result<()> {
