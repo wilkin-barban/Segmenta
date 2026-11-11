@@ -1,25 +1,7 @@
 # Segmenta 0.0.1 — primer release usable
 
 Release `v0.0.1` de Segmenta: gestor de descargas directo, nativo, segmentado y reanudable, empaquetado
-como `.deb` para Ubuntu 26.04 LTS. Documento de trabajo ODD; se lee hasta `**L6 — Evidencia de las puertas.** `cargo fmt --all -- --check`, `cargo clippy --workspace
---all-targets -- -D warnings` y `cargo test --workspace` en verde (151 tests, incluidos los 5 de
-`cli_e2e`); `xvfb-run -a cargo test -p segmenta-gui` con las 5 pruebas de ventana reales; smoke
-`SMOKE OK rows=1 segments=4` 5/5.
-
-**L7 — Defectos encontrados al probar el `.deb` instalado.** (a) `segments.id` es el rowid global:
-dos descargas que numeraban sus segmentos desde 0 colisionaban y todo checkpoint de la segunda
-fallaba en silencio; ahora se inserta sin id explícito y hay test de regresión con dos tareas.
-(b) `segmenta list` imprime ids de 8 caracteres pero los comandos exigían el UUID completo; ahora
-se resuelve un prefijo único. (c) un `Completed` no persistía la tabla final de segmentos; (d)
-`download_dir` no seguía a `settings`; (e) reanudar sin checkpoint chocaba con `EEXIST`.
-
-**L8 — Verificación sobre el paquete instalado.** `.deb` `segmenta_0.0.1-1_amd64.deb` instalado con
-`dpkg -i`, `segmenta.socket` habilitado, `segmenta hello` responde, GUI abre bajo `xvfb`, descarga de
-10 MiB con 8 conexiones con SHA-256 idéntico, 32 MiB pausado a ~18 MiB + `SIGKILL` + reconexión +
-reanudación con SHA-256 idéntico, y dos descargas simultáneas sin errores de checkpoint. `lintian`
-no está instalado en el entorno: no se ejecutó (no se inventa el resultado).
-
-## Log`.
+como `.deb` para Ubuntu 26.04 LTS. Documento de trabajo ODD; se lee hasta `## Log`.
 
 ## Specs
 
@@ -274,24 +256,6 @@ controla el ciclo completo; la GUI muestra progreso y segmentos bajo `xvfb-run`;
 el daemon arranca por systemd user; el repositorio queda limpio (S24). El tag empuja un GitHub Release
 con `.deb`, `.sha256` y notas de instalación (S22).
 
-**L6 — Evidencia de las puertas.** `cargo fmt --all -- --check`, `cargo clippy --workspace
---all-targets -- -D warnings` y `cargo test --workspace` en verde (151 tests, incluidos los 5 de
-`cli_e2e`); `xvfb-run -a cargo test -p segmenta-gui` con las 5 pruebas de ventana reales; smoke
-`SMOKE OK rows=1 segments=4` 5/5.
-
-**L7 — Defectos encontrados al probar el `.deb` instalado.** (a) `segments.id` es el rowid global:
-dos descargas que numeraban sus segmentos desde 0 colisionaban y todo checkpoint de la segunda
-fallaba en silencio; ahora se inserta sin id explícito y hay test de regresión con dos tareas.
-(b) `segmenta list` imprime ids de 8 caracteres pero los comandos exigían el UUID completo; ahora
-se resuelve un prefijo único. (c) un `Completed` no persistía la tabla final de segmentos; (d)
-`download_dir` no seguía a `settings`; (e) reanudar sin checkpoint chocaba con `EEXIST`.
-
-**L8 — Verificación sobre el paquete instalado.** `.deb` `segmenta_0.0.1-1_amd64.deb` instalado con
-`dpkg -i`, `segmenta.socket` habilitado, `segmenta hello` responde, GUI abre bajo `xvfb`, descarga de
-10 MiB con 8 conexiones con SHA-256 idéntico, 32 MiB pausado a ~18 MiB + `SIGKILL` + reconexión +
-reanudación con SHA-256 idéntico, y dos descargas simultáneas sin errores de checkpoint. `lintian`
-no está instalado en el entorno: no se ejecutó (no se inventa el resultado).
-
 ## Log
 
 **L1 (solicitud original del usuario, verbatim):**
@@ -419,11 +383,29 @@ FFmpeg 8.0.1, Rust 1.99.1 instalado por rustup, `xvfb` disponible.
 `GNOME 48+ → GNOME 50+` en 04 (26.04 LTS embarca GNOME 50.1) y la nota de CI reescrita: 26.04 es la LTS
 objetiva, ya estable. Commit `docs: retarget release target to Ubuntu 26.04 LTS`.
 
+**L4 — Alcance de 0.0.1 decidido.** Cuatro crates obligatorias; el motor expone su servidor de rangos
+de prueba como módulo de `segmenta-core` (feature `testserver`) para que daemon y CLI lo reutilicen sin
+una crate extra. `segmenta-host`/`extension` quedan fuera salvo que T1–T11 estén verdes.
+
 **L5 — Códigos de error y evento de reinicio.** El motor necesita identificadores numéricos que 07
 no cubre (redirecciones, recurso ausente, cuerpo truncado) y 06 pide notificar
 `download_restarted_due_to_stale_cache`, que 07 no lista. Se agregó la tabla 06 §4.3 y el evento 9 en
 07 §5 antes de implementarlos, como exige 11 §86.
 
-**L4 — Alcance de 0.0.1 decidido.** Cuatro crates obligatorias; el motor expone su servidor de rangos
-de prueba como módulo de `segmenta-core` (feature `testserver`) para que daemon y CLI lo reutilicen sin
-una crate extra. `segmenta-host`/`extension` quedan fuera salvo que T1–T11 estén verdes.
+**L6 — Evidencia de las puertas.** `cargo fmt --all -- --check`, `cargo clippy --workspace
+--all-targets -- -D warnings` y `cargo test --workspace` en verde (151 tests, incluidos los 5 de
+`cli_e2e`); `xvfb-run -a cargo test -p segmenta-gui` con las 5 pruebas de ventana reales; smoke
+`SMOKE OK rows=1 segments=4` 5/5.
+
+**L7 — Defectos encontrados al probar el `.deb` instalado.** (a) `segments.id` es el rowid global:
+dos descargas que numeraban sus segmentos desde 0 colisionaban y todo checkpoint de la segunda
+fallaba en silencio; ahora se inserta sin id explícito y hay test de regresión con dos tareas.
+(b) `segmenta list` imprime ids de 8 caracteres pero los comandos exigían el UUID completo; ahora
+se resuelve un prefijo único. (c) un `Completed` no persistía la tabla final de segmentos; (d)
+`download_dir` no seguía a `settings`; (e) reanudar sin checkpoint chocaba con `EEXIST`.
+
+**L8 — Verificación sobre el paquete instalado.** `.deb` `segmenta_0.0.1-1_amd64.deb` instalado con
+`dpkg -i`, `segmenta.socket` habilitado, `segmenta hello` responde, GUI abre bajo `xvfb`, descarga de
+10 MiB con 8 conexiones con SHA-256 idéntico, 32 MiB pausado a ~18 MiB + `SIGKILL` + reconexión +
+reanudación con SHA-256 idéntico, y dos descargas simultáneas sin errores de checkpoint. `lintian`
+no está instalado en el entorno: no se ejecutó (no se inventa el resultado).
