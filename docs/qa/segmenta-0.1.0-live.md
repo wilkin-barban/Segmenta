@@ -19,3 +19,14 @@ Fix:
 Verificación: `unzip -l` muestra `_locales/{es,en,pt_BR}/messages.json` en ambos ZIP;
 `node extension/tests/run.mjs` pasa con los 6 tests nuevos; el `.deb` no incluye assets
 de la extensión, así que su SHA no cambia.
+
+## Hallazgos del QA en vivo (0.1.0)
+
+| # | Hallazgo | Estado |
+| --- | --- | --- |
+| 1 | Panel: `ERR_HOST_PROTOCOL · reply is not a JSON-RPC object` por auto-resolve por aridad en `invoke()` | **Corregido** (`b9756a2`/`f35ca55`): espera el callback; test con API de aridad 2 que responde async; 66 tests Node |
+| 2 | ZIP sin `_locales` (Chrome lo rechaza) | **Corregido**: `tools/pack.mjs` copia/valida y ambos ZIP llevan es/en/pt_BR |
+| 3 | `.deb` sin CLI de medios visible en `--help` | **Corregido** (`18d7e36`): `media probe|add` documentados en es/en/pt-BR; `.deb` reconstruido |
+| 4 | Progreso de medios en 0 (bytes/total/speed) | **Corregido**: el runner lee también **stderr** (donde yt-dlp emite `--progress-template`); test con el fake emitiendo por stderr y aserción de `downloaded_bytes > 0` |
+| 5 | 720p falla con 403 | **Mitigado**: modo video usa selector **muxed** `b[height<=H]/18/...` en vez del `format_id` video-only; test unitario del argv |
+| 6 | HLS/DASH no cableado (`1043`) | **Pendiente**: `manager.rs` sólo acepta YouTube; falta conectar `segmenta-core::stream` + descarga de fragmentos + merge ffmpeg + tests con fixture local |
