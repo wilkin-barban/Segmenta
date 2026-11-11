@@ -119,7 +119,7 @@ fn render(window: &SegmentaWindow) -> Result<gtk::gdk::Texture, String> {
         .surface()
         .ok_or_else(|| "the window has no GdkSurface".to_string())?;
     let renderer = gtk::gsk::CairoRenderer::new();
-    renderer.realize(Some(&surface));
+    let _ = renderer.realize(Some(&surface));
     let texture = renderer.render_texture(&node, None::<&gtk::graphene::Rect>);
     // A realized renderer must be unrealized before it is disposed.
     renderer.unrealize();

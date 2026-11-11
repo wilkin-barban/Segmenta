@@ -26,6 +26,25 @@ pub enum DownloadStatus {
 
 impl DownloadStatus {
     /// Spanish label shown in the list and the detail page.
+    /// Localized status label (S21).
+    pub fn label(&self, locale: segmenta_i18n::Locale) -> &'static str {
+        use segmenta_i18n::{tr, Msg};
+        tr(
+            locale,
+            match self {
+                DownloadStatus::Pending => Msg::StatusPending,
+                DownloadStatus::Probing => Msg::StatusProbing,
+                DownloadStatus::Downloading => Msg::StatusDownloading,
+                DownloadStatus::Paused => Msg::StatusPaused,
+                DownloadStatus::Verifying => Msg::StatusVerifying,
+                DownloadStatus::Completed => Msg::StatusCompleted,
+                DownloadStatus::Failed => Msg::StatusFailed,
+                DownloadStatus::Cancelled => Msg::StatusCancelled,
+                DownloadStatus::Unknown => Msg::StatusUnknown,
+            },
+        )
+    }
+
     pub fn label_es(&self) -> &'static str {
         match self {
             DownloadStatus::Pending => "En espera",
@@ -253,6 +272,21 @@ impl Filter {
         Filter::Completed,
         Filter::Failed,
     ];
+
+    /// Localized sidebar label (S21).
+    pub fn label(&self, locale: segmenta_i18n::Locale) -> &'static str {
+        use segmenta_i18n::{tr, Msg};
+        tr(
+            locale,
+            match self {
+                Filter::All => Msg::FilterAll,
+                Filter::Active => Msg::FilterActive,
+                Filter::Paused => Msg::FilterPaused,
+                Filter::Completed => Msg::FilterCompleted,
+                Filter::Failed => Msg::FilterFailed,
+            },
+        )
+    }
 
     pub fn label_es(&self) -> &'static str {
         match self {
