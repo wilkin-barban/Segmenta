@@ -194,6 +194,16 @@ impl SegmentaWindow {
         self.0.view_state.borrow().clone()
     }
 
+    /// Drop the connection, reconnect and reload the list (the error page action).
+    pub fn retry(&self) {
+        self.0.retry_connection();
+    }
+
+    /// Text currently shown on the error page (startup tests).
+    pub fn error_description(&self) -> Option<String> {
+        self.0.error_page.description().map(|text| text.to_string())
+    }
+
     pub fn filter(&self) -> Filter {
         self.0.filter.get()
     }
@@ -616,15 +626,17 @@ impl Inner {
         let handle = Rc::downgrade(self);
         retry.connect_clicked(move |_| {
             if let Some(inner) = handle.upgrade() {
-                inner.set_loading();
-                inner.reload_all();
-                inner.load_settings();
+                // Drop the stale connection so the worker connects again before the
+                // reload; otherwise the click only repaints the same error.
+                inner.retry_connection();
             }
         });
         content_box.append(&detail);
         content_box.append(&retry);
         self.error_page.set_child(Some(&content_box));
-        self.error_page.set_visible(false);
+        // The page stays hidden until `set_error` switches to it; hiding it here made
+        // the stack keep showing the loading spinner forever.
+        self.error_page.set_visible(true);
         // Keep a handle on the detail label through the page child chain.
         self.error_page.set_widget_name("segmenta-error-page");
         self.error_page.clone().upcast()
@@ -747,6 +759,16 @@ impl Inner {
             match event {
                 ClientEvent::Connected => {
                     self.connected.set(true);
+                    // The worker just connected (possibly after a retry): if the snapshot
+                    // is empty or in error, fetch it now instead of staying on the
+                    // spinner. This is what a late socket activation needs.
+                    let empty = self.store.borrow().is_empty();
+                    let failed = matches!(*self.view_state.borrow(), ViewState::Error(_));
+                    if empty || failed {
+                        self.set_loading();
+                        self.reload_all();
+                        self.load_settings();
+                    }
                 }
                 ClientEvent::Disconnected(detail) => {
                     self.connected.set(false);
@@ -770,20 +792,29 @@ impl Inner {
             let (_, kind) = pending.remove(position);
             self.finish_request(kind, result);
         }
-        *self.pending.borrow_mut() = pending;
+        // `finish_request` may enqueue follow-ups (reload after pause/delete); keep them.
+        self.pending.borrow_mut().splice(0..0, pending);
     }
 
     fn finish_request(&self, kind: Pending, result: Result<Value, ClientError>) {
         match kind {
-            Pending::Hello => {
-                if let Ok(value) = result {
+            Pending::Hello => match result {
+                Ok(value) => {
                     let version = value
                         .get("daemon_version")
                         .and_then(Value::as_str)
                         .map(str::to_string);
                     *self.daemon_version.borrow_mut() = version;
                 }
-            }
+                Err(err) => {
+                    // First real diagnosis of a broken connection: surface it.
+                    eprintln!(
+                        "segmenta-gui: system.hello failed: {}",
+                        err.ui_message()
+                    );
+                    self.set_error(err.ui_message());
+                }
+            },
             Pending::Settings => match result {
                 Ok(value) => {
                     if let Ok(settings) = serde_json::from_value::<Settings>(value) {
@@ -1001,11 +1032,23 @@ impl Inner {
     fn set_error(&self, message: String) {
         *self.last_error.borrow_mut() = Some(message.clone());
         *self.view_state.borrow_mut() = ViewState::Error(message.clone());
+        let locale = segmenta_i18n::current();
+        use segmenta_i18n::{Msg, tr};
+        self.error_page.set_title(&tr(locale, Msg::ErrorTitle));
         self.error_page.set_description(Some(&format!(
-            "{message}\n\nComprueba el servicio de usuario con \
-             «systemctl --user start segmenta.socket»."
+            "{message}\n\n{}\n{}",
+            tr(locale, Msg::ErrorBody),
+            tr(locale, Msg::ErrorCommand)
         )));
         self.stack.set_visible_child_name("error");
+    }
+
+    /// Retry the connection and reload the view; the error button uses this.
+    fn retry_connection(&self) {
+        self.client.reconnect();
+        self.set_loading();
+        self.reload_all();
+        self.load_settings();
     }
 
     fn set_filter(self: &Rc<Self>, filter: Filter, update_selection: bool) {
@@ -1070,10 +1113,11 @@ impl Inner {
             ViewState::Empty
         };
         self.empty_page.set_title(filter.empty_title());
-        if state == ViewState::Empty {
-            self.stack.set_visible_child_name("empty");
-        } else if state == ViewState::Ready {
-            self.stack.set_visible_child_name("list");
+        match state {
+            ViewState::Empty => self.stack.set_visible_child_name("empty"),
+            ViewState::Ready => self.stack.set_visible_child_name("list"),
+            ViewState::Error(_) => self.stack.set_visible_child_name("error"),
+            ViewState::Loading => self.stack.set_visible_child_name("loading"),
         }
         *self.view_state.borrow_mut() = state;
     }
