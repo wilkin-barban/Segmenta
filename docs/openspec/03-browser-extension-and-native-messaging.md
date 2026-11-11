@@ -4,6 +4,10 @@
 > **Versión:** 1.0.0  
 > **Área:** Integración Web, Sniffer Multimedia y Native Messaging
 
+> **Normativo:** los manifiestos separados de Chrome/Firefox, la clave de extensión, la inyección
+> en `world: MAIN`, el framing little-endian y el alcance de streaming están en
+> [`09-extension-security.md`](09-extension-security.md). El contrato HTTP está en 06 y el IPC en 07.
+
 ---
 
 ## 1. Visión General de la Integración
@@ -39,6 +43,11 @@ La integración con navegadores permite a Segmenta capturar descargas de forma t
 ## 2. Especificación de la Extensión (Manifest V3)
 
 ### 2.1. Archivo `manifest.json`
+El siguiente `manifest.json` es **ilustrativo**: la separación de contextos, los manifiestos de
+Chrome/Firefox y la inyección válida están en 09. En particular, `document.js` va en
+`content_scripts` con `world: "MAIN"` (09 §3.1), no hace falta exponerlo en `web_accessible_resources`,
+y `allowed_origins` no se mezcla con `allowed_extensions`.
+
 ```json
 {
   "manifest_version": 3,
@@ -99,7 +108,7 @@ La integración con navegadores permite a Segmenta capturar descargas de forma t
 Para no perder peticiones AJAX o llamadas a API de video creadas dinámicamente por librerías (como Shaka Player, Hls.js o Dash.js):
 * `document.js` intercepta `window.fetch` y `XMLHttpRequest.prototype.open`.
 * Si la URL solicitada coincide con extensiones multimedia (`.m3u8`, `.mpd`, `.mp4`, `.m4s`, `.webm`, `.ts`):
-  * Emite un evento `window.postMessage` con los metadatos de la solicitud:
+  * Emite los metadatos por el canal seguro definido en 09 (MessageChannel/canal validado); no se confía en un `postMessage` con origen `*`. El siguiente bloque es sólo ilustrativo:
     ```javascript
     window.postMessage({
       source: "segmenta-sniffer",
@@ -122,32 +131,11 @@ Para no perder peticiones AJAX o llamadas a API de video creadas dinámicamente 
 ## 4. El Host de Mensajería Nativa (`segmenta-host`)
 
 ### 4.1. Archivo de Manifiesto en Ubuntu
-Debe colocarse en las rutas estándar de Linux según el navegador:
-
-* **Google Chrome / Chromium**:  
-  `~/.config/google-chrome/NativeMessagingHosts/io.github.wilkin.segmenta.json`
-* **Brave Browser**:  
-  `~/.config/BraveSoftware/Brave-Browser/NativeMessagingHosts/io.github.wilkin.segmenta.json`
-* **Mozilla Firefox**:  
-  `~/.mozilla/native-messaging-hosts/io.github.wilkin.segmenta.json`
-
-Contenido del archivo JSON:
-```json
-{
-  "name": "io.github.wilkin.segmenta",
-  "description": "Host de mensajería nativa para Segmenta en Ubuntu",
-  "path": "/usr/bin/segmenta-host",
-  "type": "stdio",
-  "allowed_origins": [
-    "chrome-extension://[EXTENSION_ID]/"
-  ],
-  "allowed_extensions": [
-    "segmenta@wilkin.github.io"
-  ]
-}
-```
-
----
+Chrome/Brave y Firefox usan manifiestos **separados**; no se debe usar un único JSON con
+`allowed_origins` y `allowed_extensions` a la vez. Los manifiestos completos, la clave pública fija y
+el ID determinista están en [`09-extension-security.md`](09-extension-security.md) §1–§2. El host se
+instala con el paquete de 10 y, en desarrollo, se usa un manifiesto separado con el ID de la extensión
+sin empaquetar.
 
 ### 4.2. Protocolo de E/S por `stdio`
 El binario ELF `segmenta-host` implementa el protocolo de Chromium:
@@ -173,9 +161,9 @@ Cuando el recurso capturado es un manifiesto (`.m3u8` o `.mpd`):
 2. `segmenta-daemon` ejecuta el parser interno de streams:
    * **HLS**: Lee la lista maestra M3U8, extrae la lista de fragmentos `.ts` o `.m4s`, y descarga cada segmento concurrentemente.
    * **DASH**: Lee el XML `.mpd`, calcula la línea de tiempo (`SegmentTimeline`), y descarga las pistas de video y audio independientes.
-3. **Muxing y Remuestreo sin Pérdida**:
-   * Al completarse los fragmentos, el daemon invoca de forma transparente a `ffmpeg` en Linux:
-     ```bash
-     ffmpeg -i video_stream.m4s -i audio_stream.m4s -c copy -movflags +faststart output.mp4
-     ```
-   * El usuario obtiene un archivo `.mp4` perfectamente sincronizado y con metadatos completos.
+3. **Muxing sin Pérdida**:
+   * El pipeline completo —init segment, orden de fragmentos, listas `ffconcat`, audio/video por
+     separado y ejecución sin shell— está especificado en
+     [`09-extension-security.md`](09-extension-security.md) §5.2. El comando no debe usar un shell.
+   * **Alcance v1:** HLS/DASH públicos sin cifrar. Cualquier `EXT-X-KEY` distinto de `NONE` o
+     `ContentProtection` DRM se rechaza con un mensaje explícito.

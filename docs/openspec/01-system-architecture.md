@@ -4,6 +4,11 @@
 > **Versión:** 1.0.0  
 > **Público Objetivo:** Agentes Autónomos y Desarrolladores de Software de Sistemas
 
+> **Contratos normativos:** 06 (HTTP), 07 (IPC), 08 (persistencia y hot-split), 09
+> (extensión y Native Messaging) y 10 (empaquetado y pruebas). Si este documento resume algo
+> que aquellos detallan, prevalecen los documentos específicos; en particular, el DDL de 08
+> reemplaza el esquema ilustrativo que antes vivía aquí.
+
 ---
 
 ## 1. Visión General de la Arquitectura
@@ -87,6 +92,9 @@ flowchart TD
 
 ## 3. Protocolo de Comunicación Inter-Procesos (IPC)
 
+El contrato completo —métodos, parámetros, errores, eventos, framing y ciclo de vida— está en
+[`07-ipc-contract.md`](07-ipc-contract.md). Lo que sigue es sólo el mapa de transporte.
+
 ### 3.1. Transporte y Ubicación
 * **Ruta del Socket Unix:**  
   `$XDG_RUNTIME_DIR/segmenta/daemon.sock`  
@@ -160,7 +168,7 @@ El daemon emite eventos en tiempo real hacia la GUI para actualizar las barras d
         "segment_id": 1,
         "start_offset": 0,
         "end_offset": 1073741823,
-        "current_offset": 1073741824,
+        "next_offset": 1073741824,
         "status": "completed",
         "speed_bps": 0
       },
@@ -168,7 +176,7 @@ El daemon emite eventos en tiempo real hacia la GUI para actualizar las barras d
         "segment_id": 2,
         "start_offset": 1073741824,
         "end_offset": 2147483647,
-        "current_offset": 1450000000,
+        "next_offset": 1450000000,
         "status": "downloading",
         "speed_bps": 26214400
       },
@@ -176,7 +184,7 @@ El daemon emite eventos en tiempo real hacia la GUI para actualizar las barras d
         "segment_id": 3,
         "start_offset": 2147483648,
         "end_offset": 4294967295,
-        "current_offset": 2400000000,
+        "next_offset": 2400000000,
         "status": "downloading",
         "speed_bps": 26214400
       }
@@ -189,67 +197,27 @@ El daemon emite eventos en tiempo real hacia la GUI para actualizar las barras d
 * `download.pause` -> `{"method": "download.pause", "params": {"task_id": "..."}}`
 * `download.resume` -> `{"method": "download.resume", "params": {"task_id": "..."}}`
 * `download.cancel` -> `{"method": "download.cancel", "params": {"task_id": "...", "delete_file": false}}`
-* `download.set_speed_limit` -> `{"method": "download.set_speed_limit", "params": {"max_bytes_per_sec": 10485760}}`
 * `settings.get` -> `{"method": "settings.get"}` (Retorna todas las opciones de configuración)
-* `settings.update` -> `{"method": "settings.update", "params": {"max_connections": 16, "speed_limit_enabled": true, ...}}`
+* `settings.update` -> `{"method": "settings.update", "params": {"max_connections": 16, "global_speed_limit_bps": 10485760, ...}}`
 * `queue.schedule` -> `{"method": "queue.schedule", "params": {"start_time": "02:00", "stop_time": "06:00", "action_on_complete": "power_off"}}`
 
 ---
 
 ## 4. Persistencia y Recuperación de Fallos (SQLite WAL)
 
-La base de datos se almacena en `$XDG_DATA_HOME/segmenta/segmenta.db`.
+La base de datos se almacena en `$XDG_DATA_HOME/segmenta/segmenta.db`, con el esquema normativo de
+[`08-persistence-recovery.md`](08-persistence-recovery.md).
 * **Modo de Diario:** `PRAGMA journal_mode = WAL;` (permite lecturas concurrentes sin bloquear escrituras del motor).
-* **Esquema de Tablas:**
-
-```sql
-CREATE TABLE IF NOT EXISTS downloads (
-    id TEXT PRIMARY KEY,
-    url TEXT NOT NULL,
-    final_path TEXT NOT NULL,
-    total_bytes INTEGER NOT NULL,
-    downloaded_bytes INTEGER NOT NULL DEFAULT 0,
-    status TEXT NOT NULL CHECK(status IN ('pending', 'probing', 'downloading', 'paused', 'completed', 'failed')),
-    supports_ranges BOOLEAN NOT NULL DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    completed_at TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS segments (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    download_id TEXT NOT NULL,
-    start_offset INTEGER NOT NULL,
-    end_offset INTEGER NOT NULL,
-    current_offset INTEGER NOT NULL,
-    status TEXT NOT NULL CHECK(status IN ('idle', 'active', 'completed')),
-    FOREIGN KEY(download_id) REFERENCES downloads(id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS headers_cookies (
-    download_id TEXT PRIMARY KEY,
-    headers_json TEXT,
-    cookies_json TEXT,
-    FOREIGN KEY(download_id) REFERENCES downloads(id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS settings (
-    key TEXT PRIMARY KEY,
-    value_json TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS site_logins (
-    domain TEXT PRIMARY KEY,
-    username TEXT NOT NULL,
-    secret_token TEXT
-);
-```
+* **Esquema de Tablas:** el DDL normativo, los índices, los pragmas y las reglas de aislamiento viven en
+  [`08-persistence-recovery.md`](08-persistence-recovery.md). No se duplica aquí: el esquema anterior
+  (`current_offset`, `headers_cookies`, `site_logins.secret_token`) quedó reemplazado por la versión
+  transaccional de 08, que usa `next_offset`, una tabla de secretos por tarea y el llavero de GNOME.
 
 ### Protocolo de Reanudación Post-Cierre o Caída de Corriente
 1. Al arrancar `segmenta-daemon`, se consulta la tabla `downloads` filtrando por `status = 'downloading'`.
 2. Las descargas incompletas se marcan como `paused`.
 3. Al pulsar `resume`:
    * Se lee el estado de cada segmento en la tabla `segments`.
-   * Para cada segmento incompleto, el punto de inicio de la nueva conexión HTTP será:
-     $$\text{Nuevo Inicio} = \text{current\_offset}$$
-   * Se envía `Range: bytes={current_offset}-{end_offset}`.
-   * La descarga continúa exactamente donde se detuvo sin corromper un solo byte.
+   * Para cada segmento incompleto, `next_offset` es el próximo byte a escribir (convención de 08).
+   * Se envía `Range: bytes={next_offset}-{end_offset}` con `If-Range` cuando exista validador.
+   * La descarga continúa exactamente donde se detuvo, después de validar que el archivo remoto no cambió.
