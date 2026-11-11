@@ -172,6 +172,23 @@ pub struct SegmentRow {
     pub next: u64,
 }
 
+/// Everything one checkpoint writes for a task.
+#[derive(Debug, Clone, Copy)]
+pub struct Checkpoint<'a> {
+    /// Segment table to replace the stored one.
+    pub segments: &'a [SegmentRow],
+    /// Bytes confirmed on disk.
+    pub downloaded_bytes: u64,
+    /// Total size, when it changed.
+    pub total_bytes: Option<u64>,
+    /// Strong validator, when it changed.
+    pub etag: Option<&'a str>,
+    /// Weak validator, when it changed.
+    pub last_modified: Option<&'a str>,
+    /// Whether the server honoured ranges.
+    pub supports_ranges: bool,
+}
+
 /// One row of `queues`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueueRow {
@@ -537,20 +554,22 @@ impl Store {
     }
 
     /// Persist the offsets and validators of one task after a checkpoint.
-    pub fn save_checkpoint(
-        &self,
-        id: &str,
-        segments: &[SegmentRow],
-        downloaded_bytes: u64,
-        total_bytes: Option<u64>,
-        etag: Option<&str>,
-        last_modified: Option<&str>,
-        supports_ranges: bool,
-    ) -> Result<()> {
+    ///
+    /// `total_bytes`, `etag` and `last_modified` are optional: a checkpoint only keeps
+    /// the value already stored for them.
+    pub fn save_checkpoint(&self, id: &str, state: &Checkpoint<'_>) -> Result<()> {
+        let Checkpoint {
+            segments,
+            downloaded_bytes,
+            total_bytes,
+            etag,
+            last_modified,
+            supports_ranges,
+        } = state;
         let mut conn = self.lock();
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM segments WHERE download_id = ?1", params![id])?;
-        for segment in segments {
+        for segment in segments.iter() {
             tx.execute(
                 "INSERT INTO segments
                     (id, download_id, start_offset, end_offset, next_offset, status)
@@ -575,11 +594,11 @@ impl Store {
              supports_ranges = ?6 WHERE id = ?1",
             params![
                 id,
-                downloaded_bytes as i64,
+                *downloaded_bytes as i64,
                 total_bytes.map(|v| v as i64),
                 etag,
                 last_modified,
-                supports_ranges as i64
+                *supports_ranges as i64
             ],
         )?;
         tx.commit()?;

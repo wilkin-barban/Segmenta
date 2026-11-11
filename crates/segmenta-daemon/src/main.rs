@@ -91,9 +91,6 @@ async fn serve(args: Args) -> Result<(), String> {
     let secrets = Arc::from(
         secrets::open_default(&data_dir).map_err(|err| format!("cannot open secrets: {err}"))?,
     );
-    let settings = store.settings().unwrap_or_default();
-    let download_dir = PathBuf::from(&settings.download_dir);
-
     let socket_path = args.socket.clone().unwrap_or_else(segmenta_daemon::socket_path);
     let bus = Arc::new(EventBus::new());
     let server = match systemd_listen_fd().filter(|_| args.systemd) {
@@ -108,7 +105,6 @@ async fn serve(args: Args) -> Result<(), String> {
         Arc::clone(&store),
         secrets,
         Arc::clone(&bus),
-        download_dir,
         shutdown_tx,
     ));
     manager.recover();

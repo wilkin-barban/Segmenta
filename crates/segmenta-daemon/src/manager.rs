@@ -2,7 +2,7 @@
 //! the event bus and persists checkpoints in the order OpenSpec 08 mandates.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
@@ -27,7 +27,7 @@ use crate::rpc::{
 };
 use crate::secrets::SecretStore;
 use crate::store::{
-    DownloadRecord, DownloadStatus, SegmentRow, Settings, Store, StoreError,
+    Checkpoint, DownloadRecord, DownloadStatus, SegmentRow, Settings, Store, StoreError,
 };
 
 /// Live numbers of a running task, kept out of the database until a checkpoint.
@@ -60,7 +60,6 @@ pub struct Manager {
     running: Arc<Mutex<HashMap<String, RunningTask>>>,
     shutdown: watch::Sender<bool>,
     started: std::time::Instant,
-    download_dir: PathBuf,
 }
 
 impl Manager {
@@ -69,7 +68,6 @@ impl Manager {
         store: Arc<Store>,
         secrets: Arc<dyn SecretStore>,
         bus: Arc<EventBus>,
-        download_dir: PathBuf,
         shutdown: watch::Sender<bool>,
     ) -> Manager {
         let settings = store.settings().unwrap_or_default();
@@ -82,7 +80,6 @@ impl Manager {
             running: Arc::new(Mutex::new(HashMap::new())),
             shutdown,
             started: std::time::Instant::now(),
-            download_dir,
         }
     }
 
@@ -226,7 +223,7 @@ impl Manager {
         let destination_dir = params
             .destination_dir
             .map(PathBuf::from)
-            .unwrap_or_else(|| self.download_dir.clone());
+            .unwrap_or_else(|| PathBuf::from(&settings.download_dir));
         if !destination_dir.is_absolute() {
             return Err(RpcError::invalid_params(
                 "destination_dir must be an absolute path",
@@ -268,11 +265,9 @@ impl Manager {
             }
             None => None,
         };
-        let status = if params.start_immediately {
-            DownloadStatus::Pending
-        } else {
-            DownloadStatus::Pending
-        };
+        // A task is pending until the engine starts it: "start immediately" only
+        // decides whether the daemon launches it now.
+        let status = DownloadStatus::Pending;
         let record = DownloadRecord {
             id: task_id.clone(),
             url: url.to_string(),
@@ -353,6 +348,16 @@ impl Manager {
             .ok_or_else(|| RpcError::task_not_found(task_id))?;
         let settings = self.settings();
         let resume = self.build_resume(&record)?;
+        if resume.is_none() {
+            // Nothing was checkpointed, so the bytes on disk are unverified: discard them
+            // and let the engine publish a fresh file (the path is already task-private).
+            let path = PathBuf::from(&record.final_path);
+            if path.exists() {
+                std::fs::remove_file(&path).map_err(|err| {
+                    RpcError::internal(format!("cannot reset {}: {err}", path.display()))
+                })?;
+            }
+        }
         let (headers, sensitive) = self.request_headers(task_id)?;
         let http = HttpConfig {
             user_agent: format!("Segmenta/{}", crate::DAEMON_VERSION),
@@ -920,12 +925,14 @@ fn handle_event(
                 .unwrap_or(false);
             if let Err(err) = store.save_checkpoint(
                 task_id,
-                &rows,
-                downloaded_bytes,
-                None,
-                None,
-                None,
-                supports_ranges,
+                &Checkpoint {
+                    segments: &rows,
+                    downloaded_bytes,
+                    total_bytes: None,
+                    etag: None,
+                    last_modified: None,
+                    supports_ranges,
+                },
             ) {
                 eprintln!("segmenta-daemon: checkpoint failed for {task_id}: {err}");
             }
@@ -1004,6 +1011,7 @@ fn handle_event(
             path,
             total_bytes,
             checksum_ok,
+            ..
         } => {
             bus.publish(
                 "task_completed",
@@ -1029,8 +1037,32 @@ fn finish_task(
         TaskOutcome::Completed {
             total_bytes,
             checksum_ok,
+            segments,
         } => {
-            let _ = store.update_progress(task_id, total_bytes, Some(total_bytes));
+            // Persist the final table: without it `status` would keep showing the last
+            // checkpoint (a few hundred KiB short) for a task that already finished.
+            let rows: Vec<SegmentRow> = segments
+                .iter()
+                .map(|segment| SegmentRow {
+                    id: segment.id,
+                    start: segment.start,
+                    end: segment.end,
+                    next: segment.end.saturating_add(1),
+                })
+                .collect();
+            if let Err(err) = store.save_checkpoint(
+                task_id,
+                &Checkpoint {
+                    segments: &rows,
+                    downloaded_bytes: total_bytes,
+                    total_bytes: Some(total_bytes),
+                    etag: None,
+                    last_modified: None,
+                    supports_ranges: true,
+                },
+            ) {
+                eprintln!("segmenta-daemon: final checkpoint failed for {task_id}: {err}");
+            }
             let _ = store.set_status(task_id, DownloadStatus::Completed, None);
             bus.publish(
                 "state_changed",
@@ -1061,19 +1093,17 @@ fn finish_task(
                 .last_error
                 .as_ref()
                 .map(|err| (err.code(), err.to_string()));
-            let status = if error.is_some() {
-                DownloadStatus::Paused
-            } else {
-                DownloadStatus::Paused
-            };
+            let status = DownloadStatus::Paused;
             let _ = store.save_checkpoint(
                 task_id,
-                &rows,
-                downloaded,
-                Some(state.total_bytes),
-                state.etag.as_deref(),
-                state.last_modified.as_deref(),
-                state.supports_ranges,
+                &Checkpoint {
+                    segments: &rows,
+                    downloaded_bytes: downloaded,
+                    total_bytes: Some(state.total_bytes),
+                    etag: state.etag.as_deref(),
+                    last_modified: state.last_modified.as_deref(),
+                    supports_ranges: state.supports_ranges,
+                },
             );
             let _ = store.set_status(task_id, status, error.clone());
             bus.publish(
@@ -1199,9 +1229,4 @@ impl RpcHandler for Manager {
 /// Planner helper kept public for the daemon tests.
 pub fn planned_segments(total: u64, connections: u32) -> Vec<planner::SegmentRange> {
     planner::initial_segments(total, connections)
-}
-
-/// Resolve the default download directory from settings or XDG.
-pub fn download_directory(settings: &Settings) -> PathBuf {
-    Path::new(&settings.download_dir).to_path_buf()
 }
