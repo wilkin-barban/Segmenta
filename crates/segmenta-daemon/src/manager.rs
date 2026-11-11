@@ -1760,6 +1760,47 @@ impl RpcHandler for Manager {
                         .map_err(|err| RpcError::invalid_params(err.to_string()))?;
                     self.delete_task(parsed).await
                 }
+                "extension.status" => {
+                    let browsers = crate::browsers::detect();
+                    Ok(json!({
+                        "extension_id": crate::browsers::CHROMIUM_EXTENSION_ID,
+                        "host_path": crate::browsers::HOST_PATH,
+                        "browsers": browsers.iter().map(|browser| json!({
+                            "id": browser.id,
+                            "name": browser.name,
+                            "family": browser.family,
+                            "command": browser.command,
+                            "version": browser.version,
+                            "unsupported": browser.unsupported,
+                            "manifest_path": browser.manifest_path.to_string_lossy(),
+                            "manifest_present": browser.manifest_present,
+                        })).collect::<Vec<_>>(),
+                    }))
+                }
+                "extension.install-native" => {
+                    let home = std::env::var("HOME").unwrap_or_default();
+                    if home.is_empty() {
+                        return Err(RpcError::new(1050, "ERR_NO_HOME", "HOME is not set"));
+                    }
+                    let mut installed = Vec::new();
+                    let mut errors = Vec::new();
+                    for browser in crate::browsers::detect() {
+                        if browser.command.is_none() {
+                            continue;
+                        }
+                        match crate::browsers::install_user_manifest(&browser, std::path::Path::new(&home)) {
+                            Ok(path) => installed.push(json!({
+                                "id": browser.id,
+                                "path": path.to_string_lossy(),
+                            })),
+                            Err(message) => errors.push(json!({
+                                "id": browser.id,
+                                "message": message,
+                            })),
+                        }
+                    }
+                    Ok(json!({ "installed": installed, "errors": errors }))
+                }
                 "media.probe" => {
                     let parsed: MediaProbeParams = serde_json::from_value(parse(params)?)
                         .map_err(|err| RpcError::invalid_params(err.to_string()))?;

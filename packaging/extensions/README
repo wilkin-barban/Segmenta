@@ -1,0 +1,13 @@
+Segmenta browser extensions
+==========================
+
+segmenta-chromium.zip  Google Chrome, Chromium, Brave, Microsoft Edge, Vivaldi, Opera
+segmenta-firefox.zip   Firefox (temporary load from about:debugging)
+
+Install from the Navegadores page in Segmenta, or load the archive manually:
+
+  Chrome family  chrome://extensions -> Developer mode -> Load unpacked (unzip first)
+  Firefox        about:debugging#/runtime/this-firefox -> Load Temporary Add-on
+
+The native host manifest must exist for the browser; Segmenta can install the
+per-user copy from the same page (extension.install-native).
