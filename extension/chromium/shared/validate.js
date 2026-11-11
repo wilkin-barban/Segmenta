@@ -12,7 +12,7 @@
   }
 
   const MAX_MESSAGE_BYTES = 65536;
-  const MESSAGE_TYPES = ['segmenta.probe', 'segmenta.add', 'segmenta.status'];
+  const MESSAGE_TYPES = ['segmenta.probe', 'segmenta.add', 'segmenta.status', 'segmenta.capture', 'segmenta.torrent.add'];
   const MESSAGE_MODES = ['video', 'audio', 'playlist'];
   const PROBE_KINDS = ['video', 'playlist', 'stream'];
   const FORMAT_ID_PATTERN = /^[A-Za-z0-9._+-]{1,64}$/;
@@ -124,6 +124,39 @@
     return ok({ type: 'segmenta.status', taskId: taskId });
   }
 
+  function validateCapture(message) {
+    const url = typeof message.url === 'string' ? message.url.trim() : '';
+    const parsed = PROTOCOL.parseHttpUrl(url);
+    if (!parsed) {
+      return fail('ERR_INVALID_URL', 'capture url is not a valid http/https url');
+    }
+    const value = { type: 'segmenta.capture', url: parsed.href };
+    if (message.filename !== undefined && message.filename !== null && message.filename !== '') {
+      const filename = String(message.filename).trim();
+      if (filename.length > 255) {
+        return fail('ERR_INVALID_PARAMS', 'filename is too long');
+      }
+      value.filename = filename;
+    }
+    if (message.referrer !== undefined && message.referrer !== null && message.referrer !== '') {
+      const refParsed = PROTOCOL.parseHttpUrl(message.referrer);
+      if (!refParsed) {
+        return fail('ERR_INVALID_URL', 'referrer url is not valid');
+      }
+      value.referrer = refParsed.href;
+    }
+    return ok(value);
+  }
+
+  function validateTorrentAdd(message) {
+    const url = typeof message.url === 'string' ? message.url.trim() : '';
+    const torrent = PROTOCOL.parseTorrentUrl(url);
+    if (!torrent) {
+      return fail('ERR_INVALID_URL', 'torrent url or magnet uri is invalid');
+    }
+    return ok({ type: 'segmenta.torrent.add', url: torrent });
+  }
+
   function validateMessage(message, options) {
     const opts = options && typeof options === 'object' ? options : {};
     if (!message || typeof message !== 'object' || Array.isArray(message)) {
@@ -151,6 +184,10 @@
         return validateAdd(message, opts);
       case 'segmenta.status':
         return validateStatus(message);
+      case 'segmenta.capture':
+        return validateCapture(message);
+      case 'segmenta.torrent.add':
+        return validateTorrentAdd(message);
       default:
         return fail('ERR_INVALID_TYPE', 'message type is not allowed');
     }

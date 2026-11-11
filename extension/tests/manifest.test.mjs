@@ -24,6 +24,8 @@ export default function suite({ test }) {
     assert.equal(manifest.key.length > 100, true);
     assert.deepEqual(manifest.permissions.slice().sort(), [
       'activeTab',
+      'contextMenus',
+      'downloads',
       'nativeMessaging',
       'scripting',
       'storage',
@@ -93,6 +95,8 @@ export default function suite({ test }) {
     assert.equal(manifest.browser_specific_settings.gecko.id, 'segmenta@wilkin.github.io');
     assert.equal(manifest.permissions.includes('nativeMessaging'), true);
     assert.equal(manifest.permissions.includes('storage'), true);
+    assert.equal(manifest.permissions.includes('downloads'), true);
+    assert.equal(manifest.permissions.includes('contextMenus'), true);
     assert.equal(manifest.host_permissions.includes('https://www.youtube.com/*'), true);
     assert.equal(Array.isArray(manifest.background.scripts), true);
     assert.equal(manifest.background.scripts[manifest.background.scripts.length - 1], 'background.js');

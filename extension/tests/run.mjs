@@ -12,6 +12,7 @@ const SUITES = [
   './browser-api.test.mjs',
   './install-native.test.mjs',
   './pack.test.mjs',
+  './capture.test.mjs',
 ];
 
 const failures = [];

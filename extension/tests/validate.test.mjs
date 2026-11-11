@@ -20,8 +20,10 @@ export default function suite({ test }) {
     assert.equal(V.MAX_MESSAGE_BYTES, 65536);
     assert.deepEqual([...V.MESSAGE_TYPES].sort(), [
       'segmenta.add',
+      'segmenta.capture',
       'segmenta.probe',
       'segmenta.status',
+      'segmenta.torrent.add',
     ]);
   });
 
