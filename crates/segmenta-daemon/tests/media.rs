@@ -30,8 +30,8 @@ JSON
     exit 0
   fi
 done
-printf 'download:1024|4096|512000|6\n'
-printf 'download:4096|4096|512000|0\n'
+printf 'download:1024|4096|512000|6\n' >&2
+printf 'download:4096|4096|512000|0\n' >&2
 out=""
 while [ $# -gt 0 ]; do
   case "$1" in -o) out="$2"; shift 2 ;; *) shift ;; esac

@@ -1359,6 +1359,7 @@ impl Manager {
             output,
             format: params.format_id.clone(),
             playlist_limit: limit,
+            height: params.height,
         };
         self.start_media_task(task_id.clone(), plan, tool, final_path)?;
         Ok(json!({

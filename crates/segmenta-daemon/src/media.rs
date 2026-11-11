@@ -406,6 +406,20 @@ pub struct DownloadPlan {
     pub format: Option<String>,
     /// Playlist limit.
     pub playlist_limit: usize,
+    /// Requested vertical resolution for video mode.
+    pub height: Option<u32>,
+}
+
+/// Preference for muxed (video+audio) formats.
+///
+/// YouTube answers 403 to many DASH video-only formats from datacenter IPs, so video
+/// mode asks for the best single file that already carries both streams; `18` is the
+/// progressive fallback YouTube still serves.
+pub fn muxed_selector(height: Option<u32>) -> String {
+    match height {
+        Some(height) => format!("b[height<={height}]/18/b[height<={height}]/18/best"),
+        None => "b/18/best".to_string(),
+    }
 }
 
 impl DownloadPlan {
@@ -434,14 +448,14 @@ impl DownloadPlan {
             }
             MediaTaskKind::YoutubeVideo => {
                 args.push("-f".into());
-                args.push(self.format.clone().unwrap_or_else(|| "best".to_string()));
+                args.push(muxed_selector(self.height));
                 args.push("--merge-output-format".into());
                 args.push("mp4".into());
                 args.push("--no-playlist".into());
             }
             MediaTaskKind::YoutubePlaylist => {
                 args.push("-f".into());
-                args.push(self.format.clone().unwrap_or_else(|| "best".to_string()));
+                args.push(muxed_selector(self.height));
                 args.push("--merge-output-format".into());
                 args.push("mp4".into());
                 args.push("--yes-playlist".into());
@@ -521,35 +535,48 @@ pub async fn run_download(
         .take()
         .ok_or_else(|| MediaError::backend("no stdout"))?;
     let stderr = child.stderr.take();
-    let mut reader = BufReader::new(stdout).lines();
-    let mut err_task = None;
-    if let Some(stderr) = stderr {
-        err_task = Some(tokio::spawn(async move {
-            let mut buffer = String::new();
-            let mut lines = BufReader::new(stderr).lines();
+
+    // `--progress-template` lines go to stderr while stdout carries the destination
+    // lines, so both streams are consumed and classified here.
+    let (line_tx, mut line_rx) = tokio::sync::mpsc::channel::<(bool, String)>(256);
+    {
+        let sink = line_tx.clone();
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                buffer.push_str(&line);
-                buffer.push('\n');
-                if buffer.len() > 8192 {
-                    break;
+                if sink.send((false, line)).await.is_err() {
+                    return;
                 }
             }
-            buffer
-        }));
+        });
+    }
+    if let Some(stderr) = stderr {
+        let sink = line_tx;
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if sink.send((true, line)).await.is_err() {
+                    return;
+                }
+            }
+        });
     }
 
+    let mut stderr_text = String::new();
     let mut killed = false;
     loop {
         tokio::select! {
-            line = reader.next_line() => {
+            line = line_rx.recv() => {
                 match line {
-                    Ok(Some(line)) => {
+                    Some((is_stderr, line)) => {
                         if let Some(progress) = parse_progress_line(&line) {
                             on_progress(progress);
+                        } else if is_stderr && stderr_text.len() < 8192 {
+                            stderr_text.push_str(&line);
+                            stderr_text.push('\n');
                         }
                     }
-                    Ok(None) => break,
-                    Err(_) => break,
+                    None => break,
                 }
             }
             _ = cancel.cancelled() => {
@@ -564,10 +591,6 @@ pub async fn run_download(
         .wait()
         .await
         .map_err(|err| MediaError::backend(err.to_string()))?;
-    let stderr_text = match err_task {
-        Some(task) => task.await.unwrap_or_default(),
-        None => String::new(),
-    };
     if killed || cancel.is_cancelled() {
         return Err(MediaError {
             code: 1030,
@@ -579,4 +602,41 @@ pub async fn run_download(
         return Err(classify_backend_failure(&stderr_text, status.code()));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn video_selector_prefers_muxed_formats() {
+        // 720p: best muxed at or below 720 first, then 18, never a video-only id.
+        assert_eq!(
+            muxed_selector(Some(720)),
+            "b[height<=720]/18/b[height<=720]/18/best"
+        );
+        assert_eq!(muxed_selector(None), "b/18/best");
+        let plan = DownloadPlan {
+            kind: MediaTaskKind::YoutubeVideo,
+            url: "https://www.youtube.com/watch?v=x".to_string(),
+            output: std::path::PathBuf::from("/tmp/x.mp4"),
+            format: Some("298".to_string()),
+            playlist_limit: 100,
+            height: Some(720),
+        };
+        let args = plan.args();
+        let index = args.iter().position(|arg| arg == "-f").expect("-f");
+        assert_eq!(args[index + 1], muxed_selector(Some(720)));
+        assert!(!args.iter().any(|arg| arg == "298"), "{args:?}");
+    }
+
+    #[test]
+    fn progress_lines_parse_from_the_template() {
+        let line = parse_progress_line("download:4096|8192|512000|6").expect("progress");
+        assert_eq!(line.downloaded, 4096);
+        assert_eq!(line.total, Some(8192));
+        assert_eq!(line.speed, 512_000);
+        assert_eq!(line.eta, Some(6));
+        assert!(parse_progress_line("[download] 10%").is_none());
+    }
 }
