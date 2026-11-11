@@ -401,6 +401,20 @@ fn the_destructive_actions_ask_for_confirmation_first() {
 }
 
 #[test]
+fn the_production_window_is_kept_alive_by_the_application() {
+    run_gui("alive_window", || {
+        let application = app("io.github.wilkin.Segmenta.ActionsAlive");
+        let before = segmenta_gui::app::open_window_count();
+        segmenta_gui::app::build_window_for_client(&application);
+        assert_eq!(
+            segmenta_gui::app::open_window_count(),
+            before + 1,
+            "the normal startup path must keep the window state alive"
+        );
+    });
+}
+
+#[test]
 fn quitting_closes_the_window() {
     run_gui("quit", || {
         let application = app("io.github.wilkin.Segmenta.Actions9");

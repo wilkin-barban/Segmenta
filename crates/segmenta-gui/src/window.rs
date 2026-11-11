@@ -892,6 +892,13 @@ impl Inner {
         }
 
         let finished = self.bus.take();
+        if crate::client::trace_enabled() {
+            eprintln!(
+                "segmenta-gui: tick finished={} pending={}",
+                finished.len(),
+                self.pending.borrow().len()
+            );
+        }
         if finished.is_empty() {
             return;
         }
@@ -908,6 +915,22 @@ impl Inner {
     }
 
     fn finish_request(&self, kind: Pending, result: Result<Value, ClientError>) {
+        if crate::client::trace_enabled() {
+            let label = match &kind {
+                Pending::Hello => "hello".to_string(),
+                Pending::Settings => "settings".to_string(),
+                Pending::Reload => "reload".to_string(),
+                Pending::Status(task) => format!("status {task}"),
+                other => format!("{other:?}"),
+            };
+            match &result {
+                Ok(value) => eprintln!(
+                    "segmenta-gui: finish {label} ok ({} rows?)",
+                    value.as_array().map(Vec::len).unwrap_or(0)
+                ),
+                Err(err) => eprintln!("segmenta-gui: finish {label} failed: {}", err.ui_message()),
+            }
+        }
         match kind {
             Pending::Hello => match result {
                 Ok(value) => {
@@ -1133,11 +1156,17 @@ impl Inner {
     }
 
     fn set_loading(&self) {
+        if crate::client::trace_enabled() {
+            eprintln!("segmenta-gui: view -> Loading");
+        }
         *self.view_state.borrow_mut() = ViewState::Loading;
         self.stack.set_visible_child_name("loading");
     }
 
     fn set_error(&self, message: String) {
+        if crate::client::trace_enabled() {
+            eprintln!("segmenta-gui: view -> Error({message})");
+        }
         *self.last_error.borrow_mut() = Some(message.clone());
         *self.view_state.borrow_mut() = ViewState::Error(message.clone());
         let here = locale();

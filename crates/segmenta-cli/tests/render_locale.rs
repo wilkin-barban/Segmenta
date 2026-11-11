@@ -65,13 +65,16 @@ fn the_list_header_is_localized() {
     assert_ne!(header(&en), header(&es), "es and en headers must differ");
     assert_ne!(header(&en), header(&pt), "pt and en headers must differ");
 
-    // The daemon values are not translated, only the labels around them.
+    // Identifiers and values stay verbatim; the status word is localized (S21).
     for text in [&en, &es, &pt] {
         assert!(text.contains("c1f7a28e"), "{text}");
-        assert!(text.contains("downloading"), "{text}");
         assert!(text.contains("ubuntu.iso"), "{text}");
         assert!(text.contains("10.0 MiB"), "{text}");
+        assert!(!text.contains("downloading"), "{text}");
     }
+    assert!(en.contains("Downloading"), "{en}");
+    assert!(es.contains("Descargando"), "{es}");
+    assert!(pt.contains("Baixando"), "{pt}");
 
     assert_eq!(render_table(Locale::En, &[]), "No downloads.\n");
     assert_eq!(render_table(Locale::Es, &[]), "No hay descargas.\n");
@@ -100,7 +103,6 @@ fn the_status_block_is_localized() {
         );
         assert!(text.contains("https://example.test/ubuntu.iso"), "{text}");
         assert!(text.contains("/home/u/Downloads/ubuntu.iso"), "{text}");
-        assert!(text.contains("downloading"), "{text}");
         assert!(text.contains("main"), "{text}");
         assert!(text.contains("[####....]"), "{text}");
     }

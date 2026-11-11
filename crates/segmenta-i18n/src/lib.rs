@@ -233,6 +233,7 @@ catalog! {
     VersionLabel => { en: "Version {}", es: "Versión {}", pt: "Versão {}" },
     AppearanceHint => { en: "Follows the system by default", es: "Sigue al sistema por defecto", pt: "Segue o sistema por padrão" },
     ConfirmDeleteFileTitle => { en: "Delete the file too?", es: "¿Eliminar también el archivo?", pt: "Excluir o arquivo também?" },
+    Of => { en: "of", es: "de", pt: "de" },
     ErrRpc => { en: "The daemon answered with an error ({code}): {message}", es: "El daemon respondió con un error ({code}): {message}", pt: "O daemon respondeu com um erro ({code}): {message}" },
     ErrProtocol => { en: "Invalid response from the daemon: {detail}", es: "Respuesta inválida del daemon: {detail}", pt: "Resposta inválida do daemon: {detail}" },
     ErrThreadUnavailable => { en: "The client IPC thread is not available", es: "El hilo de IPC del cliente no está disponible", pt: "A thread de IPC do cliente não está disponível" },

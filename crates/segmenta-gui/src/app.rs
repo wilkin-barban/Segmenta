@@ -40,10 +40,28 @@ pub fn with_window() -> adw::Application {
     app
 }
 
-/// Creates the main window for the default (socket) client.
+thread_local! {
+    /// Windows opened by the application.
+    ///
+    /// `SegmentaWindow` is a thin wrapper over `Rc<Inner>`; GTK keeps the widget alive
+    /// but not that state, so the tick loop and the model died as soon as `activate`
+    /// returned and the view stayed on "Conectando…" forever. The registry owns the
+    /// Rust side of every open window.
+    static OPEN_WINDOWS: std::cell::RefCell<Vec<SegmentaWindow>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Creates the main window for the default (socket) client and keeps it alive.
 pub fn build_window_for_client(app: &adw::Application) {
     let client: Arc<dyn Client> = Arc::new(UnixClient::from_env());
-    build_window_with_client(app, client);
+    let window = build_window_with_client(app, client);
+    OPEN_WINDOWS.with(|windows| windows.borrow_mut().push(window));
+}
+
+/// How many windows the application is keeping alive (regression guard for the
+/// normal startup path, which used to drop the window state).
+pub fn open_window_count() -> usize {
+    OPEN_WINDOWS.with(|windows| windows.borrow().len())
 }
 
 /// Creates the main window with an injected client (tests and `--smoke`).
