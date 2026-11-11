@@ -60,6 +60,22 @@ export default function suite({ test }) {
     assert.equal(calls[0][1], 'io.github.wilkin.segmenta');
   });
 
+  test('sendNative ignores an undefined promise when the callback supplies the reply', async () => {
+    const calls = installFakeChrome();
+    // Chrome for Testing returns a promise for sendNativeMessage that resolves
+    // undefined while still invoking the callback with the native host reply.
+    globalThis.chrome.runtime.sendNativeMessage = (host, message, callback) => {
+      calls.push(['sendNativeMessage', host, message]);
+      setTimeout(() => callback({ jsonrpc: '2.0', id: message.id, result: { ok: true } }), 5);
+      return Promise.resolve(undefined);
+    };
+    const api = await loadShared('SegmentaApi', 'browser-api.js');
+    const reply = await api.sendNative({ jsonrpc: '2.0', id: 10, method: 'media.probe', params: {} });
+    assert.equal(reply && reply.result && reply.result.ok, true, 'the callback reply must win over undefined');
+    assert.equal(reply.id, 10);
+    assert.equal(calls.length, 1);
+  });
+
   test('sendMessage unwraps callback-style chrome.runtime.sendMessage', async () => {
     const calls = installFakeChrome();
     const api = await loadShared('SegmentaApi', 'browser-api.js');
