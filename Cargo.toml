@@ -6,6 +6,7 @@ members = [
     "crates/segmenta-daemon",
     "crates/segmenta-cli",
     "crates/segmenta-gui",
+    "crates/segmenta-host",
 ]
 
 [workspace.package]

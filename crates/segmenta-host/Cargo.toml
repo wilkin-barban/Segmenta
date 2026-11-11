@@ -1,0 +1,29 @@
+[package]
+name = "segmenta-host"
+description = "Segmenta Native Messaging host: browser framing proxy to the daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "segmenta_host"
+path = "src/lib.rs"
+
+[[bin]]
+name = "segmenta-host"
+path = "src/main.rs"
+
+[dependencies]
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+futures-util.workspace = true
+segmenta-daemon = { path = "../segmenta-daemon" }
+serde_json.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
