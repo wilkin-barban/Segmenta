@@ -7,6 +7,8 @@
 //! * [`ratelimit`] — global token bucket.
 //! * [`filename`] — header/URL name extraction and sanitization.
 //! * [`urlssrf`] — scheme and private-address validation.
+//! * [`probe`] — HTTP probing, redirects and capability classification.
+//! * [`stream`] — public HLS/DASH parsing and merge planning.
 //! * [`error`] — engine error taxonomy shared with the daemon and CLI.
 
 pub mod checksum;
@@ -18,6 +20,7 @@ pub mod planner;
 pub mod probe;
 pub mod ratelimit;
 pub mod retry;
+pub mod stream;
 pub mod urlssrf;
 
 #[cfg(feature = "testserver")]
