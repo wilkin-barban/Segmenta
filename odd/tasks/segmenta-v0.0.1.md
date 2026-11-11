@@ -1,7 +1,25 @@
 # Segmenta 0.0.1 — primer release usable
 
 Release `v0.0.1` de Segmenta: gestor de descargas directo, nativo, segmentado y reanudable, empaquetado
-como `.deb` para Ubuntu 26.04 LTS. Documento de trabajo ODD; se lee hasta `## Log`.
+como `.deb` para Ubuntu 26.04 LTS. Documento de trabajo ODD; se lee hasta `**L6 — Evidencia de las puertas.** `cargo fmt --all -- --check`, `cargo clippy --workspace
+--all-targets -- -D warnings` y `cargo test --workspace` en verde (176 tests, incluidos los 5 de
+`cli_e2e`); `xvfb-run -a cargo test -p segmenta-gui` con las 5 pruebas de ventana reales; smoke
+`SMOKE OK rows=1 segments=4` 5/5.
+
+**L7 — Defectos encontrados al probar el `.deb` instalado.** (a) `segments.id` es el rowid global:
+dos descargas que numeraban sus segmentos desde 0 colisionaban y todo checkpoint de la segunda
+fallaba en silencio; ahora se inserta sin id explícito y hay test de regresión con dos tareas.
+(b) `segmenta list` imprime ids de 8 caracteres pero los comandos exigían el UUID completo; ahora
+se resuelve un prefijo único. (c) un `Completed` no persistía la tabla final de segmentos; (d)
+`download_dir` no seguía a `settings`; (e) reanudar sin checkpoint chocaba con `EEXIST`.
+
+**L8 — Verificación sobre el paquete instalado.** `.deb` `segmenta_0.0.1-1_amd64.deb` instalado con
+`dpkg -i`, `segmenta.socket` habilitado, `segmenta hello` responde, GUI abre bajo `xvfb`, descarga de
+10 MiB con 8 conexiones con SHA-256 idéntico, 32 MiB pausado a ~18 MiB + `SIGKILL` + reconexión +
+reanudación con SHA-256 idéntico, y dos descargas simultáneas sin errores de checkpoint. `lintian`
+no está instalado en el entorno: no se ejecutó (no se inventa el resultado).
+
+## Log`.
 
 ## Specs
 
@@ -234,17 +252,17 @@ cargo clippy --workspace --all-targets -- -D warnings
 # .deb
 cargo build --release --workspace
 cargo deb -p segmenta-gui --no-build -o dist/
-dpkg-deb --info dist/segmenta_0.0.1_amd64.deb
-dpkg-deb --contents dist/segmenta_0.0.1_amd64.deb
-lintian dist/segmenta_0.0.1_amd64.deb      # si está disponible
-sha256sum dist/segmenta_0.0.1_amd64.deb > dist/segmenta_0.0.1_amd64.deb.sha256
+dpkg-deb --info dist/segmenta_0.0.1-1_amd64.deb
+dpkg-deb --contents dist/segmenta_0.0.1-1_amd64.deb
+lintian dist/segmenta_0.0.1-1_amd64.deb      # si está disponible
+sha256sum dist/segmenta_0.0.1-1_amd64.deb > dist/segmenta_0.0.1-1_amd64.deb.sha256
 
 # GUI headless
 xvfb-run -a ./target/release/segmenta-gui --smoke
 
 # release
 git tag -a v0.0.1 -m "Segmenta 0.0.1"
-gh release create v0.0.1 dist/segmenta_0.0.1_amd64.deb dist/segmenta_0.0.1_amd64.deb.sha256 \
+gh release create v0.0.1 dist/segmenta_0.0.1-1_amd64.deb dist/segmenta_0.0.1-1_amd64.deb.sha256 \
   --title "Segmenta 0.0.1" --notes-file dist/RELEASE_NOTES.md
 ```
 
@@ -255,6 +273,24 @@ segmentado, se pausa, se reanuda tras matar el daemon y su SHA-256 coincide con 
 controla el ciclo completo; la GUI muestra progreso y segmentos bajo `xvfb-run`; el `.deb` se instala y
 el daemon arranca por systemd user; el repositorio queda limpio (S24). El tag empuja un GitHub Release
 con `.deb`, `.sha256` y notas de instalación (S22).
+
+**L6 — Evidencia de las puertas.** `cargo fmt --all -- --check`, `cargo clippy --workspace
+--all-targets -- -D warnings` y `cargo test --workspace` en verde (176 tests, incluidos los 5 de
+`cli_e2e`); `xvfb-run -a cargo test -p segmenta-gui` con las 5 pruebas de ventana reales; smoke
+`SMOKE OK rows=1 segments=4` 5/5.
+
+**L7 — Defectos encontrados al probar el `.deb` instalado.** (a) `segments.id` es el rowid global:
+dos descargas que numeraban sus segmentos desde 0 colisionaban y todo checkpoint de la segunda
+fallaba en silencio; ahora se inserta sin id explícito y hay test de regresión con dos tareas.
+(b) `segmenta list` imprime ids de 8 caracteres pero los comandos exigían el UUID completo; ahora
+se resuelve un prefijo único. (c) un `Completed` no persistía la tabla final de segmentos; (d)
+`download_dir` no seguía a `settings`; (e) reanudar sin checkpoint chocaba con `EEXIST`.
+
+**L8 — Verificación sobre el paquete instalado.** `.deb` `segmenta_0.0.1-1_amd64.deb` instalado con
+`dpkg -i`, `segmenta.socket` habilitado, `segmenta hello` responde, GUI abre bajo `xvfb`, descarga de
+10 MiB con 8 conexiones con SHA-256 idéntico, 32 MiB pausado a ~18 MiB + `SIGKILL` + reconexión +
+reanudación con SHA-256 idéntico, y dos descargas simultáneas sin errores de checkpoint. `lintian`
+no está instalado en el entorno: no se ejecutó (no se inventa el resultado).
 
 ## Log
 
