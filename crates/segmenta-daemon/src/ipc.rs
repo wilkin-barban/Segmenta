@@ -112,10 +112,12 @@ impl IpcServer {
                 Err(_) => continue,
             };
             if !peer_is_authorized(peer_uid, expected_uid) {
+                tracing::warn!(peer_uid, "rejected a client with a different uid");
                 // Drop the socket without reading or writing a single byte.
                 drop(stream);
                 continue;
             }
+            tracing::debug!(peer_uid, "ipc client connected");
             let handler = Arc::clone(&handler);
             let bus = Arc::clone(&self.bus);
             tokio::spawn(async move {
@@ -162,7 +164,20 @@ async fn handle_connection(
                 match frame {
                     Ok(None) => return Ok(()),
                     Ok(Some(bytes)) => {
+                        let started = Instant::now();
                         let (response, keep_open) = dispatch_bytes(&bytes, handler.as_ref()).await;
+                        if let Some(error) = response.get("error") {
+                            tracing::warn!(
+                                error_code = error.get("code").and_then(|code| code.as_i64()),
+                                duration_ms = started.elapsed().as_millis() as u64,
+                                "ipc request failed"
+                            );
+                        } else {
+                            tracing::debug!(
+                                duration_ms = started.elapsed().as_millis() as u64,
+                                "ipc request"
+                            );
+                        }
                         if !response.is_null() {
                             write_json(&mut write_half, &response).await?;
                         }

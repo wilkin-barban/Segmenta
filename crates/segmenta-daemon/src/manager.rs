@@ -235,6 +235,13 @@ impl Manager {
             .or_else(|| suggest_filename(&url))
             .unwrap_or_else(|| "download.bin".to_string());
         let task_id = uuid::Uuid::new_v4().to_string();
+        tracing::info!(
+            task_id = %task_id,
+            url = %crate::logging::sanitize_url(url.as_str()),
+            connections,
+            queue = %params.queue_name,
+            "download.add"
+        );
         if !destination_dir.exists() {
             std::fs::create_dir_all(&destination_dir).map_err(|err| {
                 RpcError::new(
@@ -412,6 +419,13 @@ impl Manager {
             resume,
             plan_override: None,
         };
+        let attempt_id = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
+        tracing::info!(
+            task_id = %task_id,
+            attempt_id = %attempt_id,
+            connections,
+            "engine start"
+        );
         let cancel = Canceller::new();
         let (event_tx, mut event_rx) = mpsc::channel(512);
         let store = Arc::clone(&self.store);
@@ -524,6 +538,7 @@ impl Manager {
         ) {
             return Err(RpcError::task_not_pausable(task_id));
         }
+        tracing::info!(task_id = %task_id, status = "paused", "download.pause");
         let running = self
             .running
             .lock()
@@ -563,6 +578,7 @@ impl Manager {
             }
         }
         let connections = self.settings().max_connections;
+        tracing::info!(task_id = %task_id, "download.resume");
         self.start_task(task_id, connections)?;
         Ok(json!({ "task_id": task_id, "status": "downloading" }))
     }
@@ -1094,6 +1110,12 @@ fn finish_task(
                 eprintln!("segmenta-daemon: final checkpoint failed for {task_id}: {err}");
             }
             let _ = store.set_status(task_id, DownloadStatus::Completed, None);
+            tracing::info!(
+                task_id = %task_id,
+                total_bytes,
+                checksum_ok = ?checksum_ok,
+                "task completed"
+            );
             bus.publish(
                 "state_changed",
                 Some(task_id),
@@ -1124,6 +1146,12 @@ fn finish_task(
                 .as_ref()
                 .map(|err| (err.code(), err.to_string()));
             let status = DownloadStatus::Paused;
+            tracing::info!(
+                task_id = %task_id,
+                downloaded_bytes = downloaded,
+                error_code = error.as_ref().map(|(code, _)| *code),
+                "task paused"
+            );
             let _ = store.save_checkpoint(
                 task_id,
                 &Checkpoint {
@@ -1158,6 +1186,13 @@ fn finish_task(
                 task_id,
                 DownloadStatus::Failed,
                 Some((error.code(), error.to_string())),
+            );
+            tracing::warn!(
+                task_id = %task_id,
+                error_code = error.code(),
+                error = %error,
+                retryable = error.is_retryable(),
+                "task failed"
             );
             bus.publish(
                 "task_failed",

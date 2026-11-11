@@ -56,6 +56,7 @@ fn main() -> ExitCode {
 }
 
 async fn serve(args: Args) -> Result<(), String> {
+    segmenta_daemon::logging::init();
     let data_dir = args
         .data_dir
         .clone()
@@ -90,9 +91,10 @@ async fn serve(args: Args) -> Result<(), String> {
     let db_path = data_dir.join("segmenta.db");
     let store =
         Arc::new(Store::open(&db_path).map_err(|err| format!("cannot open the database: {err}"))?);
-    let secrets = Arc::from(
+    let secrets: Arc<dyn segmenta_daemon::secrets::SecretStore> = Arc::from(
         secrets::open_default(&data_dir).map_err(|err| format!("cannot open secrets: {err}"))?,
     );
+    let secret_backend = secrets.backend();
     let socket_path = args
         .socket
         .clone()
@@ -113,10 +115,12 @@ async fn serve(args: Args) -> Result<(), String> {
         shutdown_tx,
     ));
     manager.recover();
-    eprintln!(
-        "segmenta-daemon {} listening on {}",
-        segmenta_daemon::DAEMON_VERSION,
-        socket_path.display()
+    tracing::info!(
+        version = segmenta_daemon::DAEMON_VERSION,
+        socket = %socket_path.display(),
+        data_dir = %data_dir.display(),
+        secret_backend,
+        "segmenta-daemon listening"
     );
 
     // SAFETY: getuid has no preconditions and cannot fail.
@@ -131,7 +135,7 @@ async fn serve(args: Args) -> Result<(), String> {
         _ = tokio::signal::ctrl_c() => {}
         _ = terminate_signal() => {}
     }
-    eprintln!("segmenta-daemon: shutting down");
+    tracing::info!("segmenta-daemon shutting down");
     // Keep the lock file alive until the very end.
     drop(lock);
     Ok(())
