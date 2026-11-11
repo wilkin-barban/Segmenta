@@ -14,13 +14,13 @@ watch -n 10 cat docs/qa/segmenta-0.0.2-live.md
 
 | Frente | Estado | Evidencia / commit | Bloqueo |
 | --- | --- | --- | --- |
-| Keyring real, XDG y pause/resume honestos | Implementado, pendiente QA remoto | `134165e`; tests manager/secrets | Ninguno local |
-| i18n es / pt-BR / en | Crate base commiteado; GUI/CLI en curso | `9b5f606`; `crates/segmenta-i18n` | Workers de localización fallaron; falta integrar en toda la UI |
-| Arranque normal de la GUI | Corregido en código; pendiente verificación remota | `0beb18a`; `tests/startup.rs` | Falta probar contra daemon real en `ssh ubuntu` |
-| Tema claro/oscuro y capturas | Capturas generadas y revisadas | `screenshots.rs` en curso; `docs/qa/screenshots/0.0.2-{light,dark}.png` 1440×900 | Falta commit de `screenshots.rs` y validación remota del `.deb` |
-| Logging estructurado y redacción | Pendiente | Sin `logging.rs`; task T8 | Worker de logging falló; el agente principal debe retomarlo |
-| Matriz de botones/acciones | Pendiente | Sin `tests/actions.rs`; task T12 | Depende de GUI/i18n |
-| Empaquetado 0.0.2 | Pendiente | Versión local `0.0.1`; solo `.deb` 0.0.1 | Falta bump, build y `.deb` |
+| Keyring real, XDG y pause/resume honestos | Implementado, verde local | `134165e`; `tests/manager.rs`, `tests/secret_backend.rs` (15 tests) | Falta QA remoto |
+| i18n es / pt-BR / en | Crate base verde; GUI/CLI sin integrar | `9b5f606`; `crates/segmenta-i18n` (4 tests) | Integración pendiente en GUI y CLI |
+| Arranque normal de la GUI | Corregido y probado con socket real | `0beb18a`; `tests/startup.rs` (2 tests, <2 s) | Falta QA remoto |
+| Tema claro/oscuro y capturas | Implementado y capturado | `49d32b7`; `--screenshots`, `docs/qa/screenshots/0.0.2-{light,dark}.png` 1440×900 revisadas | Falta QA remoto |
+| Logging estructurado y redacción | En curso (agente principal) | task T8; sin `logging.rs` todavía | Ninguno |
+| Matriz de botones/acciones | Pendiente | task T12; sin `tests/actions.rs` | Depende de i18n de GUI |
+| Empaquetado 0.0.2 | Pendiente | versión local `0.0.1` | Falta bump, build y `.deb` |
 | QA remoto | Limpio en 0.0.1 | `ssh ubuntu`: sin tareas, `~/Descargas`, `allow_local_downloads=false` | Esperando candidato 0.0.2 |
 
 ## Reglas del flujo
@@ -32,9 +32,11 @@ watch -n 10 cat docs/qa/segmenta-0.0.2-live.md
 3. No se publica `0.0.2` hasta instalar el `.deb` en `ssh ubuntu`, probar CLI **y GUI
    normal** (no solo `--smoke`), botones, keyring, XDG, pausa/reanudación, i18n, logs y
    capturas claro/oscuro.
-4. Para capturas y temporales usar `mktemp -d` o una carpeta de scratch; evitar
-   `rm -rf /tmp/...` que dispara confirmaciones de pérdida de datos. La limpieza final se
-   hace en un paso autorizado y verificado.
+4. Para capturas y temporales usar `mktemp -d` o una carpeta de scratch privada; **no**
+   usar `rm -rf /tmp/...` (dispara confirmaciones de pérdida de datos). La limpieza final
+   se hace en un paso autorizado y verificado.
+6. Las capturas 0.0.2 light/dark ya fueron revisadas por el usuario: claro y oscuro se ven
+   correctos; no se vuelven a generar salvo que cambie la UI de forma visible.
 5. Todo a `main`, sin ramas. El remoto se deja sin tareas, sin archivos de prueba y con
    `allow_local_downloads=false`.
 
