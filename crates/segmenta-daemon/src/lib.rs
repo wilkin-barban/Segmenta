@@ -11,6 +11,7 @@ pub mod media;
 pub mod rpc;
 pub mod secrets;
 pub mod store;
+pub mod stream_media;
 
 /// Re-export used by the integration tests to build a manager without importing the
 /// module directly.

@@ -29,4 +29,4 @@ de la extensión, así que su SHA no cambia.
 | 3 | `.deb` sin CLI de medios visible en `--help` | **Corregido** (`18d7e36`): `media probe|add` documentados en es/en/pt-BR; `.deb` reconstruido |
 | 4 | Progreso de medios en 0 (bytes/total/speed) | **Corregido**: el runner lee también **stderr** (donde yt-dlp emite `--progress-template`); test con el fake emitiendo por stderr y aserción de `downloaded_bytes > 0` |
 | 5 | 720p falla con 403 | **Mitigado**: modo video usa selector **muxed** `b[height<=H]/18/...` en vez del `format_id` video-only; test unitario del argv |
-| 6 | HLS/DASH no cableado (`1043`) | **Pendiente**: `manager.rs` sólo acepta YouTube; falta conectar `segmenta-core::stream` + descarga de fragmentos + merge ffmpeg + tests con fixture local |
+| 6 | HLS/DASH no cableado (`1043`) | **Corregido**: `media.probe/add` resuelven manifiestos con `segmenta-core::stream`, descargan fragmentos con progreso y remuxean con `ffmpeg -c copy`; test e2e con fixture HLS generado por ffmpeg y servidor local |

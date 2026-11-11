@@ -1226,7 +1226,11 @@ impl Manager {
 
     /// `media.probe`: ask the backend for formats without creating a task.
     async fn media_probe(&self, params: MediaProbeParams) -> Result<Value, RpcError> {
-        let url = crate::media::validate_media_url(&params.url).map_err(Self::media_error)?;
+        let url = crate::media::validate_media_url_with(
+            &params.url,
+            self.settings().allow_local_downloads,
+        )
+        .map_err(Self::media_error)?;
         let kind = params.kind.unwrap_or_else(|| "video".to_string());
         let limit = crate::media::clamp_limit(params.limit).map_err(Self::media_error)?;
         let host = url.host_str().unwrap_or_default().to_string();
@@ -1239,18 +1243,20 @@ impl Manager {
             return serde_json::to_value(outcome)
                 .map_err(|err| RpcError::internal(err.to_string()));
         }
-        // Generic manifests: report the variants the stream parser can see.
-        let _ = limit;
-        Err(RpcError::new(
-            1043,
-            "ERR_STREAM_UNSUPPORTED",
-            "manifest probing for this host is not implemented yet",
-        ))
+        // Public HLS/DASH: parse the manifest and report its variants.
+        let client = media_http_client()?;
+        crate::stream_media::probe(&client, &url)
+            .await
+            .map_err(Self::media_error)
     }
 
     /// `media.add`: probe, persist the task and start the backend runner.
     async fn media_add(&self, params: MediaAddParams) -> Result<Value, RpcError> {
-        let url = crate::media::validate_media_url(&params.url).map_err(Self::media_error)?;
+        let url = crate::media::validate_media_url_with(
+            &params.url,
+            self.settings().allow_local_downloads,
+        )
+        .map_err(Self::media_error)?;
         let mode = params.mode.as_str();
         if !matches!(mode, "video" | "audio" | "playlist") {
             return Err(RpcError::invalid_params(
@@ -1260,11 +1266,7 @@ impl Manager {
         let limit = crate::media::clamp_limit(params.playlist_limit).map_err(Self::media_error)?;
         let host = url.host_str().unwrap_or_default().to_string();
         if !crate::media::is_youtube(&host) {
-            return Err(RpcError::new(
-                1043,
-                "ERR_STREAM_UNSUPPORTED",
-                "media.add for this host is not implemented yet",
-            ));
+            return self.add_stream_task(url).await;
         }
         let tool = crate::media::locate_tool("yt-dlp").map_err(Self::media_error)?;
         let kind_hint = if mode == "playlist" {
@@ -1367,6 +1369,173 @@ impl Manager {
             "status": "downloading",
             "kind": task_kind.as_str(),
             "batch_id": batch_id,
+        }))
+    }
+
+    /// `media.add` for a public HLS/DASH manifest.
+    async fn add_stream_task(&self, url: url::Url) -> Result<Value, RpcError> {
+        let client = media_http_client()?;
+        let selection = crate::stream_media::resolve(&client, &url, None)
+            .await
+            .map_err(Self::media_error)?;
+        let ffmpeg = crate::media::locate_tool("ffmpeg").map_err(Self::media_error)?;
+        let settings = self.settings();
+        let dir = PathBuf::from(&settings.download_dir);
+        std::fs::create_dir_all(&dir).map_err(|err| {
+            RpcError::new(
+                1005,
+                "ERR_DESTINATION_UNWRITABLE",
+                format!("cannot create {}: {err}", dir.display()),
+            )
+        })?;
+        let stem = crate::stream_media::stream_stem(&url);
+        let final_path = dir.join(format!("{stem}.mp4"));
+        let task_id = uuid::Uuid::new_v4().to_string();
+        let record = DownloadRecord {
+            id: task_id.clone(),
+            url: url.to_string(),
+            final_url: None,
+            final_path: final_path.to_string_lossy().into_owned(),
+            temp_path: None,
+            total_bytes: None,
+            downloaded_bytes: 0,
+            status: DownloadStatus::Downloading,
+            supports_ranges: false,
+            etag: None,
+            last_modified: None,
+            content_type: None,
+            expected_checksum: None,
+            error_code: None,
+            error_message: None,
+            retry_count: 0,
+            priority: 0,
+            queue_name: "main".to_string(),
+            download_type: selection.kind.to_string(),
+            created_at: None,
+            completed_at: None,
+            filename: stem.clone(),
+            media_kind: Some("stream".to_string()),
+            media_format: selection.height.map(|height| format!("{height}p")),
+            playlist_title: None,
+            playlist_count: None,
+            batch_id: None,
+        };
+        self.store.insert_download(&record).map_err(store_error)?;
+        self.bus.publish(
+            "task_added",
+            Some(&task_id),
+            json!({
+                "task_id": task_id,
+                "status": "downloading",
+                "url": record.url,
+                "final_path": record.final_path,
+                "media_kind": "stream",
+            }),
+        );
+        let cancel = Canceller::new();
+        let store = Arc::clone(&self.store);
+        let bus = Arc::clone(&self.bus);
+        let progress = Arc::clone(&self.progress);
+        let id = task_id.clone();
+        let task_cancel = cancel.clone();
+        let path = final_path.clone();
+        let job = selection.clone();
+        let kind = selection.kind;
+        let handle = tokio::spawn(async move {
+            let mut last = std::time::Instant::now();
+            let mut last_bytes = 0u64;
+            let result = crate::stream_media::download(
+                &client,
+                &ffmpeg,
+                &job,
+                &path,
+                task_cancel,
+                |downloaded| {
+                    last_bytes = downloaded;
+                    if last.elapsed() < std::time::Duration::from_millis(250) {
+                        return;
+                    }
+                    last = std::time::Instant::now();
+                    let _ = store.update_progress(&id, downloaded, None);
+                    progress
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .insert(
+                            id.clone(),
+                            ProgressSnapshot {
+                                downloaded_bytes: downloaded,
+                                total_bytes: None,
+                                speed_bps: 0,
+                                eta_seconds: None,
+                                segments: Vec::new(),
+                            },
+                        );
+                    bus.publish(
+                        "task_progress",
+                        Some(&id),
+                        json!({
+                            "downloaded_bytes": downloaded,
+                            "total_bytes": null,
+                            "speed_bps": 0,
+                            "eta_seconds": null,
+                            "segments": [],
+                        }),
+                    );
+                },
+            )
+            .await;
+            match result {
+                Ok(()) => {
+                    let size = std::fs::metadata(&path)
+                        .map(|meta| meta.len())
+                        .unwrap_or(last_bytes);
+                    let _ = store.update_progress(&id, size, Some(size));
+                    let _ = store.set_status(&id, DownloadStatus::Completed, None);
+                    progress
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .remove(&id);
+                    bus.publish(
+                        "task_completed",
+                        Some(&id),
+                        json!({
+                            "final_path": path.to_string_lossy(),
+                            "total_bytes": size,
+                            "checksum_ok": null,
+                            "media": true,
+                        }),
+                    );
+                }
+                Err(error) => {
+                    let _ = store.set_status(
+                        &id,
+                        DownloadStatus::Failed,
+                        Some((error.code, error.message.clone())),
+                    );
+                    progress
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .remove(&id);
+                    bus.publish(
+                        "task_failed",
+                        Some(&id),
+                        json!({
+                            "error_code": error.code,
+                            "message": error.message,
+                            "retryable": false,
+                        }),
+                    );
+                }
+            }
+        });
+        self.running
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .insert(task_id.clone(), RunningTask { cancel, handle });
+        Ok(json!({
+            "task_id": task_id,
+            "status": "downloading",
+            "kind": kind,
         }))
     }
 
@@ -1608,4 +1777,14 @@ impl RpcHandler for Manager {
 /// Planner helper kept public for the daemon tests.
 pub fn planned_segments(total: u64, connections: u32) -> Vec<planner::SegmentRange> {
     planner::initial_segments(total, connections)
+}
+
+/// HTTPS client for manifest and fragment downloads.
+fn media_http_client() -> Result<reqwest::Client, RpcError> {
+    reqwest::Client::builder()
+        .user_agent(concat!("Segmenta/", env!("CARGO_PKG_VERSION")))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|err| RpcError::internal(err.to_string()))
 }
