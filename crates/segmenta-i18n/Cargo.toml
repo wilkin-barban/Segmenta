@@ -1,0 +1,13 @@
+[package]
+name = "segmenta-i18n"
+description = "Message catalogs and locale detection for Segmenta (en, es, pt-BR)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lib]
+name = "segmenta_i18n"
+path = "src/lib.rs"
