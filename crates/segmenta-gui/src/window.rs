@@ -331,6 +331,12 @@ impl SegmentaWindow {
         self.0.loading_spinner.is_visible()
     }
 
+    /// Whether the loading page is still part of the stack (it is detached once the
+    /// first Ready state is painted).
+    pub fn loading_page_attached(&self) -> bool {
+        self.0.stack.child_by_name("loading").is_some()
+    }
+
     /// Whether the search bar is open.
     pub fn search_active(&self) -> bool {
         self.0.search_bar.is_search_mode()
@@ -1171,6 +1177,11 @@ impl Inner {
             eprintln!("segmenta-gui: view -> Loading");
         }
         *self.view_state.borrow_mut() = ViewState::Loading;
+        // The loading page is detached once the first Ready arrives; put it back for a
+        // retry or a reconnect.
+        if self.stack.child_by_name("loading").is_none() {
+            self.stack.add_named(&self.loading_page, Some("loading"));
+        }
         self.loading_spinner.set_visible(true);
         self.loading_spinner.start();
         self.stack.set_visible_child_name("loading");
@@ -1179,11 +1190,20 @@ impl Inner {
     /// Stop the spinner and hide the loading page; a hidden page must not keep an
     /// animation ticking behind the list.
     fn stop_loading(&self) {
-        // Stop the animation and hide the glyph. The page itself is a stack child and
-        // its visibility belongs to `GtkStack`; hiding it by hand confused the stack
-        // and left the spinner painted behind the list.
+        if crate::client::trace_enabled() {
+            eprintln!(
+                "segmenta-gui: stop_loading (spinner visible={} spinning={})",
+                self.loading_spinner.is_visible(),
+                self.loading_spinner.is_spinning()
+            );
+        }
+        // Detach the page from the stack: a hidden widget cannot be painted, and this
+        // removes any chance of GTK keeping the stopped spinner glyph behind the list.
         self.loading_spinner.stop();
         self.loading_spinner.set_visible(false);
+        if let Some(child) = self.stack.child_by_name("loading") {
+            self.stack.remove(&child);
+        }
     }
 
     fn set_error(&self, message: String) {
@@ -1278,6 +1298,13 @@ impl Inner {
             ViewState::Ready => self.stack.set_visible_child_name("list"),
             ViewState::Error(_) => self.stack.set_visible_child_name("error"),
             ViewState::Loading => self.stack.set_visible_child_name("loading"),
+        }
+        if crate::client::trace_enabled() {
+            eprintln!(
+                "segmenta-gui: refill state={:?} rows={}",
+                state,
+                self.store.borrow().len()
+            );
         }
         // Leaving Loading must stop the spinner *after* the stack switched, otherwise
         // the stopped glyph stays painted behind the list.

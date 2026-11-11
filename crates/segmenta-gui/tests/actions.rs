@@ -215,10 +215,15 @@ fn sidebar_filters_and_counts_are_real() {
             Duration::from_secs(5)
         ));
 
-        // A Ready list must not leave the loading spinner painting.
+        // A Ready list must not leave the loading spinner painting, and the page must
+        // be detached from the stack so nothing can paint it.
         assert!(
             !window.loading_spinner_visible(),
             "the loading spinner is still visible in Ready"
+        );
+        assert!(
+            !window.loading_page_attached(),
+            "the loading page is still attached to the stack in Ready"
         );
         let counts = window.counts();
         assert_eq!(counts.all, 3);
