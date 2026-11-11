@@ -511,6 +511,31 @@ impl Store {
         Ok(())
     }
 
+    /// Persist what the probe learned: size, range support and validators.
+    pub fn set_probe_result(
+        &self,
+        id: &str,
+        total_bytes: Option<u64>,
+        supports_ranges: bool,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.lock();
+        conn.execute(
+            "UPDATE downloads SET total_bytes = COALESCE(?2, total_bytes),
+             supports_ranges = ?3, etag = COALESCE(?4, etag),
+             last_modified = COALESCE(?5, last_modified) WHERE id = ?1",
+            params![
+                id,
+                total_bytes.map(|value| value as i64),
+                supports_ranges as i64,
+                etag,
+                last_modified
+            ],
+        )?;
+        Ok(())
+    }
+
     /// Persist the offsets and validators of one task after a checkpoint.
     pub fn save_checkpoint(
         &self,

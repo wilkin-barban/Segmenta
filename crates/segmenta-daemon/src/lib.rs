@@ -3,6 +3,8 @@
 //! The binary in `main.rs` is a thin shell around [`run`]; everything else lives here so
 //! the CLI, the GUI and the integration tests share the same contract types.
 
+pub mod events;
+pub mod manager;
 pub mod ipc;
 pub mod rpc;
 pub mod secrets;

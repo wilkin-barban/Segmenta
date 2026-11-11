@@ -3,18 +3,18 @@
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 
 use futures_util::future::BoxFuture;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::broadcast;
 
+use crate::events::EventBus;
 use crate::rpc::{
-    read_frame, resync_notification, EventEnvelope, FrameError, Request, Response, RpcError,
+    read_frame, resync_notification, FrameError, Request, Response, RpcError,
 };
 
 /// Capacity of the per-client event buffer. A client that falls further behind gets
@@ -35,15 +35,15 @@ pub trait RpcHandler: Send + Sync {
 pub struct IpcServer {
     listener: UnixListener,
     path: PathBuf,
-    events: broadcast::Sender<EventEnvelope>,
-    seq: Arc<AtomicU64>,
+    bus: Arc<EventBus>,
+    owns_socket: bool,
     started: Instant,
 }
 
 impl IpcServer {
     /// Bind the socket, creating `$XDG_RUNTIME_DIR/segmenta` with `0700` and the socket
     /// with `0600`.
-    pub async fn bind(path: &Path) -> std::io::Result<IpcServer> {
+    pub async fn bind(path: &Path, bus: Arc<EventBus>) -> std::io::Result<IpcServer> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
             set_mode(parent, 0o700)?;
@@ -54,12 +54,31 @@ impl IpcServer {
         }
         let listener = UnixListener::bind(path)?;
         set_mode(path, 0o600)?;
-        let (events, _) = broadcast::channel(EVENT_BUFFER);
         Ok(IpcServer {
             listener,
             path: path.to_path_buf(),
-            events,
-            seq: Arc::new(AtomicU64::new(0)),
+            bus,
+            owns_socket: true,
+            started: Instant::now(),
+        })
+    }
+
+    /// Adopt the listening descriptor passed by systemd socket activation.
+    ///
+    /// SAFETY contract: `LISTEN_FDS == 1` and `LISTEN_PID` matches this process, which
+    /// [`systemd_listen_fd`] checks before this function is called.
+    pub fn from_systemd(fd: std::os::unix::io::RawFd, path: &Path, bus: Arc<EventBus>) -> std::io::Result<IpcServer> {
+        use std::os::unix::io::FromRawFd;
+        // SAFETY: the caller guarantees the descriptor is a listening Unix socket owned
+        // by this process after the fork from systemd.
+        let std_listener = unsafe { std::os::unix::net::UnixListener::from_raw_fd(fd) };
+        std_listener.set_nonblocking(true)?;
+        Ok(IpcServer {
+            listener: UnixListener::from_std(std_listener)?,
+            path: path.to_path_buf(),
+            bus,
+            // systemd owns the inode; the daemon must not unlink it.
+            owns_socket: false,
             started: Instant::now(),
         })
     }
@@ -74,31 +93,9 @@ impl IpcServer {
         self.started.elapsed().as_secs()
     }
 
-    /// Subscribe to the event bus.
-    pub fn subscribe(&self) -> broadcast::Receiver<EventEnvelope> {
-        self.events.subscribe()
-    }
-
-    /// Number of live subscribers.
-    pub fn subscriber_count(&self) -> usize {
-        self.events.receiver_count()
-    }
-
-    /// Publish one event with the next `seq_id`.
-    pub fn publish(&self, event_type: &str, task_id: Option<&str>, data: Value) {
-        let seq_id = self.seq.fetch_add(1, Ordering::SeqCst) + 1;
-        let envelope = EventEnvelope {
-            seq_id,
-            timestamp_ms: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|elapsed| elapsed.as_millis() as u64)
-                .unwrap_or(0),
-            event_type: event_type.to_string(),
-            task_id: task_id.map(str::to_string),
-            data,
-        };
-        // No subscribers is the normal case when only the CLI is around.
-        let _ = self.events.send(envelope);
+    /// Shared event bus.
+    pub fn bus(&self) -> Arc<EventBus> {
+        Arc::clone(&self.bus)
     }
 
     /// Accept connections until the process ends.
@@ -118,9 +115,9 @@ impl IpcServer {
                 continue;
             }
             let handler = Arc::clone(&handler);
-            let events = self.events.clone();
+            let bus = Arc::clone(&self.bus);
             tokio::spawn(async move {
-                let _ = handle_connection(stream, handler, events).await;
+                let _ = handle_connection(stream, handler, bus).await;
             });
         }
     }
@@ -128,8 +125,20 @@ impl IpcServer {
 
 impl Drop for IpcServer {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        if self.owns_socket {
+            let _ = std::fs::remove_file(&self.path);
+        }
     }
+}
+
+/// `LISTEN_FDS`/`LISTEN_PID` from systemd, if this process was socket-activated.
+pub fn systemd_listen_fd() -> Option<std::os::unix::io::RawFd> {
+    let fds: i32 = std::env::var("LISTEN_FDS").ok()?.parse().ok()?;
+    let pid: u32 = std::env::var("LISTEN_PID").ok()?.parse().ok()?;
+    if fds != 1 || pid != std::process::id() {
+        return None;
+    }
+    Some(3)
 }
 
 /// UID check of `SO_PEERCRED`, isolated so it can be tested without a second user.
@@ -140,11 +149,11 @@ pub fn peer_is_authorized(peer_uid: u32, daemon_uid: u32) -> bool {
 async fn handle_connection(
     stream: UnixStream,
     handler: Arc<dyn RpcHandler>,
-    events: broadcast::Sender<EventEnvelope>,
+    bus: Arc<EventBus>,
 ) -> std::io::Result<()> {
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
-    let mut events_rx = events.subscribe();
+    let mut events_rx = bus.subscribe();
     loop {
         tokio::select! {
             frame = read_frame(&mut reader) => {
