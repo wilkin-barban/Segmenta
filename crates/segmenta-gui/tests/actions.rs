@@ -463,6 +463,10 @@ fn hovering_a_row_never_opens_the_detail() {
         // Selection without focus is what a hover produced before the fix.
         assert!(window.select_task("a"), "row a must exist");
         let opened = pump_until_stable(|| window.detail().is_some(), Duration::from_millis(300));
-        assert!(!opened, "hover/selection opened the detail: {:?}", window.detail());
+        assert!(
+            !opened,
+            "hover/selection opened the detail: {:?}",
+            window.detail()
+        );
     });
 }
