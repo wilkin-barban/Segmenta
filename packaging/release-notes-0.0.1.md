@@ -53,7 +53,7 @@ La GUI abre con `segmenta-gui` o la entrada **Segmenta** del menú.
 
 Ejecutado en Ubuntu 26.04.1 LTS (GTK 4.22.4, libadwaita 1.9.1, Rust 1.99.1):
 
-- `cargo test --workspace` — 176 tests, 0 fallos, incluido el e2e de la CLI contra un daemon real.
+- `cargo test --workspace` — 151 tests, 0 fallos, incluido el e2e de la CLI contra un daemon real.
 - `cargo fmt --all -- --check` y `cargo clippy --workspace --all-targets -- -D warnings` — limpios.
 - `xvfb-run -a cargo test -p segmenta-gui` — las 5 pruebas de ventana construyen widgets reales.
 - `xvfb-run -a segmenta-gui --smoke` — `SMOKE OK rows=1 segments=4`, 5 de 5 corridas.

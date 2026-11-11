@@ -2,7 +2,7 @@
 
 Release `v0.0.1` de Segmenta: gestor de descargas directo, nativo, segmentado y reanudable, empaquetado
 como `.deb` para Ubuntu 26.04 LTS. Documento de trabajo ODD; se lee hasta `**L6 — Evidencia de las puertas.** `cargo fmt --all -- --check`, `cargo clippy --workspace
---all-targets -- -D warnings` y `cargo test --workspace` en verde (176 tests, incluidos los 5 de
+--all-targets -- -D warnings` y `cargo test --workspace` en verde (151 tests, incluidos los 5 de
 `cli_e2e`); `xvfb-run -a cargo test -p segmenta-gui` con las 5 pruebas de ventana reales; smoke
 `SMOKE OK rows=1 segments=4` 5/5.
 
@@ -275,7 +275,7 @@ el daemon arranca por systemd user; el repositorio queda limpio (S24). El tag em
 con `.deb`, `.sha256` y notas de instalación (S22).
 
 **L6 — Evidencia de las puertas.** `cargo fmt --all -- --check`, `cargo clippy --workspace
---all-targets -- -D warnings` y `cargo test --workspace` en verde (176 tests, incluidos los 5 de
+--all-targets -- -D warnings` y `cargo test --workspace` en verde (151 tests, incluidos los 5 de
 `cli_e2e`); `xvfb-run -a cargo test -p segmenta-gui` con las 5 pruebas de ventana reales; smoke
 `SMOKE OK rows=1 segments=4` 5/5.
 
