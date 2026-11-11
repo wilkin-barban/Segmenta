@@ -22,7 +22,8 @@ use crate::events::EventBus;
 use crate::ipc::{hello_result, RpcHandler};
 use crate::rpc::{
     AddDownloadParams, CancelParams, ChecksumParam, DeleteParams, DownloadView, ListParams,
-    QueueCreateParams, QueueRemoveParams, QueueScheduleParams, RpcError, SegmentView, TaskIdParams,
+    MediaAddParams, MediaProbeParams, MediaStatusParams, QueueCreateParams, QueueRemoveParams,
+    QueueScheduleParams, RpcError, SegmentView, TaskIdParams,
 };
 use crate::secrets::SecretStore;
 use crate::store::{
@@ -1216,6 +1217,290 @@ fn finish_task(
     }
 }
 
+impl Manager {
+    fn media_error(err: crate::media::MediaError) -> RpcError {
+        RpcError::new(err.code, err.name, err.message)
+    }
+
+    /// `media.probe`: ask the backend for formats without creating a task.
+    async fn media_probe(&self, params: MediaProbeParams) -> Result<Value, RpcError> {
+        let url = crate::media::validate_media_url(&params.url).map_err(Self::media_error)?;
+        let kind = params.kind.unwrap_or_else(|| "video".to_string());
+        let limit = crate::media::clamp_limit(params.limit).map_err(Self::media_error)?;
+        let host = url.host_str().unwrap_or_default().to_string();
+        if crate::media::is_youtube(&host) {
+            let tool = crate::media::locate_tool("yt-dlp").map_err(Self::media_error)?;
+            let outcome = crate::media::probe_with(&tool, url.as_str(), &kind)
+                .await
+                .map_err(Self::media_error)?;
+            tracing::info!(host = %host, kind = %outcome.kind, formats = outcome.formats.len(), "media.probe");
+            return serde_json::to_value(outcome)
+                .map_err(|err| RpcError::internal(err.to_string()));
+        }
+        // Generic manifests: report the variants the stream parser can see.
+        let _ = limit;
+        Err(RpcError::new(
+            1043,
+            "ERR_STREAM_UNSUPPORTED",
+            "manifest probing for this host is not implemented yet",
+        ))
+    }
+
+    /// `media.add`: probe, persist the task and start the backend runner.
+    async fn media_add(&self, params: MediaAddParams) -> Result<Value, RpcError> {
+        let url = crate::media::validate_media_url(&params.url).map_err(Self::media_error)?;
+        let mode = params.mode.as_str();
+        if !matches!(mode, "video" | "audio" | "playlist") {
+            return Err(RpcError::invalid_params(
+                "mode must be video, audio or playlist",
+            ));
+        }
+        let limit = crate::media::clamp_limit(params.playlist_limit).map_err(Self::media_error)?;
+        let host = url.host_str().unwrap_or_default().to_string();
+        if !crate::media::is_youtube(&host) {
+            return Err(RpcError::new(
+                1043,
+                "ERR_STREAM_UNSUPPORTED",
+                "media.add for this host is not implemented yet",
+            ));
+        }
+        let tool = crate::media::locate_tool("yt-dlp").map_err(Self::media_error)?;
+        let kind_hint = if mode == "playlist" {
+            "playlist"
+        } else {
+            "video"
+        };
+        let probe = crate::media::probe_with(&tool, url.as_str(), kind_hint)
+            .await
+            .map_err(Self::media_error)?;
+
+        let task_kind = match mode {
+            "audio" => crate::media::MediaTaskKind::YoutubeAudio,
+            "playlist" => crate::media::MediaTaskKind::YoutubePlaylist,
+            _ => crate::media::MediaTaskKind::YoutubeVideo,
+        };
+        let settings = self.settings();
+        let dir = PathBuf::from(&settings.download_dir);
+        std::fs::create_dir_all(&dir).map_err(|err| {
+            RpcError::new(
+                1005,
+                "ERR_DESTINATION_UNWRITABLE",
+                format!("cannot create {}: {err}", dir.display()),
+            )
+        })?;
+        let title = crate::media::sanitize_title(&probe.title);
+        let is_playlist = task_kind.is_playlist();
+        let extension = match mode {
+            "audio" => "m4a",
+            _ => "mp4",
+        };
+        let final_path = if is_playlist {
+            dir.join(&title)
+        } else {
+            dir.join(format!("{title}.{extension}"))
+        };
+        let task_id = uuid::Uuid::new_v4().to_string();
+        let batch_id = if is_playlist {
+            Some(uuid::Uuid::new_v4().to_string())
+        } else {
+            None
+        };
+        let record = DownloadRecord {
+            id: task_id.clone(),
+            url: url.to_string(),
+            final_url: None,
+            final_path: final_path.to_string_lossy().into_owned(),
+            temp_path: None,
+            total_bytes: None,
+            downloaded_bytes: 0,
+            status: DownloadStatus::Downloading,
+            supports_ranges: false,
+            etag: None,
+            last_modified: None,
+            content_type: None,
+            expected_checksum: None,
+            error_code: None,
+            error_message: None,
+            retry_count: 0,
+            priority: 0,
+            queue_name: "main".to_string(),
+            download_type: task_kind.as_str().to_string(),
+            created_at: None,
+            completed_at: None,
+            filename: title.clone(),
+            media_kind: Some(mode.to_string()),
+            media_format: params.format_id.clone(),
+            playlist_title: is_playlist.then(|| probe.title.clone()),
+            playlist_count: is_playlist.then_some(limit.min(probe.playlist.count.max(1)) as u32),
+            batch_id: batch_id.clone(),
+        };
+        self.store.insert_download(&record).map_err(store_error)?;
+        self.bus.publish(
+            "task_added",
+            Some(&task_id),
+            json!({
+                "task_id": task_id,
+                "status": "downloading",
+                "url": record.url,
+                "final_path": record.final_path,
+                "media_kind": mode,
+            }),
+        );
+        let output = if is_playlist {
+            final_path.join("%(title)s.%(ext)s")
+        } else {
+            final_path.clone()
+        };
+        let plan = crate::media::DownloadPlan {
+            kind: task_kind,
+            url: url.to_string(),
+            output,
+            format: params.format_id.clone(),
+            playlist_limit: limit,
+        };
+        self.start_media_task(task_id.clone(), plan, tool, final_path)?;
+        Ok(json!({
+            "task_id": task_id,
+            "status": "downloading",
+            "kind": task_kind.as_str(),
+            "batch_id": batch_id,
+        }))
+    }
+
+    /// `media.status`: task view plus playlist counters.
+    fn media_status(&self, params: MediaStatusParams) -> Result<Value, RpcError> {
+        let task_id = match (params.task_id, params.batch_id) {
+            (Some(task_id), _) => task_id,
+            (None, Some(batch_id)) => {
+                let record = self
+                    .store
+                    .list(None, 1000, 0)
+                    .map_err(store_error)?
+                    .into_iter()
+                    .find(|record| record.batch_id.as_deref() == Some(batch_id.as_str()))
+                    .ok_or_else(|| RpcError::task_not_found(&batch_id))?;
+                record.id
+            }
+            (None, None) => {
+                return Err(RpcError::invalid_params("task_id or batch_id is required"));
+            }
+        };
+        let record = self
+            .store
+            .get(&task_id)
+            .map_err(store_error)?
+            .ok_or_else(|| RpcError::task_not_found(&task_id))?;
+        let mut view = serde_json::to_value(self.view(&record, true))
+            .map_err(|err| RpcError::internal(err.to_string()))?;
+        if let Value::Object(map) = &mut view {
+            map.insert("media_kind".into(), json!(record.media_kind));
+            map.insert("media_format".into(), json!(record.media_format));
+            map.insert("playlist_title".into(), json!(record.playlist_title));
+            map.insert("playlist_count".into(), json!(record.playlist_count));
+            map.insert("batch_id".into(), json!(record.batch_id));
+        }
+        Ok(view)
+    }
+
+    /// Run `yt-dlp` for one media task and report progress on the bus.
+    fn start_media_task(
+        &self,
+        task_id: String,
+        plan: crate::media::DownloadPlan,
+        tool: PathBuf,
+        final_path: PathBuf,
+    ) -> Result<(), RpcError> {
+        let cancel = Canceller::new();
+        let store = Arc::clone(&self.store);
+        let bus = Arc::clone(&self.bus);
+        let progress = Arc::clone(&self.progress);
+        let id = task_id.clone();
+        let task_cancel = cancel.clone();
+        let handle = tokio::spawn(async move {
+            let mut last = std::time::Instant::now();
+            let mut last_downloaded = 0u64;
+            let result = crate::media::run_download(&tool, &plan, task_cancel, |line| {
+                if last.elapsed() < std::time::Duration::from_millis(250) {
+                    return;
+                }
+                last = std::time::Instant::now();
+                last_downloaded = line.downloaded;
+                let _ = store.update_progress(&id, line.downloaded, line.total);
+                progress
+                    .lock()
+                    .unwrap_or_else(|err| err.into_inner())
+                    .insert(
+                        id.clone(),
+                        ProgressSnapshot {
+                            downloaded_bytes: line.downloaded,
+                            total_bytes: line.total,
+                            speed_bps: line.speed,
+                            eta_seconds: line.eta,
+                            segments: Vec::new(),
+                        },
+                    );
+                bus.publish(
+                    "task_progress",
+                    Some(&id),
+                    json!({
+                        "downloaded_bytes": line.downloaded,
+                        "total_bytes": line.total,
+                        "speed_bps": line.speed,
+                        "eta_seconds": line.eta,
+                        "segments": [],
+                    }),
+                );
+            })
+            .await;
+            match result {
+                Ok(()) => {
+                    let _ = store.set_status(&id, DownloadStatus::Completed, None);
+                    let _ = store.update_progress(&id, last_downloaded, None);
+                    progress
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .remove(&id);
+                    bus.publish(
+                        "task_completed",
+                        Some(&id),
+                        json!({
+                            "final_path": final_path.to_string_lossy(),
+                            "total_bytes": last_downloaded,
+                            "checksum_ok": null,
+                            "media": true,
+                        }),
+                    );
+                }
+                Err(error) => {
+                    let _ = store.set_status(
+                        &id,
+                        DownloadStatus::Failed,
+                        Some((error.code, error.message.clone())),
+                    );
+                    progress
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .remove(&id);
+                    bus.publish(
+                        "task_failed",
+                        Some(&id),
+                        json!({
+                            "error_code": error.code,
+                            "message": error.message,
+                            "retryable": false,
+                        }),
+                    );
+                }
+            }
+        });
+        self.running
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .insert(task_id, RunningTask { cancel, handle });
+        Ok(())
+    }
+}
+
 impl RpcHandler for Manager {
     fn call<'a>(
         &'a self,
@@ -1277,6 +1562,21 @@ impl RpcHandler for Manager {
                     let parsed: DeleteParams = serde_json::from_value(parse(params)?)
                         .map_err(|err| RpcError::invalid_params(err.to_string()))?;
                     self.delete_task(parsed).await
+                }
+                "media.probe" => {
+                    let parsed: MediaProbeParams = serde_json::from_value(parse(params)?)
+                        .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                    self.media_probe(parsed).await
+                }
+                "media.add" => {
+                    let parsed: MediaAddParams = serde_json::from_value(parse(params)?)
+                        .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                    self.media_add(parsed).await
+                }
+                "media.status" => {
+                    let parsed: MediaStatusParams = serde_json::from_value(parse(params)?)
+                        .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                    self.media_status(parsed)
                 }
                 "settings.get" => self.settings_get(),
                 "settings.update" => self.settings_update(params),

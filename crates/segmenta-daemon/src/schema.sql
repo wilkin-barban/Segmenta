@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS downloads (
     retry_count INTEGER NOT NULL DEFAULT 0,
     priority INTEGER NOT NULL DEFAULT 0,
     queue_name TEXT NOT NULL DEFAULT 'main' REFERENCES queues(name),
-    download_type TEXT NOT NULL DEFAULT 'direct' CHECK(download_type IN ('direct', 'hls', 'dash')),
+    download_type TEXT NOT NULL DEFAULT 'direct' CHECK(download_type IN ('direct', 'hls', 'dash', 'youtube_video', 'youtube_playlist', 'youtube_audio')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP
 );
