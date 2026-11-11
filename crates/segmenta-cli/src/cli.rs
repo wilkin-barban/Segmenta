@@ -156,7 +156,6 @@ enum SystemAction {
     Shutdown,
 }
 
-
 /// Localized `--help` (clap's own help is English-only).
 fn help_text(locale: segmenta_i18n::Locale) -> String {
     match locale {

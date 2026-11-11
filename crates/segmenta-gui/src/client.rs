@@ -595,7 +595,11 @@ impl Worker {
 
     fn serve(&mut self, job: Job) {
         if trace_enabled() {
-            eprintln!("segmenta-gui: serve {} (connected={})", job.method, self.stream.is_some());
+            eprintln!(
+                "segmenta-gui: serve {} (connected={})",
+                job.method,
+                self.stream.is_some()
+            );
         }
         if self.stream.is_none() {
             // Queue instead of failing: the UI issues `download.list` before the first

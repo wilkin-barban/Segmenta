@@ -23,11 +23,24 @@ pub const CAPTURE_HEIGHT: i32 = 900;
 ///
 /// The application loop owns the capture because GTK only paints a mapped window:
 /// the sequence switches the style manager, waits for the restyle and renders.
-pub fn capture(dir: &Path) -> Result<Vec<PathBuf>, String> {
+pub struct CaptureOutcome {
+    /// Written PNGs, light first.
+    pub paths: Vec<PathBuf>,
+    /// Rows the window had painted when the captures were taken.
+    pub rows: usize,
+    /// State label at capture time.
+    pub state: String,
+}
+
+pub fn capture(dir: &Path) -> Result<CaptureOutcome, String> {
     std::fs::create_dir_all(dir)
         .map_err(|err| format!("cannot create {}: {err}", dir.display()))?;
     let written: Rc<RefCell<Vec<PathBuf>>> = Rc::new(RefCell::new(Vec::new()));
     let failure: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    let rows_seen: Rc<Cell<usize>> = Rc::new(Cell::new(0));
+    let state_seen: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
+    let rows_outer = Rc::clone(&rows_seen);
+    let state_outer = Rc::clone(&state_seen);
     let app = adw::Application::builder()
         .application_id("io.github.wilkin.Segmenta.Captures")
         .build();
@@ -46,9 +59,26 @@ pub fn capture(dir: &Path) -> Result<Vec<PathBuf>, String> {
             let phase = Rc::new(Cell::new(0u8));
             let written = Rc::clone(&written);
             let failure = Rc::clone(&failure);
+            let rows_in = Rc::clone(&rows_seen);
+            let state_in = Rc::clone(&state_seen);
+            let started = std::time::Instant::now();
             let dir = dir.clone();
             let application = application.clone();
             gtk::glib::timeout_add_local(Duration::from_millis(250), move || {
+                // Never capture the spinner: wait until the demo list is painted.
+                if window.rows().is_empty() {
+                    if started.elapsed() > Duration::from_secs(6) {
+                        *failure.borrow_mut() = Some(
+                            "the demo list never rendered; refusing to capture the loading state"
+                                .to_string(),
+                        );
+                        application.quit();
+                        return glib::ControlFlow::Break;
+                    }
+                    return glib::ControlFlow::Continue;
+                }
+                rows_in.set(window.rows().len());
+                *state_in.borrow_mut() = format!("{:?}", window.view_state());
                 let step = phase.get();
                 phase.set(step + 1);
                 match step {
@@ -84,7 +114,9 @@ pub fn capture(dir: &Path) -> Result<Vec<PathBuf>, String> {
         return Err(err);
     }
     let paths = written.borrow().clone();
-    Ok(paths)
+    let rows = rows_outer.get();
+    let state = state_outer.borrow().clone();
+    Ok(CaptureOutcome { paths, rows, state })
 }
 
 /// Snapshot the mapped window and write it as PNG.

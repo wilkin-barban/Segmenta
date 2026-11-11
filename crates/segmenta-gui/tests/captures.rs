@@ -12,9 +12,23 @@ fn screenshots_are_written_for_both_themes() {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
-    let paths = segmenta_gui::screenshots::capture(dir.path()).expect("capture");
-    assert_eq!(paths.len(), 2, "expected a light and a dark capture");
-    for path in paths {
+    let outcome = segmenta_gui::screenshots::capture(dir.path()).expect("capture");
+    assert_eq!(
+        outcome.paths.len(),
+        2,
+        "expected a light and a dark capture"
+    );
+    assert!(
+        outcome.rows > 0,
+        "the capture must show a task, not the loading state ({})",
+        outcome.state
+    );
+    assert!(
+        outcome.state.starts_with("Ready"),
+        "the window must be Ready when captured, got {}",
+        outcome.state
+    );
+    for path in outcome.paths {
         let bytes = std::fs::read(&path).unwrap();
         assert!(bytes.len() > 10_000, "{} looks empty", path.display());
         assert_eq!(&bytes[1..4], b"PNG", "{} is not a PNG", path.display());
@@ -30,7 +44,8 @@ fn screenshots_are_written_for_both_themes() {
     // The same directory must be reusable (the release gate runs it twice).
     std::thread::sleep(Duration::from_millis(10));
     let again = segmenta_gui::screenshots::capture(dir.path()).expect("second capture");
-    assert_eq!(again.len(), 2);
+    assert_eq!(again.paths.len(), 2);
+    assert!(again.rows > 0);
 }
 
 use segmenta_gui::gtk;
