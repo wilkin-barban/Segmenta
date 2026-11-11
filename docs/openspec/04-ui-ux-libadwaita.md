@@ -5,6 +5,9 @@
 > **Entorno Objetivo:** Ubuntu 26.10 / GNOME 48+ / Wayland  
 > **Toolkit:** GTK4 (>= 4.14) + Libadwaita (>= 1.5)
 
+> **Normativo:** el contrato IPC y el ciclo de vida están en 07; el empaquetado, los execution
+> budgets y las pruebas están en 10. La UI consume el daemon, no abre sockets ni descarga por su cuenta.
+
 ---
 
 ## 1. Filosofía de Diseño y Experiencia de Usuario
@@ -100,7 +103,7 @@ Cuando el sniffer del navegador detecta un video de YouTube, Vimeo u otra fuente
 
 * **Portal de Segundo Plano (`org.freedesktop.portal.Background`)**:
   * Permite que las descargas continúen activas aunque el usuario cierre la ventana principal.
-  * Muestra el icono de estado en la bandeja del sistema mediante `libayatana-appindicator3` o el menú de estado de GNOME Shell.
+  * La bandeja es opcional: GNOME 48 no garantiza AppIndicator sin la extensión correspondiente. Si no hay bandeja, la app debe seguir funcionando desde el daemon y avisar por notificaciones; `libayatana-appindicator3` no se asume instalado.
 * **Notificaciones de Escritorio (`org.freedesktop.Notifications`)**:
   * Al completarse una descarga, se emite una notificación nativa con dos botones de acción rápida:
     * `[ Abrir Archivo ]` -> Invoca a `xdg-open` sobre el archivo final.
@@ -114,7 +117,7 @@ Para ofrecer una experiencia de configuración exhaustiva sin saturar visualment
 
 ### 6.1. Pestaña «General» (Integración y Teclas Modificadoras)
 * **Inicio del Sistema:**
-  * Interruptor (*switch*): `Iniciar Segmenta con la sesión de Ubuntu` (gestiona la unidad `systemd --user` o archivo `.desktop` en `~/.config/autostart`).
+  * Interruptor (*switch*): `Iniciar Segmenta con la sesión de Ubuntu`. La fuente de verdad es la unidad `systemd --user` de 07/10; el `.desktop` sólo lanza la GUI, no el daemon.
 * **Monitoreo del Portapapeles:**
   * Interruptor: `Monitorear el portapapeles en busca de URLs de descarga válidas`.
 * **Teclas de Anulación de Captura:**
@@ -186,3 +189,24 @@ Para ofrecer una experiencia de configuración exhaustiva sin saturar visualment
   * Interruptor: `Escanear archivos descargados al completarse`.
   * Campo de comando ejecutable: (ej. `/usr/bin/clamscan --bell -i %file%`).
 
+
+---
+
+## 7. Estados, accesibilidad y límites de la UI
+
+Cada lista y cada diálogo debe definir, como mínimo, estos estados antes de implementarse:
+
+- **Vacío:** texto que explica cómo añadir la primera descarga, sin una tabla vacía sin contexto.
+- **Cargando:** skeletons o spinner con nombre accesible; no bloquear el hilo de GTK.
+- **Error:** código del daemon traducido, acción de reintento y detalle copiable para soporte.
+- **Pausado/cancelado:** distinción visible entre pausa reanudable y cancelación.
+- **Sin conexión / ERP inalcanzable:** mensaje que diga qué revisar sin prometer una comprobación que la app no hace.
+
+Requisitos transversales:
+
+- navegación completa por teclado y foco visible;
+- etiquetas accesibles en iconos, barras de progreso y el widget de segmentos;
+- contraste AA y respeto de `prefers-reduced-motion`;
+- textos en `es` y `pt-BR` desde el catálogo, sin cadenas incrustadas;
+- nombres de archivo largos con elipsis y tooltip, sin romper el layout a 125%/150%;
+- una sola acción destructiva por diálogo y confirmación explícita para borrar archivos.

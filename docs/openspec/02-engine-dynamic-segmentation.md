@@ -4,6 +4,10 @@
 > **Versión:** 1.0.0  
 > **Área:** Núcleo de Red, Planificación Concurrente y E/S de Archivos
 
+> **Normativo:** el contrato HTTP está en [`06-http-contract.md`](06-http-contract.md); la
+> definición de `next_offset`, el handoff seguro y el DDL están en
+> [`08-persistence-recovery.md`](08-persistence-recovery.md).
+
 ---
 
 ## 1. Fases del Ciclo de Vida de una Descarga
@@ -68,33 +72,28 @@ $$\text{chunk\_size} = \left\lfloor \frac{S}{N} \right\rfloor$$
 Para cada segmento $i \in [0, N-1]$:
 $$\text{start\_offset}_i = i \times \text{chunk\_size}$$
 $$\text{end\_offset}_i = \begin{cases} (i + 1) \times \text{chunk\_size} - 1 & \text{si } i < N - 1 \\ S - 1 & \text{si } i = N - 1 \end{cases}$$
-$$\text{current\_offset}_i = \text{start\_offset}_i$$
+$$\text{next\_offset}_i = \text{start\_offset}_i$$
 
 ---
 
-### 3.2. Lógica de Fisión Dinámica (*Hot-Splitting*)
+### 3.2. Lógica de Fisión Dinámica (*Hot-Splitting*) y Protocolo Anti-Carrera
 
-Cada hilo de trabajo (*worker*) reporta continuamente su `current_offset`.
+Cada hilo de trabajo (*worker*) reporta continuamente su `next_offset`. Para evitar condiciones de carrera donde bytes en vuelo desborden la nueva frontera, la división se ejecuta mediante el **Protocolo de Handoff Cooperativo** (especificado formalmente en `OpenSpec 08`):
 
-1. **Evento de Disparo**: El worker $W_k$ finaliza la descarga de su segmento asignado $S_k$ ($\text{current\_offset}_k = \text{end\_offset}_k$).
+1. **Evento de Disparo**: El worker $W_k$ finaliza la descarga de su segmento asignado $S_k$ ($\text{next\_offset}_k == \text{end\_offset}_k + 1$).
 2. **Búsqueda de Donante**:
    * El planificador itera sobre todos los segmentos activos $\{S_j\}$ que están siendo descargados por otros workers.
    * Calcula los bytes restantes por descargar de cada uno:
-     $$\text{restante}_j = \text{end\_offset}_j - \text{current\_offset}_j$$
+     $$\text{restante}_j = (\text{end\_offset}_j - \text{next\_offset}_j) + 1$$
    * Selecciona el segmento con el mayor número de bytes restantes:
      $$S_{\text{max}} = \arg\max_j (\text{restante}_j)$$
 3. **Umbral de Fisión**:
    * Definir constante $\text{MIN\_SPLIT\_SIZE} = 2 \text{ MB}$ ($2{,}097{,}152$ bytes).
    * **Condición:** Si $\text{restante}_{\text{max}} < \text{MIN\_SPLIT\_SIZE}$, **no dividir**. El worker $W_k$ entra en reposo (*idle*), ya que el coste de handshake TLS y latencia de conexión supera el beneficio de dividir una porción pequeña.
-4. **Ejecución de la División**:
-   * Si $\text{restante}_{\text{max}} \ge \text{MIN\_SPLIT\_SIZE}$:
-     $$\text{punto\_medio} = \text{current\_offset}_{\text{max}} + \left\lfloor \frac{\text{restante}_{\text{max}}}{2} \right\rfloor$$
-     * El segmento original $S_{\text{max}}$ reduce su límite superior en caliente:
-       $$\text{end\_offset}_{\text{max}} = \text{punto\_medio}$$
-     * Se crea un nuevo segmento $S_{\text{nuevo}}$ y se asigna al worker ocioso $W_k$:
-       $$\text{start\_offset}_{\text{nuevo}} = \text{punto\_medio} + 1$$
-       $$\text{current\_offset}_{\text{nuevo}} = \text{punto\_medio} + 1$$
-       $$\text{end\_offset}_{\text{nuevo}} = \text{fin\_antiguo}_{\text{max}}$$
+4. **Handoff Atómico y Clamp de Lectura (Ver OpenSpec 08):**
+   * El planificador envía `SplitRequest { target_midpoint }` al worker donante.
+   * El donante confirma con `SplitAck` y aplica un *hard-clamp* en su buffer de lectura para no leer más allá de `target_midpoint`.
+   * Solo tras la confirmación del donante, se instancia el nuevo worker $W_k$ en el rango $[\text{target\_midpoint} + 1, \text{fin\_antiguo}_{\text{max}}]$.
 5. **Reconexión Inmediata**:
    * El worker $W_k$ reutiliza el pool de conexiones o abre un nuevo socket TCP y envía:
      ```http
@@ -112,32 +111,32 @@ A diferencia de Windows, donde cada conexión escribe en un archivo temporal sep
 ### 4.1. Preasignación con `posix_fallocate`
 Al conocer el `total_size`:
 ```c
-int fd = open(final_path, O_RDWR | O_CREAT | O_CLOEXEC, 0644);
+int fd = open(final_path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
 if (fd < 0) {
     /* Manejar error de permisos o ruta */
 }
 
 // Reserva física garantizada de bloques en el sistema de archivos
 int ret = posix_fallocate(fd, 0, total_size);
-if (ret != 0) {
-    // ENOSPC: Espacio insuficiente en disco. Abortar antes de descargar.
+if (ret == ENOSPC) {
+    // Espacio insuficiente: abortar antes de descargar.
+} else if (ret == EOPNOTSUPP || ret == ENOSYS) {
+    // Filesystem sin fallocate: ftruncate/set_len + fstatvfs, nunca fallar en silencio.
 }
 ```
-* **Ventaja:** Elimina la fragmentación del archivo en ext4/btrfs/xfs y asegura de antemano que el disco no se llenará a mitad del proceso.
+* **Ventaja:** Elimina la fragmentación del archivo en ext4/btrfs/xfs y asegura de antemano que el disco no se llenará a mitad del proceso. `posix_fallocate()` no está garantizado en todos los filesystems (ZFS/FUSE, por ejemplo); el fallback es `ftruncate`/`set_len` con comprobación de espacio con `fstatvfs`, no un fallo silencioso.
 
 ### 4.2. Escrituras Atómicas Desplazadas con `pwrite64`
 Cada worker mantiene su propio búfer de lectura en memoria (ej. 64 KB o 128 KB). Al recibir un chunk desde el socket de red:
 
 ```c
-ssize_t written = pwrite64(fd, buffer, bytes_received, segment->current_offset);
-if (written > 0) {
-    segment->current_offset += written;
-    atomic_fetch_add(&global_downloaded_bytes, written);
-}
+// pwrite_all: repite hasta vaciar el buffer, maneja EINTR y escrituras parciales.
+// No usa ni altera el puntero interno del descriptor.
+int pwrite_all(int fd, const void *buf, size_t len, off_t offset);
 ```
 
-* **Ventaja:** `pwrite64` no utiliza ni altera el puntero interno del descriptor (`lseek`). Cientos de escrituras concurrentes pueden ejecutarse simultáneamente sin condiciones de carrera y sin bloqueos de mutex a nivel de archivo.
-* **Fin de Descarga Instantáneo:** En el instante en que el último worker escribe su último bloque, se llama a `fsync(fd)` y `close(fd)`. **El archivo está listo al 100% en 0 segundos.**
+* **Ventaja:** `pwrite64` no utiliza ni altera el puntero interno del descriptor (`lseek`). Los workers pueden escribir en rangos distintos sin un mutex de archivo. La atomicidad es **por syscall y por rango**: `pwrite64` puede escribir menos bytes, devolver `EINTR` o fallar; el motor debe usar `pwrite_all` (08) y no asumir que un solo `pwrite64` completa el buffer.
+* **Persistencia:** `pwrite64` no vuelca los datos a disco. Antes de actualizar `next_offset` en SQLite, el checkpoint debe hacer `fdatasync` (o una política equivalente documentada) y sólo después confirmar la transacción; si no, un corte puede dejar la base apuntando a bytes que el filesystem perdió. El cierre final hace `fsync`, `close` y la transición atómica desde `temp_path` al `final_path` cuando corresponda.
 
 ---
 

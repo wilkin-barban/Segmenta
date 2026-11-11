@@ -4,6 +4,10 @@
 > **Versión:** 1.0.0  
 > **Destinatarios:** Agentes de IA (Coders/Architects) y Desarrolladores
 
+> **Contratos normativos:** 06 (HTTP), 07 (IPC), 08 (persistencia/hot-split), 09
+> (extensión/Native Messaging) y 10 (empaquetado/pruebas). El roadmap no repite esos
+> detalles: los referencia para que una decisión no viva en dos lugares.
+
 ---
 
 ## 1. Decisión del Stack Tecnológico
@@ -54,17 +58,20 @@ Segmenta/
   1. Enviar una petición `reqwest::Client` con cabecera `Range: bytes=0-1`.
   2. Verificar si el código de estado es `StatusCode::PARTIAL_CONTENT` (206).
   3. Extraer `total_size` de la cabecera `Content-Range`.
-  4. Extraer el nombre de archivo de `Content-Disposition` o del último segmento de la URL.
-* **Salida:** `ProbeResult { total_size: Option<u64>, supports_ranges: bool, filename: String }`.
+  4. Extraer y sanitizar el nombre de archivo según `06-http-contract.md`.
+  5. Guardar `ETag`/`Last-Modified`, `content_type` y `final_url` para la reanudación.
+* **Salida:** `ProbeResult { total_size: Option<u64>, supports_ranges: bool, filename: String, etag: Option<String>, last_modified: Option<String> }`.
 
 #### Tarea 1.2: Módulo de E/S de Disco (`disk.rs`)
 * **Lógica:**
   1. Implementar la función `allocate_file(path: &Path, size: u64) -> Result<File>`:
      * Abrir con `OpenOptions::new().read(true).write(true).create(true).truncate(true)`.
      * Invocar `libc::posix_fallocate(file.as_raw_fd(), 0, size as libc::off_t)`.
-     * Si retorna código de error `ENOSPC`, propagar error de disco lleno.
-  2. Implementar `write_at(file: &File, offset: u64, data: &[u8]) -> Result<usize>`:
-     * Invocar `libc::pwrite64(file.as_raw_fd(), data.as_ptr() as *const libc::c_void, data.len(), offset as libc::off_t)`.
+     * Si retorna `ENOSPC`, propagar error de disco lleno.
+     * Si retorna `EOPNOTSUPP`/`ENOSYS`, usar `ftruncate`/`set_len` y validar espacio con `fstatvfs`.
+  2. Implementar `pwrite_all(file: &File, offset: u64, data: &[u8]) -> Result<()>`:
+     * Repetir `FileExt::write_at` hasta vaciar el buffer, manejando `EINTR` y escrituras parciales (08).
+     * No actualizar `next_offset` en SQLite hasta que el checkpoint de datos haya hecho `fdatasync`.
 
 #### Tarea 1.3: Planificador de Segmentos en Caliente (`scheduler.rs`)
 * **Estructura de Datos:**
@@ -73,19 +80,17 @@ Segmenta/
       pub id: usize,
       pub start_offset: u64,
       pub end_offset: u64,
-      pub current_offset: Arc<AtomicU64>,
+      pub next_offset: Arc<AtomicU64>,
       pub status: SegmentStatus,
   }
   ```
-* **Lógica de Hot-Split:**
-  * Al recibir la notificación de que el worker $k$ finalizó su segmento:
-    1. Bloquear el mutex del planificador.
-    2. Filtrar segmentos activos donde `(end_offset - current_offset) > 2 * 1024 * 1024` (2 MB).
-    3. Seleccionar el segmento con mayor delta restante.
-    4. Calcular `midpoint = current_offset + (remaining / 2)`.
-    5. Actualizar `end_offset` del segmento emisor a `midpoint`.
-    6. Instanciar un nuevo `Segment` con rango `(midpoint + 1)..=original_end`.
-    7. Lanzar una nueva tarea en `tokio::spawn` para el worker ocioso.
+* **Lógica de Hot-Split:** implementar el protocolo cooperativo de 08, no cambiar `end_offset` desde el planificador sin confirmación:
+    1. El worker ocioso notifica al planificador.
+    2. El planificador elige el donante con mayor `(end_offset - next_offset) + 1`.
+    3. Si el resto es `>= 2 MB`, envía `SplitRequest { target_midpoint }` al donante.
+    4. El donante sólo confirma con `SplitAck` después de recortar su buffer y fijar el clamp en `target_midpoint`; nunca escribe bytes posteriores.
+    5. Con la confirmación, el planificador persiste el nuevo segmento y lanza el worker en `[midpoint + 1, original_end]`.
+    6. Sin confirmación (`SplitReject`), elige otro donante o deja al worker ocioso.
 
 ---
 
@@ -93,7 +98,7 @@ Segmenta/
 
 #### Tarea 2.1: Servidor Unix Domain Socket (`ipc.rs`)
 * Enlazar en `tokio::net::UnixListener::bind(&socket_path)`.
-* Procesar paquetes NDJSON según el esquema documentado en `OpenSpec 01`.
+* Procesar paquetes NDJSON según [`07-ipc-contract.md`](07-ipc-contract.md), no sólo el resumen de 01.
 * Mantener un canal de difusión (`tokio::sync::broadcast`) para notificaciones de progreso hacia los clientes conectados.
 
 #### Tarea 2.2: Binario Native Messaging (`segmenta-host`)
@@ -105,7 +110,7 @@ Segmenta/
       
       let mut length_buf = [0u8; 4];
       stdin.read_exact(&mut length_buf)?;
-      let length = u32::from_ne_bytes(length_buf) as usize;
+      let length = u32::from_le_bytes(length_buf) as usize; // little-endian, no `ne`
       
       let mut payload = vec![0u8; length];
       stdin.read_exact(&mut payload)?;
@@ -125,7 +130,7 @@ Segmenta/
 * Implementar `background.js`:
   * Escuchar `chrome.runtime.onMessage`.
   * Extraer cookies con `chrome.cookies.getAll({ url })`.
-  * Enviar mensaje a `segmenta-host` mediante `chrome.runtime.sendNativeMessage("io.github.wilkin.segmenta", payload)`.
+  * Enviar mensaje a `segmenta-host` mediante `chrome.runtime.connectNative` o `sendNativeMessage` según el ciclo de vida definido en 09; validar gesto de usuario y esquema de URL.
 
 ---
 
@@ -149,10 +154,11 @@ Segmenta/
 * MPD: Parsear con `quick-xml` para extraer la línea de tiempo y las URLs de inicialización de audio y video.
 
 #### Tarea 5.2: Fusión con FFmpeg
-* Una vez descargados los segmentos en disco, invocar mediante `tokio::process::Command`:
-  ```bash
-  ffmpeg -y -i video.m4s -i audio.m4s -c copy -movflags +faststart salida.mp4
-  ```
+* Seguir el pipeline de 09 §5: descargar el init segment y los fragmentos en orden, generar listas
+  `ffconcat` separadas para video y audio y ejecutar FFmpeg con `-f concat -safe 0`, sin shell.
+* **Alcance v1:** HLS/DASH públicos **sin cifrar**. Cualquier `EXT-X-KEY` con método distinto de
+  `NONE` o `ContentProtection` DRM se rechaza; el comando simplista `-i video.m4s -i audio.m4s`
+  no es suficiente para fragmentos reales.
 
 ---
 
