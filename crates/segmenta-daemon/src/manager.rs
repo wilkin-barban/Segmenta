@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use futures_util::future::BoxFuture;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::{json, Value};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, watch, Notify};
 
 use segmenta_core::engine::{
     run as run_engine, Canceller, DownloadSpec, EngineConfig, EngineEvent, ResumeState,
@@ -25,6 +25,7 @@ use crate::rpc::{
     MediaAddParams, MediaProbeParams, MediaStatusParams, QueueCreateParams, QueueRemoveParams,
     QueueScheduleParams, RpcError, SegmentView, TaskIdParams,
 };
+use crate::scheduler::{resolve_schedule, Clock, LocalClock, QueueSchedule};
 use crate::secrets::SecretStore;
 use crate::store::{
     Checkpoint, DownloadRecord, DownloadStatus, SegmentRow, Settings, Store, StoreError,
@@ -59,6 +60,10 @@ pub struct Manager {
     progress: Arc<Mutex<HashMap<String, ProgressSnapshot>>>,
     running: Arc<Mutex<HashMap<String, RunningTask>>>,
     shutdown: watch::Sender<bool>,
+    /// Wall clock the scheduler gate reads; injectable so tests never depend on the host.
+    clock: Mutex<Arc<dyn Clock>>,
+    /// Wake-up of the queue scheduler, signalled whenever a task stops running.
+    scheduler_wake: Arc<Notify>,
     started: std::time::Instant,
 }
 
@@ -79,6 +84,8 @@ impl Manager {
             progress: Arc::new(Mutex::new(HashMap::new())),
             running: Arc::new(Mutex::new(HashMap::new())),
             shutdown,
+            clock: Mutex::new(Arc::new(LocalClock)),
+            scheduler_wake: Arc::new(Notify::new()),
             started: std::time::Instant::now(),
         }
     }
@@ -104,6 +111,117 @@ impl Manager {
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .clone()
+    }
+
+    /// Replace the wall clock the scheduler gate reads.
+    ///
+    /// The daemon keeps [`LocalClock`]; a test injects a fixed minute so a window can be
+    /// evaluated without sleeping and without depending on the host time.
+    pub fn set_clock(&self, clock: Arc<dyn Clock>) {
+        *self.clock.lock().unwrap_or_else(|err| err.into_inner()) = clock;
+    }
+
+    fn minute_of_day(&self) -> u32 {
+        self.clock
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .minute_of_day()
+    }
+
+    /// Handle the queue scheduler waits on to be woken before the next tick.
+    pub fn scheduler_wake(&self) -> Arc<Notify> {
+        Arc::clone(&self.scheduler_wake)
+    }
+
+    /// Tell the scheduler a task stopped running, so the next pending one can start now.
+    fn notify_scheduler(&self) {
+        self.scheduler_wake.notify_one();
+    }
+
+    /// Ask the daemon to shut down through the existing watch channel.
+    ///
+    /// It is the ordered shutdown `system.shutdown` already uses, so
+    /// `action_on_complete: exit` needs no second mechanism.
+    pub fn request_shutdown(&self) {
+        let _ = self.shutdown.send(true);
+    }
+
+    /// Names of every queue the daemon knows, in `queue.list` order.
+    pub fn queue_names(&self) -> Result<Vec<String>, StoreError> {
+        Ok(self
+            .store
+            .queues()?
+            .into_iter()
+            .map(|row| row.name)
+            .collect())
+    }
+
+    /// Effective schedule of one queue: its window plus the action run when it drains.
+    pub fn queue_schedule(&self, queue: &str) -> QueueSchedule {
+        let stored = self.store.queue_schedule(queue).unwrap_or_else(|err| {
+            tracing::warn!(queue = %queue, error = %err, "cannot read the persisted schedule");
+            None
+        });
+        resolve_schedule(queue, stored.as_ref(), &self.settings())
+    }
+
+    /// Whether the queue still holds work: pending tasks or tasks in flight.
+    pub fn queue_has_work(&self, queue: &str) -> Result<bool, StoreError> {
+        Ok(!self.store.pending_for_queue(queue, 1)?.is_empty()
+            || self.store.active_count(queue)? > 0)
+    }
+
+    /// Whether the window of `queue` is open at the current local time.
+    fn queue_is_open(&self, queue: &str) -> bool {
+        self.queue_schedule(queue).is_open_at(self.minute_of_day())
+    }
+
+    /// Start every pending task of `queue` that fits right now.
+    ///
+    /// This is the single entry point of OpenSpec 12 §2: the scheduler and the resume
+    /// path both come through here, and a closed window or a full queue starts nothing.
+    /// Every step is synchronous, so the `running` mutex is never held across an `await`.
+    pub fn start_pending_for_queue(&self, queue: &str) -> Result<usize, RpcError> {
+        if !self.queue_is_open(queue) {
+            tracing::debug!(queue = %queue, "queue window is closed");
+            return Ok(0);
+        }
+        let queues = self.store.queues().map_err(store_error)?;
+        let Some(max_active) = queues
+            .iter()
+            .find(|row| row.name == queue)
+            .map(|row| row.max_active)
+        else {
+            // A task cannot reference a queue that does not exist (SQLite enforces it),
+            // so an unknown name simply has nothing to start.
+            return Ok(0);
+        };
+        let active = self.store.active_count(queue).map_err(store_error)?;
+        let free = max_active.saturating_sub(active) as usize;
+        if free == 0 {
+            return Ok(0);
+        }
+        let pending = self
+            .store
+            .pending_for_queue(queue, free)
+            .map_err(store_error)?;
+        let connections = self.settings().max_connections;
+        let mut started = 0;
+        for record in pending {
+            match self.start_task(&record.id, connections) {
+                Ok(()) => {
+                    started += 1;
+                    tracing::info!(task_id = %record.id, queue = %queue, "queue start");
+                }
+                Err(err) => tracing::warn!(
+                    task_id = %record.id,
+                    queue = %queue,
+                    error = %err.message,
+                    "the queue cannot start this task"
+                ),
+            }
+        }
+        Ok(started)
     }
 
     /// Tasks the daemon is currently running.
@@ -343,9 +461,11 @@ impl Manager {
                 "final_path": record.final_path,
             }),
         );
-        if params.start_immediately {
+        if params.start_immediately && self.queue_is_open(&params.queue_name) {
             self.start_task(&task_id, connections)?;
         }
+        // A closed window leaves the task `pending`: the scheduler starts it when the
+        // window opens instead of the daemon ignoring the schedule on `download.add`.
         Ok(json!({
             "task_id": task_id,
             "status": self
@@ -446,6 +566,7 @@ impl Manager {
         let progress = Arc::clone(&self.progress);
         let id = task_id.to_string();
         let cancel_for_task = cancel.clone();
+        let wake = Arc::clone(&self.scheduler_wake);
         let join = tokio::spawn(async move {
             let engine = tokio::spawn(run_engine(cfg, spec, event_tx, cancel_for_task));
             while let Some(event) = event_rx.recv().await {
@@ -455,6 +576,8 @@ impl Manager {
                 error: CoreError::Network(format!("engine task panicked: {err}")),
             });
             finish_task(&store, &bus, &progress, &id, outcome);
+            // The slot is free now: wake the scheduler instead of waiting for the tick.
+            wake.notify_one();
         });
         self.running
             .lock()
@@ -567,6 +690,8 @@ impl Manager {
                 .map_err(store_error)?;
             self.publish_state(task_id, record.status.as_str(), "paused", None);
         }
+        // The paused task no longer holds a queue slot.
+        self.notify_scheduler();
         let record = self
             .store
             .get(task_id)
@@ -590,10 +715,21 @@ impl Manager {
                 return Err(RpcError::task_not_resumable_state(task_id, other.as_str()));
             }
         }
-        let connections = self.settings().max_connections;
         tracing::info!(task_id = %task_id, "download.resume");
-        self.start_task(task_id, connections)?;
-        Ok(json!({ "task_id": task_id, "status": "downloading" }))
+        // Resume rejoins the queue and goes through the same gate as the scheduler, so a
+        // closed window or a full queue leaves the task pending for the next tick instead
+        // of bypassing the schedule.
+        self.store
+            .set_status(task_id, DownloadStatus::Pending, None)
+            .map_err(store_error)?;
+        self.start_pending_for_queue(&record.queue_name)?;
+        let status = self
+            .store
+            .get(task_id)
+            .map_err(store_error)?
+            .map(|record| record.status.as_str().to_string())
+            .unwrap_or_else(|| DownloadStatus::Pending.as_str().to_string());
+        Ok(json!({ "task_id": task_id, "status": status }))
     }
 
     async fn cancel_task(&self, params: CancelParams) -> Result<Value, RpcError> {
@@ -630,6 +766,8 @@ impl Manager {
         }
         self.cleanup_secret(&params.task_id);
         self.publish_state(&params.task_id, record.status.as_str(), "cancelled", None);
+        // A cancelled task frees its slot like a completed one.
+        self.notify_scheduler();
         Ok(json!({
             "task_id": params.task_id,
             "status": "cancelled",
@@ -662,6 +800,7 @@ impl Manager {
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .remove(&params.task_id);
+        self.notify_scheduler();
         Ok(json!({ "task_id": params.task_id, "deleted": deleted }))
     }
 
@@ -790,7 +929,9 @@ impl Manager {
         self.store
             .schedule_queue(&params.queue_name, &schedule)
             .map_err(|err| match err {
-                StoreError::Queue(message) => RpcError::invalid_params(message),
+                StoreError::Queue(message) | StoreError::Invalid(message) => {
+                    RpcError::invalid_params(message)
+                }
                 other => store_error(other),
             })?;
         Ok(json!({ "queue_name": params.queue_name, "schedule": schedule }))
@@ -1497,6 +1638,7 @@ impl Manager {
         let path = final_path.clone();
         let job = selection.clone();
         let kind = selection.kind;
+        let wake = Arc::clone(&self.scheduler_wake);
         let handle = tokio::spawn(async move {
             let mut last = std::time::Instant::now();
             let mut last_bytes = 0u64;
@@ -1579,6 +1721,8 @@ impl Manager {
                     );
                 }
             }
+            // The stream task released its queue slot.
+            wake.notify_one();
         });
         self.running
             .lock()
@@ -1777,6 +1921,7 @@ impl Manager {
         let id = task_id.clone();
         let path = record.final_path.clone();
         let task_cancel = cancel.clone();
+        let wake = Arc::clone(&self.scheduler_wake);
         let handle = tokio::spawn(async move {
             let result = async {
                 let session = crate::torrent::shared_session(&session_dir)
@@ -1867,6 +2012,8 @@ impl Manager {
                     );
                 }
             }
+            // The torrent released its queue slot.
+            wake.notify_one();
         });
         self.running
             .lock()
@@ -1933,6 +2080,7 @@ impl Manager {
         let progress = Arc::clone(&self.progress);
         let id = task_id.clone();
         let task_cancel = cancel.clone();
+        let wake = Arc::clone(&self.scheduler_wake);
         let handle = tokio::spawn(async move {
             let mut last_downloaded = 0u64;
             let result = crate::media::run_download(&tool, &plan, task_cancel, |line| {
@@ -2016,6 +2164,8 @@ impl Manager {
                     );
                 }
             }
+            // The media task released its queue slot.
+            wake.notify_one();
         });
         self.running
             .lock()

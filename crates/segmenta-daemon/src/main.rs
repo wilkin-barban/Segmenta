@@ -12,6 +12,7 @@ use clap::Parser;
 use segmenta_daemon::events::EventBus;
 use segmenta_daemon::ipc::{systemd_listen_fd, IpcServer};
 use segmenta_daemon::manager::Manager;
+use segmenta_daemon::scheduler::{QueueScheduler, SystemActions, TICK_INTERVAL};
 use segmenta_daemon::secrets;
 use segmenta_daemon::store::Store;
 use tokio::sync::watch;
@@ -115,6 +116,11 @@ async fn serve(args: Args) -> Result<(), String> {
         shutdown_tx,
     ));
     manager.recover();
+    // The queue scheduler runs next to the rest of the daemon and stops with it: the same
+    // shutdown channel that closes the IPC server ends its loop (OpenSpec 12 §2).
+    let scheduler =
+        QueueScheduler::new(Arc::clone(&manager), Arc::new(SystemActions), TICK_INTERVAL);
+    let scheduler = tokio::spawn(scheduler.run(shutdown_rx.clone()));
     tracing::info!(
         version = segmenta_daemon::DAEMON_VERSION,
         socket = %socket_path.display(),
@@ -136,6 +142,9 @@ async fn serve(args: Args) -> Result<(), String> {
         _ = terminate_signal() => {}
     }
     tracing::info!("segmenta-daemon shutting down");
+    // Stop the scheduler before the lock is released, so no task starts mid-shutdown.
+    manager.request_shutdown();
+    let _ = scheduler.await;
     // Keep the lock file alive until the very end.
     drop(lock);
     Ok(())
