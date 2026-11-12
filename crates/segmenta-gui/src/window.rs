@@ -37,6 +37,15 @@ fn locale() -> segmenta_i18n::Locale {
 /// counters always describe the same snapshot.
 const LIST_LIMIT: u64 = 500;
 
+/// Page size of the counting sweep that learns the real table size when the
+/// snapshot comes back full. It is the largest `limit` the daemon accepts
+/// (OpenSpec 07 §3.3).
+const COUNT_PAGE: u64 = 1000;
+
+/// Bound of the counting sweep: 20 pages cover 20 000 tasks. Past it the notice
+/// says the total is a lower bound instead of pretending to know it.
+const COUNT_PAGES_MAX: usize = 20;
+
 /// What the content area is showing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ViewState {
@@ -75,6 +84,17 @@ struct Inner {
     filter: Cell<Filter>,
     query: RefCell<String>,
     queue: RefCell<Option<String>>,
+    /// Queue names reported by `queue.list`; never derived from the downloads.
+    queues: RefCell<Vec<String>>,
+    /// Real size of the download table while the snapshot is capped.
+    snapshot_total: Cell<Option<usize>>,
+    /// Whether `snapshot_total` is exact or only a lower bound.
+    snapshot_total_exact: Cell<bool>,
+    /// Short notice painted above the list when the snapshot is capped.
+    truncation_label: gtk::Label,
+    /// Guards the queue sidebar rebuild so a programmatic selection cannot feed
+    /// back into `row_selected`.
+    rebuilding_queues: Cell<bool>,
     view_state: RefCell<ViewState>,
     loading_page: gtk::Box,
     loading_spinner: gtk::Spinner,
@@ -103,6 +123,13 @@ enum Pending {
     Resume(String),
     Cancel(String),
     Delete(String),
+    /// `queue.list`: the only source of queue names.
+    Queues,
+    /// Next page of the counting sweep: rows already known, pages served.
+    Total {
+        offset: usize,
+        pages: usize,
+    },
 }
 
 /// Widgets of the detail page of one download.
@@ -153,6 +180,16 @@ impl SegmentaWindow {
         loading_label.add_css_class("dim-label");
         loading.append(&loading_label);
 
+        let truncation_label = gtk::Label::new(None);
+        truncation_label.set_xalign(0.0);
+        truncation_label.set_wrap(true);
+        truncation_label.set_margin_top(6);
+        truncation_label.set_margin_bottom(6);
+        truncation_label.set_margin_start(12);
+        truncation_label.set_margin_end(12);
+        truncation_label.add_css_class("dim-label");
+        truncation_label.set_visible(false);
+
         let inner = Rc::new(Inner {
             app: app.clone(),
             client,
@@ -174,6 +211,11 @@ impl SegmentaWindow {
             filter: Cell::new(Filter::All),
             query: RefCell::new(String::new()),
             queue: RefCell::new(None),
+            queues: RefCell::new(Vec::new()),
+            snapshot_total: Cell::new(None),
+            snapshot_total_exact: Cell::new(false),
+            truncation_label,
+            rebuilding_queues: Cell::new(false),
             view_state: RefCell::new(ViewState::Loading),
             loading_page: loading.clone(),
             loading_spinner: spinner.clone(),
@@ -214,6 +256,21 @@ impl SegmentaWindow {
     /// Sidebar counters computed from the loaded snapshot.
     pub fn counts(&self) -> crate::model::Counts {
         self.0.store.borrow().counts()
+    }
+
+    /// Queue names painted in the sidebar, in the daemon's `queue.list` order.
+    pub fn queue_names(&self) -> Vec<String> {
+        self.0.queue_names()
+    }
+
+    /// Whether the queue sidebar is painted at all.
+    pub fn queues_visible(&self) -> bool {
+        self.0.queue_group.is_visible()
+    }
+
+    /// Notice painted when the download snapshot is capped, with the real total.
+    pub fn truncation_notice(&self) -> Option<String> {
+        self.0.truncation_notice()
     }
 
     /// State of the content area.
@@ -650,12 +707,10 @@ impl Inner {
             let Some(inner) = queue_handle.upgrade() else {
                 return;
             };
-            let name = row
-                .and_then(|row| row.child())
-                .and_then(|child| child.downcast::<gtk::Box>().ok())
-                .and_then(|line| line.first_child())
-                .and_then(|label| label.downcast::<gtk::Label>().ok())
-                .map(|label| label.label().to_string());
+            if inner.rebuilding_queues.get() {
+                return;
+            }
+            let name = row.and_then(queue_row_name);
             *inner.queue.borrow_mut() = name;
             inner.refill();
         });
@@ -762,7 +817,13 @@ impl Inner {
         scrolled.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
         scrolled.set_vexpand(true);
         scrolled.set_child(Some(&self.list_view));
-        scrolled.upcast()
+
+        // The truncation notice sits above the list so a capped snapshot never
+        // looks like the whole table.
+        let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        page.append(&self.truncation_label);
+        page.append(&scrolled);
+        page.upcast()
     }
 
     fn build_empty_page(self: &Rc<Self>) -> gtk::Widget {
@@ -929,6 +990,64 @@ impl Inner {
             json!({ "filter": "all", "limit": LIST_LIMIT, "offset": 0 }),
             Pending::Reload,
         );
+        // `queue.list` is the only source of queue names: deriving them from the
+        // downloads hides empty queues and invents queues the daemon dropped.
+        self.request("queue.list", json!({}), Pending::Queues);
+    }
+
+    /// Asks for one more page of `download.list` to learn the real size of the
+    /// table when the snapshot page came back full.
+    fn count_snapshot(&self, offset: usize, pages: usize) {
+        self.request(
+            "download.list",
+            json!({ "filter": "all", "limit": COUNT_PAGE, "offset": offset }),
+            Pending::Total { offset, pages },
+        );
+    }
+
+    fn set_snapshot_total(&self, total: Option<usize>, exact: bool) {
+        self.snapshot_total.set(total);
+        self.snapshot_total_exact.set(exact);
+    }
+
+    /// What the view says about a capped snapshot, with the real table size.
+    fn truncation_notice(&self) -> Option<String> {
+        let shown = self.store.borrow().len();
+        if (shown as u64) < LIST_LIMIT {
+            return None;
+        }
+        // The i18n catalog has no entry for this yet and is out of this unit's
+        // surface, so the text is literal and marked as pending localization.
+        match self.snapshot_total.get() {
+            Some(total) if total <= shown => None,
+            Some(total) if self.snapshot_total_exact.get() => Some(format!(
+                "Mostrando las primeras {shown} de {total} descargas."
+            )),
+            Some(total) => Some(format!(
+                "Mostrando las primeras {shown} de más de {total} descargas."
+            )),
+            None => Some(format!(
+                "Mostrando las primeras {shown} descargas; hay más."
+            )),
+        }
+    }
+
+    fn refresh_truncation(&self) {
+        let notice = self.truncation_notice();
+        self.truncation_label
+            .set_label(notice.as_deref().unwrap_or_default());
+        self.truncation_label.set_visible(notice.is_some());
+    }
+
+    /// The queue filter, dropped when the daemon no longer reports that queue.
+    fn queue_filter(&self) -> Option<String> {
+        let name = self.queue.borrow().clone()?;
+        if self.queues.borrow().contains(&name) {
+            Some(name)
+        } else {
+            *self.queue.borrow_mut() = None;
+            None
+        }
     }
 
     fn refresh_task(&self, task_id: &str) {
@@ -994,6 +1113,8 @@ impl Inner {
                 Pending::Hello => "hello".to_string(),
                 Pending::Settings => "settings".to_string(),
                 Pending::Reload => "reload".to_string(),
+                Pending::Queues => "queues".to_string(),
+                Pending::Total { offset, .. } => format!("total from {offset}"),
                 Pending::Status(task) => format!("status {task}"),
                 other => format!("{other:?}"),
             };
@@ -1034,7 +1155,17 @@ impl Inner {
                     Ok(items) => {
                         *self.last_error.borrow_mut() = None;
                         self.connected.set(true);
+                        let returned = items.len();
+                        // A full page may hide more rows: the snapshot is capped and
+                        // painting its size as the total would be a lie.
+                        let capped = returned as u64 >= LIST_LIMIT;
                         self.store.borrow_mut().reload(items);
+                        if capped {
+                            self.set_snapshot_total(None, false);
+                            self.count_snapshot(LIST_LIMIT as usize, 1);
+                        } else {
+                            self.set_snapshot_total(Some(returned), true);
+                        }
                         self.refill();
                         self.update_detail();
                     }
@@ -1043,6 +1174,62 @@ impl Inner {
                     ),
                 },
                 Err(err) => self.set_error(err.ui_message()),
+            },
+            Pending::Queues => match result {
+                Ok(value) => {
+                    let Some(rows) = value.as_array() else {
+                        return;
+                    };
+                    let names: Vec<String> = rows
+                        .iter()
+                        .filter_map(|row| row.get("name").and_then(Value::as_str))
+                        .map(str::to_string)
+                        .collect();
+                    *self.queues.borrow_mut() = names;
+                    // Repaint now: both the sidebar and the queue filter depend on it.
+                    self.refill();
+                }
+                Err(err) => {
+                    // A daemon without `queue.list` must not turn the view into an
+                    // error page: the snapshot is still usable, only the queue
+                    // sidebar stays as it was.
+                    if crate::client::trace_enabled() {
+                        eprintln!("segmenta-gui: queue.list failed: {}", err.ui_message());
+                    }
+                }
+            },
+            Pending::Total { offset, pages } => match result {
+                Ok(value) => match serde_json::from_value::<Vec<DownloadItem>>(value) {
+                    Ok(items) => {
+                        let seen = offset + items.len();
+                        let full = items.len() as u64 == COUNT_PAGE;
+                        if !full {
+                            self.set_snapshot_total(Some(seen), true);
+                        } else if pages >= COUNT_PAGES_MAX {
+                            // Reporting the bound as exact would be another silent lie.
+                            self.set_snapshot_total(Some(seen), false);
+                        } else {
+                            self.count_snapshot(seen, pages + 1);
+                            return;
+                        }
+                        self.refresh_truncation();
+                    }
+                    Err(err) => {
+                        if crate::client::trace_enabled() {
+                            eprintln!("segmenta-gui: download.list count failed: {err}");
+                        }
+                    }
+                },
+                Err(err) => {
+                    // Without a total the notice says the snapshot has more rows
+                    // instead of inventing a number.
+                    if crate::client::trace_enabled() {
+                        eprintln!(
+                            "segmenta-gui: download.list count failed: {}",
+                            err.ui_message()
+                        );
+                    }
+                }
             },
             Pending::Status(task_id) => match result {
                 Ok(value) => {
@@ -1313,7 +1500,7 @@ impl Inner {
     fn refill(&self) {
         let filter = self.filter.get();
         let query = self.query.borrow().clone();
-        let queue = self.queue.borrow().clone();
+        let queue = self.queue_filter();
         let visible: Vec<DownloadItem> = self
             .store
             .borrow()
@@ -1338,6 +1525,7 @@ impl Inner {
             label.set_label(&counts.of(*filter).to_string());
         }
         self.refresh_queues();
+        self.refresh_truncation();
 
         let state = if !visible.is_empty() {
             ViewState::Ready
@@ -1378,7 +1566,7 @@ impl Inner {
         };
         let filter = self.filter.get();
         let query = self.query.borrow().clone();
-        let queue = self.queue.borrow().clone();
+        let queue = self.queue_filter();
         let visible = filter.matches(item.status)
             && item.matches(&query)
             && queue
@@ -1409,25 +1597,15 @@ impl Inner {
     }
 
     fn refresh_queues(&self) {
-        let mut names: Vec<String> = self
-            .store
-            .borrow()
-            .items()
-            .iter()
-            .map(|item| item.queue_name.clone())
-            .filter(|name| !name.is_empty())
-            .collect();
-        names.sort();
-        names.dedup();
+        // Queue names come from `queue.list`, never from the downloads: an empty
+        // queue must stay visible and a dropped one must disappear.
+        let names = self.queues.borrow().clone();
         self.queue_group.set_visible(!names.is_empty());
 
+        let current = self.queue.borrow().clone();
+        self.rebuilding_queues.set(true);
         while let Some(child) = self.queue_list.first_child() {
             self.queue_list.remove(&child);
-        }
-        let current = self.queue.borrow().clone();
-        if names.is_empty() {
-            *self.queue.borrow_mut() = None;
-            return;
         }
         for name in &names {
             let row = gtk::ListBoxRow::new();
@@ -1456,6 +1634,23 @@ impl Inner {
                 }
             }
         }
+        self.rebuilding_queues.set(false);
+    }
+
+    /// Names painted by the queue sidebar, read from the rows themselves so a test
+    /// can assert what the user sees instead of what the state claims.
+    fn queue_names(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        let mut child = self.queue_list.first_child();
+        while let Some(widget) = child {
+            child = widget.next_sibling();
+            if let Ok(row) = widget.downcast::<gtk::ListBoxRow>() {
+                if let Some(name) = queue_row_name(&row) {
+                    names.push(name);
+                }
+            }
+        }
+        names
     }
 
     fn apply_settings_to_ui(&self) {
@@ -1788,6 +1983,15 @@ impl Inner {
             }),
         );
     }
+}
+
+/// Queue name painted by one sidebar row: the first label of its box.
+fn queue_row_name(row: &gtk::ListBoxRow) -> Option<String> {
+    row.child()
+        .and_then(|child| child.downcast::<gtk::Box>().ok())
+        .and_then(|line| line.first_child())
+        .and_then(|label| label.downcast::<gtk::Label>().ok())
+        .map(|label| label.label().to_string())
 }
 
 fn format_speed_label(speed: u64) -> String {

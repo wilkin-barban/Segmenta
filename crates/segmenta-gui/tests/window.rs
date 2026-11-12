@@ -173,6 +173,137 @@ fn window_with(app: &adw::Application, fake: &DemoClient) -> SegmentaWindow {
     SegmentaWindow::new(app, client)
 }
 
+/// A row with no segments, cheap enough to build a snapshot of hundreds.
+fn bulk_row(index: usize) -> Value {
+    let mut row = download_row(&format!("task-{index}"), "completed", 1);
+    row["segments"] = json!([]);
+    row
+}
+
+#[test]
+fn queue_names_come_from_queue_list_not_from_the_downloads() {
+    run_gui("queue_names_come_from_queue_list", || {
+        let app = app("io.github.wilkin.Segmenta.TestQueueNames");
+        // The daemon knows `main` and `noche`; the snapshot only carries `main` and
+        // a stale `legacy` queue that no longer exists in `queue.list`.
+        let mut legacy = download_row("task-2", "completed", 1);
+        legacy["queue_name"] = json!("legacy");
+        let fake =
+            DemoClient::with_downloads(vec![download_row("task-1", "downloading", 1), legacy]);
+        fake.set_queues(vec!["main", "noche"]);
+        let window = window_with(&app, &fake);
+
+        assert!(
+            pump_until(
+                || window.queue_names() == vec!["main".to_string(), "noche".to_string()],
+                Duration::from_secs(5)
+            ),
+            "the queue sidebar painted {:?}",
+            window.queue_names()
+        );
+        assert_eq!(window.rows().len(), 2, "the snapshot rows were lost");
+        assert!(window.queues_visible());
+    });
+}
+
+#[test]
+fn empty_queue_list_paints_no_phantom_queue() {
+    run_gui("empty_queue_list_paints_no_phantom_queue", || {
+        let app = app("io.github.wilkin.Segmenta.TestNoQueues");
+        // The download still names `main`: the sidebar must not derive a queue from it.
+        let fake = DemoClient::with_downloads(vec![download_row("task-1", "downloading", 1)]);
+        fake.set_queues(vec![]);
+        let window = window_with(&app, &fake);
+
+        assert!(
+            pump_until(|| window.rows().len() == 1, Duration::from_secs(5)),
+            "the listed download never became a row (state {:?})",
+            window.view_state()
+        );
+        // Give the queue answer time to arrive before asserting the emptiness.
+        let _ = pump_until(|| !window.queues_visible(), Duration::from_millis(500));
+        assert!(
+            window.queue_names().is_empty(),
+            "phantom queues painted: {:?}",
+            window.queue_names()
+        );
+        assert!(
+            !window.queues_visible(),
+            "the empty queue sidebar is still painted"
+        );
+    });
+}
+
+#[test]
+fn capped_snapshot_paints_the_truncation_notice_with_the_real_total() {
+    run_gui("capped_snapshot_paints_the_truncation_notice", || {
+        let app = app("io.github.wilkin.Segmenta.TestTruncated");
+        // One row past the snapshot cap: the list is capped, the total is not 500.
+        let rows: Vec<Value> = (0..501).map(bulk_row).collect();
+        let fake = DemoClient::with_downloads(rows);
+        let window = window_with(&app, &fake);
+
+        assert!(
+            pump_until(
+                || window
+                    .truncation_notice()
+                    .is_some_and(|notice| notice.contains("501")),
+                Duration::from_secs(10)
+            ),
+            "the capped snapshot painted no notice (state {:?}, rows {})",
+            window.view_state(),
+            window.rows().len()
+        );
+        let notice = window.truncation_notice().expect("notice");
+        assert!(notice.contains("500"), "the notice hides the cap: {notice}");
+        assert!(
+            notice.contains("501"),
+            "the notice hides the total: {notice}"
+        );
+        assert_eq!(window.rows().len(), 500, "the snapshot cap changed");
+    });
+}
+
+#[test]
+fn snapshot_of_exactly_the_page_size_paints_no_notice() {
+    run_gui("snapshot_of_exactly_the_page_size_paints_no_notice", || {
+        let app = app("io.github.wilkin.Segmenta.TestExactPage");
+        // A full page that happens to be the whole table: counting must confirm the
+        // total instead of warning about a truncation that never happened.
+        let rows: Vec<Value> = (0..500).map(bulk_row).collect();
+        let fake = DemoClient::with_downloads(rows);
+        let window = window_with(&app, &fake);
+
+        assert!(
+            pump_until(|| window.rows().len() == 500, Duration::from_secs(10)),
+            "the full page never reached the list (state {:?})",
+            window.view_state()
+        );
+        // Pump while the counting answer lands: a wrong total would paint the notice
+        // and keep it painted, so waiting cannot hide the bug.
+        let _ = pump_until(|| false, Duration::from_millis(500));
+        assert_eq!(window.truncation_notice(), None);
+        assert_eq!(window.rows().len(), 500);
+    });
+}
+
+#[test]
+fn uncapped_snapshot_paints_no_truncation_notice() {
+    run_gui("uncapped_snapshot_paints_no_truncation_notice", || {
+        let app = app("io.github.wilkin.Segmenta.TestNotTruncated");
+        let rows: Vec<Value> = (0..3).map(bulk_row).collect();
+        let fake = DemoClient::with_downloads(rows);
+        let window = window_with(&app, &fake);
+
+        assert!(
+            pump_until(|| window.rows().len() == 3, Duration::from_secs(5)),
+            "the uncapped snapshot never listed its rows (state {:?})",
+            window.view_state()
+        );
+        assert_eq!(window.truncation_notice(), None);
+    });
+}
+
 #[test]
 fn listed_download_becomes_a_row() {
     run_gui("listed_download_becomes_a_row", || {
