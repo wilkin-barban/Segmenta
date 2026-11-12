@@ -242,6 +242,15 @@
       const ns = resolveNamespace(null, 'downloads');
       return invoke(resolveRuntime(), ns, 'erase', [query]);
     },
+    /**
+     * Lists the downloads the browser matches. The cold-start reconciliation asks
+     * for `{state:'in_progress'}` because a download the browser already had never
+     * reaches `onCreated` in a freshly started service worker.
+     */
+    search(query) {
+      const ns = resolveNamespace(null, 'downloads');
+      return invoke(resolveRuntime(), ns, 'search', [query || {}]);
+    },
   };
 
   // The confirmation window is our own extension page: `windows` needs no extra
@@ -280,6 +289,7 @@
   // Runtime lifecycle events the background needs after a suspension or a restart.
   const runtime = {
     onStartup: createEventWrapper('runtime', 'onStartup'),
+    onInstalled: createEventWrapper('runtime', 'onInstalled'),
   };
 
   const contextMenus = {

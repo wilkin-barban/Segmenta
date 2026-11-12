@@ -7,7 +7,9 @@
 //   * correlate the native reply by id with a 10 s timeout;
 //   * never forward arbitrary methods, urls or commands to the host;
 //   * never leave a browser download paused without a watchdog that survives the
-//     suspension of this worker.
+//     suspension of this worker;
+//   * reconcile the downloads that were already in progress before this worker
+//     existed, through the same capture path a live download takes.
 if (typeof importScripts === 'function') {
   importScripts('./shared/browser-api.js', './shared/protocol.js', './shared/validate.js');
 }
@@ -55,6 +57,9 @@ if (typeof importScripts === 'function') {
   const pendingConfirms = new Map();
   // Download ids whose confirmation was already resolved (accept/reject/timeout).
   const decidedDownloads = new Set();
+  // Download ids whose browser copy was already handed over to the daemon: a
+  // reconciliation must never capture the same download a second time.
+  const capturedDownloadIds = new Set();
   // Overridable for the Node tests only; production always uses the constants.
   let confirmTimeoutMs = CAPTURE_CONFIRM_TIMEOUT_MS;
   const captureTiming = {
@@ -77,6 +82,14 @@ if (typeof importScripts === 'function') {
       decidedDownloads.delete(first);
     }
     decidedDownloads.add(id);
+  }
+
+  function trackCapturedId(id) {
+    if (capturedDownloadIds.size >= 100) {
+      const first = capturedDownloadIds.values().next().value;
+      capturedDownloadIds.delete(first);
+    }
+    capturedDownloadIds.add(id);
   }
 
   function extensionId() {
@@ -749,11 +762,161 @@ if (typeof importScripts === 'function') {
     return summary;
   }
 
+  // ---- Cold-start reconciliation (R1) ----------------------------------------
+  // A download the browser started while no worker was alive never fires
+  // `downloads.onCreated`, so its capture would silently be lost. On worker start
+  // (`runtime.onStartup`, `runtime.onInstalled`) and on a throttled watchdog tick
+  // the worker asks the browser what is still in progress and routes every item
+  // through the same gate a live download takes: same settings, same denylist, same
+  // confirmation window, same ownership and same watchdog rule. The scan is bounded
+  // and fails closed: an API error leaves every download alone, it never throws.
+  const MAX_RECONCILE_DOWNLOADS = 20;
+  // One minute is the alarm period; scanning on every tick would turn the watchdog
+  // into a permanent poll. A fresh worker resets this, so it always reconciles once.
+  const RECONCILE_THROTTLE_MS = 5 * 60 * 1000;
+  let lastReconcileAt = 0;
+  let reconcileInFlight = null;
+
+  function emptyReconcileSummary() {
+    return { examined: 0, considered: 0, skipped: 0, failed: false };
+  }
+
+  /** The in-progress list, or a rejection the caller turns into "do nothing". */
+  async function searchInProgressDownloads() {
+    const downloads = API && API.downloads ? API.downloads : null;
+    if (!downloads || typeof downloads.search !== 'function') {
+      throw new Error('segmenta: downloads.search unavailable');
+    }
+    const found = await downloads.search({ state: 'in_progress' });
+    if (!Array.isArray(found)) {
+      throw new Error('segmenta: downloads.search returned no list');
+    }
+    return found;
+  }
+
+  /** Ids already paused, already resolved or already captured are never revisited. */
+  function reconcileSkipReason(id, pendingIds) {
+    if (handledDownloadIds.has(id)) {
+      return 'handled';
+    }
+    if (decidedDownloads.has(id)) {
+      return 'decided';
+    }
+    if (capturedDownloadIds.has(id)) {
+      return 'captured';
+    }
+    if (pendingIds.has(id)) {
+      return 'pending';
+    }
+    return '';
+  }
+
+  async function readPendingDownloadIds() {
+    const records = await withPendingStore(readPendingRecords);
+    const ids = new Set();
+    for (const raw of records) {
+      const parsed = parsePendingRecord(raw);
+      if (parsed.downloadId !== null && parsed.downloadId !== undefined) {
+        ids.add(parsed.downloadId);
+      }
+    }
+    return ids;
+  }
+
+  async function runReconcile() {
+    const summary = emptyReconcileSummary();
+    let found;
+    try {
+      found = await searchInProgressDownloads();
+    } catch (err) {
+      summary.failed = true;
+      return summary;
+    }
+    let pendingIds;
+    try {
+      pendingIds = await readPendingDownloadIds();
+    } catch (err) {
+      // Unreadable pending state: never pause anything blind.
+      summary.failed = true;
+      return summary;
+    }
+    for (const candidate of found) {
+      if (summary.examined >= MAX_RECONCILE_DOWNLOADS) {
+        break;
+      }
+      const id = candidate && typeof candidate === 'object' ? Number(candidate.id) : NaN;
+      if (!Number.isInteger(id) || id < 0) {
+        continue;
+      }
+      summary.examined += 1;
+      if (reconcileSkipReason(id, pendingIds)) {
+        summary.skipped += 1;
+        continue;
+      }
+      let considered;
+      try {
+        considered = await considerDownload(candidate);
+      } catch (err) {
+        // The first browser API failure ends this scan; the remaining downloads keep
+        // running untouched in the browser and the next tick retries them.
+        summary.failed = true;
+        break;
+      }
+      if (considered) {
+        summary.considered += 1;
+        pendingIds.add(id);
+      } else {
+        summary.skipped += 1;
+      }
+    }
+    return summary;
+  }
+
+  /**
+   * Bounded, throttled cold-start reconciliation. It always resolves with a summary:
+   * the lifecycle listeners it runs from are no place for a browser API exception.
+   */
+  function reconcileInProgressDownloads(options) {
+    const force = !!(options && options.force);
+    if (reconcileInFlight) {
+      return reconcileInFlight;
+    }
+    if (!force && Date.now() - lastReconcileAt < RECONCILE_THROTTLE_MS) {
+      return Promise.resolve(emptyReconcileSummary());
+    }
+    lastReconcileAt = Date.now();
+    const run = runReconcile().then(
+      (summary) => {
+        reconcileInFlight = null;
+        return summary;
+      },
+      () => {
+        reconcileInFlight = null;
+        const failed = emptyReconcileSummary();
+        failed.failed = true;
+        return failed;
+      },
+    );
+    reconcileInFlight = run;
+    return run;
+  }
+
+  /** Reconcile first, then heal the pending records the reconciliation skipped. */
+  function reconcileThenSweep(options) {
+    const reconcile = reconcileInProgressDownloads(options);
+    return reconcile.then(
+      () => sweepPendingCaptures(),
+      () => sweepPendingCaptures(),
+    );
+  }
+
   function onCaptureWatchdogAlarm(alarm) {
     if (!alarm || alarm.name !== CAPTURE_WATCHDOG_ALARM) {
       return false;
     }
-    return sweepPendingCaptures();
+    // The tick is also the only periodic signal a suspended worker gets, so it both
+    // heals the pending records and (throttled) reconciles what it missed.
+    return reconcileThenSweep();
   }
 
   if (API && API.alarms && API.alarms.onAlarm && typeof API.alarms.onAlarm.addListener === 'function') {
@@ -761,9 +924,16 @@ if (typeof importScripts === 'function') {
   }
 
   // A fresh browser run starts with no windows, so any leftover record is healed
-  // by the same sweep instead of waiting for the first alarm.
+  // by the same sweep instead of waiting for the first alarm; the same boot also
+  // reconciles the downloads that already existed before this worker.
   if (API && API.runtime && API.runtime.onStartup && typeof API.runtime.onStartup.addListener === 'function') {
-    API.runtime.onStartup.addListener(() => sweepPendingCaptures());
+    API.runtime.onStartup.addListener(() => reconcileThenSweep({ force: true }));
+  }
+
+  // An install or an update is a worker start too: a download in progress during it
+  // must still be captured.
+  if (API && API.runtime && API.runtime.onInstalled && typeof API.runtime.onInstalled.addListener === 'function') {
+    API.runtime.onInstalled.addListener(() => reconcileInProgressDownloads({ force: true }));
   }
 
   function addCapturedDownload(entry) {
@@ -874,6 +1044,7 @@ if (typeof importScripts === 'function') {
       return keepBrowserCopy(entry, taskId);
     }
     await discardDownload(entry.downloadId);
+    trackCapturedId(entry.downloadId);
     await announceAddedTask(reply.data);
     return reply;
   }
@@ -1039,12 +1210,12 @@ if (typeof importScripts === 'function') {
     return Object.assign({}, captureTiming);
   }
 
-  async function onDownloadCreated(downloadItem) {
+  async function considerDownload(downloadItem) {
     if (!downloadItem || !downloadItem.id || !downloadItem.url) {
-      return;
+      return false;
     }
     if (handledDownloadIds.has(downloadItem.id)) {
-      return;
+      return false;
     }
     trackHandledId(downloadItem.id);
 
@@ -1052,46 +1223,46 @@ if (typeof importScripts === 'function') {
     const parsed = PROTOCOL.parseHttpUrl(url);
     const isMagnet = url.startsWith('magnet:');
     if (!parsed && !isMagnet) {
-      return;
+      return false;
     }
 
     if (parsed) {
       const scheme = parsed.protocol;
       if (scheme === 'blob:' || scheme === 'data:' || scheme === 'file:' || scheme === 'chrome-extension:' || scheme === 'moz-extension:') {
-        return;
+        return false;
       }
     }
 
     if (downloadItem.byExtensionId && downloadItem.byExtensionId === extensionId()) {
-      return;
+      return false;
     }
 
     const settings = await getCachedSettings();
     if (!settings) {
-      return;
+      return false;
     }
 
     if (settings.capture_enabled === false) {
-      return;
+      return false;
     }
 
     if (parsed && isHostDenylisted(url, settings.domain_denylist)) {
-      return;
+      return false;
     }
 
     const isTorrentFile = PROTOCOL.parseTorrentUrl(url);
     if (isTorrentFile) {
       if (settings.capture_torrents === false) {
-        return;
+        return false;
       }
     } else if (isMagnet) {
       if (settings.capture_magnet === false) {
-        return;
+        return false;
       }
     } else {
       const filename = downloadItem.filename || downloadItem.url;
       if (!matchExtension(filename, settings.capture_extensions)) {
-        return;
+        return false;
       }
     }
 
@@ -1111,7 +1282,7 @@ if (typeof importScripts === 'function') {
     };
 
     if (!(await armPendingCapture(entry))) {
-      return;
+      return false;
     }
 
     // Pause second: an erased download cannot be resumed, so the browser copy must
@@ -1119,7 +1290,7 @@ if (typeof importScripts === 'function') {
     const paused = await pauseDownload(downloadItem.id);
     if (!paused) {
       await resolvePendingCapture(downloadItem.id);
-      return;
+      return false;
     }
 
     if (!confirm) {
@@ -1130,13 +1301,20 @@ if (typeof importScripts === 'function') {
       } finally {
         await resolvePendingCapture(downloadItem.id, { resume: !settled });
       }
-      return;
+      return true;
     }
 
     const opened = await openConfirmWindow(entry);
     if (!opened) {
       await resolvePendingCapture(downloadItem.id);
+      return false;
     }
+    return true;
+  }
+
+  /** Live path: `downloads.onCreated` is only the trigger, the gate is shared. */
+  function onDownloadCreated(downloadItem) {
+    return considerDownload(downloadItem);
   }
 
   if (API && API.downloads && API.downloads.onCreated && typeof API.downloads.onCreated.addListener === 'function') {
@@ -1158,11 +1336,9 @@ if (typeof importScripts === 'function') {
     }
   }
 
-  if (API && API.runtime && API.runtime.onInstalled && typeof API.runtime.onInstalled.addListener === 'function') {
-    API.runtime.onInstalled.addListener(setupContextMenus);
-  } else {
-    setupContextMenus();
-  }
+  // Context menus outlive a suspended worker, so creating the shortcut on every boot
+  // is what keeps it present in both browsers.
+  setupContextMenus();
 
   if (API && API.contextMenus && API.contextMenus.onClicked && typeof API.contextMenus.onClicked.addListener === 'function') {
     API.contextMenus.onClicked.addListener((info) => {
@@ -1264,9 +1440,15 @@ if (typeof importScripts === 'function') {
     CAPTURE_WATCHDOG_ALARM: CAPTURE_WATCHDOG_ALARM,
     CAPTURE_WATCHDOG_PERIOD_MINUTES: CAPTURE_WATCHDOG_PERIOD_MINUTES,
     CAPTURE_KEPT_NOTIFICATION_ID: CAPTURE_KEPT_NOTIFICATION_ID,
+    MAX_RECONCILE_DOWNLOADS: MAX_RECONCILE_DOWNLOADS,
+    RECONCILE_THROTTLE_MS: RECONCILE_THROTTLE_MS,
     handle: handle,
     hostFailure: hostFailure,
     onDownloadCreated: onDownloadCreated,
+    considerDownload: considerDownload,
+    reconcileInProgressDownloads: reconcileInProgressDownloads,
+    reconcileThenSweep: reconcileThenSweep,
+    runReconcile: runReconcile,
     getCachedSettings: getCachedSettings,
     matchExtension: matchExtension,
     isHostDenylisted: isHostDenylisted,
