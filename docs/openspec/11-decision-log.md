@@ -1,8 +1,11 @@
 # OpenSpec 11: Decisiones de v1 y Definición de Listo
 
 > **Especificación:** OPENSPEC-SEGMENTA-011
-> **Versión:** 1.0.0
+> **Versión:** 2.0.0 (0.2.0 **en preparación**)
 > **Área:** Alcance cerrado, precedencia documental, decisiones de ingeniería y criterios para empezar cada fase
+>
+> §8 registra las decisiones de 0.2.0. Marcadas «(0.2, en preparación)», son el contrato acordado y no
+> comportamiento entregado hasta que Q1 cierre con el QA real y exista el tag `v0.2.0`.
 
 ---
 
@@ -15,8 +18,10 @@ Cuando dos documentos se contradigan, se aplica este orden:
 3. `08-persistence-recovery.md` para el DDL, `next_offset`, hot-split seguro, secretos y recuperación.
 4. `09-extension-security.md` para manifiestos, IDs, inyección, Native Messaging y streaming.
 5. `10-packaging-testing.md` para workspace, `.deb`, CI y benchmarks.
-6. `01`–`05` son la visión y el roadmap; si resumen algo, mandan los contratos anteriores.
-7. `research/legacy-engine-analysis.md` es contexto histórico, no una especificación de implementación.
+6. `12-queue-scheduler-postprocess-auth.md` para scheduler, `max_active`, hook argv, ClamAV/cuarentena
+   y site logins (0.2, en preparación).
+7. `01`–`05` son la visión y el roadmap; si resumen algo, mandan los contratos anteriores.
+8. `research/legacy-engine-analysis.md` es contexto histórico, no una especificación de implementación.
 
 El DDL de `08` es el único esquema normativo. El bloque SQL de `01` fue retirado a propósito para que no
 existan dos versiones del mismo esquema.
@@ -145,4 +150,63 @@ Listo para implementar cuando existan:
 - Telemetría, actualizaciones automáticas y perfiles de usuario.
 - Migración de datos desde otros gestores.
 
-Cada punto requiere un OpenSpec nuevo antes de implementarse; no son decisiones implícitas.
+Cada punto requiere un OpenSpec nuevo antes de implementarse; no son decisiones implícitas. El estado
+vigente de esta deuda, agrupado por causa, está en §9.
+
+---
+
+## 8. Decisiones de 0.2 (0.2, en preparación)
+
+Cada fila es una decisión cerrada con su razón de una línea; el contrato operativo vive en
+`12-queue-scheduler-postprocess-auth.md` y en la sección citada.
+
+| Tema | Decisión | Razón (una línea) | Contrato |
+| --- | --- | --- | --- |
+| Scheduler | Loop nativo `tokio` dentro del daemon, tick de 30 s, `queue.schedule` como fuente de verdad | Un scheduler en el daemon no depende de la GUI abierta y un solo lugar aplica la política | 12 §2 |
+| Límite de cola | `max_active` real aplicado por el daemon antes de `start_task` | La GUI no puede ser la que garantice el límite sin carreras | 12 §3 |
+| Acción al completar | `none`, `suspend`, `power_off`, `exit`, sólo cuando la cola queda vacía | Evita suspender el equipo con descargas aún pendientes | 12 §2 |
+| Post-proceso | Hook argv (`Vec<String>`) con `%file%`, `%folder%`, `%name%`, timeout y salida acotada | Sin shell no hay inyección por nombre de archivo | 12 §4 |
+| Antivirus | ClamAV integrado y **opcional** (`antivirus_enabled=false` por defecto), `clamdscan` antes de `clamscan` | Embeberlo obligaría a arrastrar firmas y licencias que el `.deb` no puede mantener | 12 §5 |
+| Infección | Cuarentena y tarea `failed` con `ERR_ANTIVIRUS_FOUND` | Un archivo infectado nunca debe quedar en Descargas ni figurar como completado | 12 §5 |
+| Antivirus ausente | `ERR_ANTIVIRUS_UNAVAILABLE` en vez de `completed` | Declarar limpio lo que no se escaneó sería mentir al usuario | 12 §5 |
+| Credenciales | HTTP Basic + GNOME Keyring por dominio, `site_login.list`/`set`/`remove`, password nunca devuelta | Basic sobre TLS cubre el caso real; guardar el secreto en SQLite lo descarta | 12 §6 |
+| Digest | Fuera de alcance (limitación documentada, sin promesa) | Digest obliga a leer el challenge y añade superficie sin demanda comprobada | 12 §6 |
+| Categorías | Sin categorías automáticas; se conserva sólo la lectura/migración legacy del ajuste | Clasificar por extensión produce carpetas sorpresa y no aporta al flujo de descarga | 04, 07 |
+| Sniffer | Sólo YouTube; el resto entra por captura genérica opt-in por sitio | Mantener adaptadores por sitio implica perseguir cambios ajenos sin fin | 09 §8 |
+| Extensión | Instalación manual asistida por GUI; sin Chrome Web Store ni AMO | Las tiendas exigen firma, revisión y no existen en el plazo de 0.2 | 09 §7 |
+| Empaquetado | `.deb` 0.2.0 con los dos ZIP y 22 rutas validadas; ClamAV opcional fuera de `Depends` | El paquete debe instalar lo que la puerta verifica, ni más ni menos | 10 §2 |
+| Versión | 0.2.0 en preparación; tag `v0.2.0` sólo con Q1 verde | El tag es la afirmación de que el QA real pasó, no el comienzo del trabajo | 10 §6, ODD |
+
+Origen: plan aprobado `segmenta-0.2.md` y `odd/tasks/segmenta-0.2.md` (decisiones cerradas). Ninguna
+fila de §8 autoriza código nuevo por sí sola: si una tarea necesita un método, campo o evento que no
+está en `12`, primero se agrega al OpenSpec.
+
+---
+
+## 9. Deuda explícita restante al cierre de 0.2
+
+Límites de plataforma (documentados como límites, nunca como bugs abiertos ni promesas):
+
+- **Scheduler sin daemon**: una ventana horaria no se ejecuta si el daemon no está activo; la
+  activación por socket despierta el proceso, no adelanta el reloj.
+- **Chrome estable**: no permite instalar la extensión automáticamente sin tienda o política de
+  empresa; la GUI sólo prepara y abre. Chrome for Testing es el entorno de QA.
+- **Firefox snap y host nativo**: el sandbox no puede ejecutar `/usr/bin/segmenta-host`; no se intenta
+  burlar.
+- **Firefox sin firma**: la carga desde `about:debugging` es temporal y se pierde al reiniciar.
+- **Cold-start de captura**: si el navegador entrega el evento antes de que exista el worker, la
+  reconciliación con `downloads.search` reduce la carrera pero no la elimina.
+- **Basic sin Digest**: no cubre servidores que sólo ofrecen Digest; no hay fallback silencioso.
+- **ClamAV externo**: la calidad depende de firmas actualizadas que el `.deb` no gestiona.
+- **Suspender/apagar**: requieren permisos del sistema y no se prueban de forma destructiva en CI ni
+  en el QA de 0.2.
+
+Trabajo pendiente que no entra en 0.2 y exige OpenSpec nuevo antes de implementarse:
+
+- Flatpak/Snap/AppImage y Native Messaging en sandbox; tiendas y firma de extensiones.
+- DRM, HLS cifrado, live con ventanas móviles, subtítulos y multi-audio.
+- Digest y otros esquemas de autenticación; OAuth o gestores de contraseñas externos.
+- Adaptadores de sniffer fuera de YouTube.
+- Telemetría, actualizaciones automáticas, perfiles de usuario y sincronización entre dispositivos.
+- Migración de datos desde otros gestores de descarga.
+- Rotación de claves de firma y publicación automatizada de artefactos.
