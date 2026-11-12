@@ -415,7 +415,9 @@ impl DownloadStore {
     pub fn upsert(&mut self, item: DownloadItem) {
         match self.get_mut(&item.task_id) {
             Some(existing) => *existing = item,
-            None => self.items.push(item),
+            // Newest first: a task added from the extension, the CLI or the GUI must
+            // appear where the daemon lists it (created_at DESC), not at the tail.
+            None => self.items.insert(0, item),
         }
     }
 
