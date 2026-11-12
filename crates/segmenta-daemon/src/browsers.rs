@@ -168,7 +168,7 @@ pub fn supported(browsers: &[Browser]) -> Vec<&Browser> {
 /// Chromium extension id shipped by the `.deb` (also in `extension/CHROMIUM-ID.txt`).
 pub const CHROMIUM_EXTENSION_ID: &str = "kdeldnifdbpemnhfpmhonlnibbhnoaan";
 /// Firefox add-on id.
-pub const FIREFOX_EXTENSION_ID: &str = "segmenta@wilkin.dev";
+pub const FIREFOX_EXTENSION_ID: &str = "segmenta@wilkin.github.io";
 /// Native host executable installed by the package.
 pub const HOST_PATH: &str = "/usr/bin/segmenta-host";
 
@@ -285,5 +285,17 @@ mod tests {
         assert!(std::fs::read_to_string(firefox_manifest)
             .unwrap()
             .contains(FIREFOX_EXTENSION_ID));
+    }
+
+    /// The constant and the shipped manifest must never drift again (0.1.2 P0).
+    #[test]
+    fn firefox_extension_id_matches_the_shipped_manifest() {
+        let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../extension/firefox/manifest.json");
+        let body = std::fs::read_to_string(&manifest).expect("firefox manifest");
+        assert!(
+            body.contains(FIREFOX_EXTENSION_ID),
+            "manifest does not declare {FIREFOX_EXTENSION_ID}"
+        );
     }
 }
