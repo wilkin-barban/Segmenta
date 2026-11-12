@@ -228,7 +228,7 @@ export default function suite({ test }) {
     assert.equal(html.includes('shared/browser-api.js'), true);
   });
 
-  test('the confirmation window is a plain page that only loads its own script', async () => {
+  test('the confirmation window only loads extension scripts', async () => {
     for (const target of ['chromium', 'firefox']) {
       const html = readExt(target, 'confirm.html');
       assert.equal(/\son[a-z]+\s*=/i.test(html), false, `${target}/confirm.html uses inline handlers`);
@@ -239,6 +239,13 @@ export default function suite({ test }) {
         html.includes('shared/browser-api.js'),
         true,
         `${target}/confirm.html must load the api adapter`,
+      );
+      // The whole-path -> folder rule is shared with the background, so the page
+      // loads the same protocol helper instead of reimplementing it.
+      assert.equal(
+        html.includes('shared/protocol.js'),
+        true,
+        `${target}/confirm.html must load the protocol helpers`,
       );
       // Both actions exist and start disabled: nothing can be decided before the
       // script validated the pending download.

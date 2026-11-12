@@ -470,6 +470,35 @@
     return envelope('torrent.add', params, request.id);
   }
 
+  /**
+   * Directory that contains `value`, or '' when there is none. A file path and a
+   * folder must never be shown as the same thing: the window reports where the task
+   * landed, not the file the user asked for. A path with a trailing separator is
+   * already a folder and is returned without it.
+   */
+  function parentDirectory(value) {
+    if (typeof value !== 'string') {
+      return '';
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return '';
+    }
+    const isDirectory = /[\\/]$/.test(trimmed);
+    const normalized = trimmed.replace(/[\\/]+$/, '');
+    if (!normalized) {
+      return isDirectory ? trimmed.charAt(0) : '';
+    }
+    if (isDirectory) {
+      return normalized;
+    }
+    const cut = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'));
+    if (cut === 0) {
+      return normalized.slice(0, 1);
+    }
+    return cut > 0 ? normalized.slice(0, cut) : '';
+  }
+
   function buildStatus(input) {
     const request = input && typeof input === 'object' ? input : {};
     const taskId = typeof request.taskId === 'string' ? request.taskId.trim() : '';
@@ -477,6 +506,19 @@
       throw new ProtocolError('ERR_INVALID_PARAMS', 'task id is not acceptable');
     }
     return envelope('media.status', { task_id: taskId }, request.id);
+  }
+
+  /**
+   * Drops a task the extension itself created and cannot own. No file is deleted
+   * (`delete_file` stays false), so an abandoned task never removes partial data.
+   */
+  function buildDownloadCancel(input) {
+    const request = input && typeof input === 'object' ? input : {};
+    const taskId = typeof request.taskId === 'string' ? request.taskId.trim() : '';
+    if (!TASK_ID_PATTERN.test(taskId)) {
+      throw new ProtocolError('ERR_INVALID_PARAMS', 'task id is not acceptable');
+    }
+    return envelope('download.cancel', { task_id: taskId, delete_file: false }, request.id);
   }
 
   /**
@@ -610,7 +652,9 @@
     buildDownloadAdd: buildDownloadAdd,
     buildTorrentAdd: buildTorrentAdd,
     buildStatus: buildStatus,
+    buildDownloadCancel: buildDownloadCancel,
     buildSystemOpen: buildSystemOpen,
+    parentDirectory: parentDirectory,
     envelope: envelope,
     validateHostReply: validateHostReply,
     sanitizeText: sanitizeText,

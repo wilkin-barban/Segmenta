@@ -194,6 +194,31 @@ export default function suite({ test }) {
     assert.throws(() => P.buildStatus({ taskId: 'has space' }), /task/i);
   });
 
+  test('buildDownloadCancel builds a cancel that never deletes a file', async () => {
+    const P = await loadShared('SegmentaProtocol', 'protocol.js');
+    assert.deepEqual(P.buildDownloadCancel({ taskId: 'task-123456', id: 13 }), {
+      jsonrpc: '2.0',
+      id: 13,
+      method: 'download.cancel',
+      params: { task_id: 'task-123456', delete_file: false },
+    });
+    assert.throws(() => P.buildDownloadCancel({ taskId: '' }), /task/i);
+    assert.throws(() => P.buildDownloadCancel({ taskId: 'a;rm -rf /' }), /task/i);
+    assert.throws(() => P.buildDownloadCancel({}), /task/i);
+  });
+
+  test('parentDirectory returns the folder that contains a path', async () => {
+    const P = await loadShared('SegmentaProtocol', 'protocol.js');
+    assert.equal(P.parentDirectory('/home/u/Descargas/archive.zip'), '/home/u/Descargas');
+    assert.equal(P.parentDirectory('C:\\Users\\u\\archive.zip'), 'C:\\Users\\u');
+    assert.equal(P.parentDirectory('/home/u/Descargas/'), '/home/u/Descargas');
+    assert.equal(P.parentDirectory('/archive.zip'), '/');
+    assert.equal(P.parentDirectory('archive.zip'), '');
+    assert.equal(P.parentDirectory(''), '');
+    assert.equal(P.parentDirectory(null), '');
+    assert.equal(P.parentDirectory(42), '');
+  });
+
   test('buildSystemOpen builds the system.open envelope', async () => {
     const P = await loadShared('SegmentaProtocol', 'protocol.js');
     assert.deepEqual(P.buildSystemOpen({ taskId: 'task-123456', id: 12 }), {

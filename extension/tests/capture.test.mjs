@@ -15,9 +15,22 @@ function setupFakeBrowser(settings, nativeReplies = {}, options = {}) {
   const events = [];
   const notifications = [];
   const failing = Array.isArray(options.failingMethods) ? options.failingMethods : [];
+  // Task status replies, in order (the last one repeats). The default already
+  // reports bytes: the daemon owns the file, so the browser copy can go.
+  const statusReplies = Array.isArray(options.statusReplies) ? options.statusReplies.slice() : [];
+  let statusCalls = 0;
   // Keep in step with SegmentaBackground.SETTINGS_CACHE_VERSION (asserted below).
   const storageData = { segmenta_settings: settings, segmenta_settings_version: '0.1.2' };
   let nextTaskId = 0;
+
+  function statusReply(taskId) {
+    statusCalls += 1;
+    const next = statusReplies.length > 1 ? statusReplies.shift() : statusReplies[0];
+    return Object.assign(
+      { task_id: taskId, status: 'downloading', downloaded_bytes: 4096 },
+      next || {},
+    );
+  }
 
   function defaultTaskId() {
     nextTaskId += 1;
@@ -55,16 +68,18 @@ function setupFakeBrowser(settings, nativeReplies = {}, options = {}) {
           return;
         }
         const canned = nativeReplies[message.method];
-        const reply = canned
-          ? Object.assign({}, canned, { id: message.id })
-          : {
-            jsonrpc: '2.0',
-            id: message.id,
-            result: message.method === 'system.open'
-              ? { opened: true }
-              : { task_id: defaultTaskId(), status: 'downloading' },
-          };
-        callback(reply);
+        if (canned) {
+          callback(Object.assign({}, canned, { id: message.id }));
+          return;
+        }
+        const result = message.method === 'system.open'
+          ? { opened: true }
+          : message.method === 'media.status'
+            ? statusReply(message.params.task_id)
+            : message.method === 'download.cancel'
+              ? { task_id: message.params.task_id, status: 'cancelled' }
+              : { task_id: defaultTaskId(), status: 'downloading' };
+        callback({ jsonrpc: '2.0', id: message.id, result: result });
       },
     },
     storage: {
@@ -114,7 +129,12 @@ function setupFakeBrowser(settings, nativeReplies = {}, options = {}) {
       onRemoved: { listeners: [], addListener(fn) { this.listeners.push(fn); } },
       create(data, cb) {
         events.push('window:create');
+        if (options.windowsHangs) {
+          // A browser that accepts the call and never answers.
+          return new Promise(() => {});
+        }
         if (cb) cb({ id: 900 });
+        return undefined;
       },
       remove(id, cb) {
         events.push('window:remove:' + id);
@@ -131,7 +151,23 @@ function setupFakeBrowser(settings, nativeReplies = {}, options = {}) {
     globalThis.chrome.notifications = notificationsApi;
   }
 
-  return { canceled, erased, nativeCalls, notifications, events, storageData };
+  return { canceled, erased, nativeCalls, notifications, events, storageData, statusCalls: () => statusCalls };
+}
+
+function statusEventIndices(events) {
+  const out = [];
+  events.forEach((event, index) => {
+    if (event === 'native:media.status') out.push(index);
+  });
+  return out;
+}
+
+function resetTiming(bg) {
+  bg.setCaptureTiming({
+    ownershipTimeoutMs: bg.TASK_OWNERSHIP_TIMEOUT_MS,
+    pollIntervalMs: bg.TASK_POLL_INTERVAL_MS,
+    windowTimeoutMs: bg.CONFIRM_WINDOW_TIMEOUT_MS,
+  });
 }
 
 export default function suite({ test }) {
@@ -185,7 +221,7 @@ export default function suite({ test }) {
       capture_extensions: ['zip'],
       domain_denylist: [],
       // The window itself is covered by confirm.test.mjs; these tests pin the
-      // non-interactive safe order (pause -> add -> cancel+erase).
+      // non-interactive safe order (pause -> add -> status -> cancel+erase).
       capture_confirm: false,
     };
     const env = setupFakeBrowser(settings);
@@ -199,18 +235,25 @@ export default function suite({ test }) {
 
     assert.deepEqual(env.canceled, [101]);
     assert.deepEqual(env.erased, [{ id: 101 }]);
-    // Paused first, added second, discarded third: no other host traffic is allowed.
+    // Paused first, added second, owned third, discarded last: no other host
+    // traffic is allowed.
     assert.deepEqual(env.events, [
       'pause:101',
       'native:download.add',
+      'native:media.status',
       'cancel:101',
       'erase:101',
       'notify',
       'native:system.open',
     ]);
-    assert.deepEqual(env.nativeCalls.map((call) => call.message.method), ['download.add', 'system.open']);
+    assert.deepEqual(env.nativeCalls.map((call) => call.message.method), [
+      'download.add',
+      'media.status',
+      'system.open',
+    ]);
     assert.equal(env.nativeCalls[0].message.params.url, 'https://example.com/archive.zip');
     assert.deepEqual(env.nativeCalls[1].message.params, { task_id: 'task-000001' });
+    assert.deepEqual(env.nativeCalls[2].message.params, { task_id: 'task-000001' });
   });
 
   test('background capture: denylisted host skipped', async () => {
@@ -242,7 +285,7 @@ export default function suite({ test }) {
       capture_extensions: ['zip'],
       domain_denylist: [],
       // The window itself is covered by confirm.test.mjs; these tests pin the
-      // non-interactive safe order (pause -> add -> cancel+erase).
+      // non-interactive safe order (pause -> add -> status -> cancel+erase).
       capture_confirm: false,
     };
     const env = setupFakeBrowser(settings);
@@ -266,7 +309,7 @@ export default function suite({ test }) {
       capture_extensions: ['zip'],
       domain_denylist: [],
       // The window itself is covered by confirm.test.mjs; these tests pin the
-      // non-interactive safe order (pause -> add -> cancel+erase).
+      // non-interactive safe order (pause -> add -> status -> cancel+erase).
       capture_confirm: false,
     };
     const env = setupFakeBrowser(settings);
@@ -291,7 +334,7 @@ export default function suite({ test }) {
       capture_extensions: ['zip'],
       domain_denylist: [],
       // The window itself is covered by confirm.test.mjs; these tests pin the
-      // non-interactive safe order (pause -> add -> cancel+erase).
+      // non-interactive safe order (pause -> add -> status -> cancel+erase).
       capture_confirm: false,
     };
     const env = setupFakeBrowser(settings);
@@ -309,12 +352,17 @@ export default function suite({ test }) {
     assert.deepEqual(env.events, [
       'pause:106',
       'native:download.add',
+      'native:media.status',
       'cancel:106',
       'erase:106',
       'notify',
       'native:system.open',
     ]);
-    assert.deepEqual(env.nativeCalls.map((call) => call.message.method), ['download.add', 'system.open']);
+    assert.deepEqual(env.nativeCalls.map((call) => call.message.method), [
+      'download.add',
+      'media.status',
+      'system.open',
+    ]);
   });
 
   test('background capture: torrent routed to torrent.add', async () => {
@@ -325,7 +373,7 @@ export default function suite({ test }) {
       capture_extensions: ['zip'],
       domain_denylist: [],
       // The window itself is covered by confirm.test.mjs; these tests pin the
-      // non-interactive safe order (pause -> add -> cancel+erase).
+      // non-interactive safe order (pause -> add -> status -> cancel+erase).
       capture_confirm: false,
     };
     const env = setupFakeBrowser(settings);
@@ -342,12 +390,14 @@ export default function suite({ test }) {
     assert.deepEqual(env.events, [
       'pause:107',
       'native:torrent.add',
+      'native:media.status',
       'cancel:107',
       'erase:107',
       'notify',
       'native:system.open',
       'pause:108',
       'native:torrent.add',
+      'native:media.status',
       'cancel:108',
       'erase:108',
       'notify',
@@ -355,12 +405,14 @@ export default function suite({ test }) {
     ]);
     assert.deepEqual(env.nativeCalls.map((call) => call.message.method), [
       'torrent.add',
+      'media.status',
       'system.open',
       'torrent.add',
+      'media.status',
       'system.open',
     ]);
-    assert.deepEqual(env.nativeCalls[1].message.params, { task_id: 'task-000001' });
-    assert.deepEqual(env.nativeCalls[3].message.params, { task_id: 'task-000002' });
+    assert.deepEqual(env.nativeCalls[2].message.params, { task_id: 'task-000001' });
+    assert.deepEqual(env.nativeCalls[5].message.params, { task_id: 'task-000002' });
   });
 
   test('background capture: r0* and r1* prefix match', async () => {
@@ -387,12 +439,14 @@ export default function suite({ test }) {
     assert.deepEqual(env.events, [
       'pause:109',
       'native:download.add',
+      'native:media.status',
       'cancel:109',
       'erase:109',
       'notify',
       'native:system.open',
       'pause:110',
       'native:download.add',
+      'native:media.status',
       'cancel:110',
       'erase:110',
       'notify',
@@ -400,8 +454,10 @@ export default function suite({ test }) {
     ]);
     assert.deepEqual(env.nativeCalls.map((call) => call.message.method), [
       'download.add',
+      'media.status',
       'system.open',
       'download.add',
+      'media.status',
       'system.open',
     ]);
   });
@@ -586,5 +642,154 @@ export default function suite({ test }) {
     assert.equal(result.error.host_code, -32601);
     assert.deepEqual(env.events, ['native:system.open']);
     assert.equal(env.notifications.length, 0);
+  });
+
+  // ---- Ownership safety net (S10) -------------------------------------------
+  // The browser copy survives until the daemon demonstrably holds bytes.
+
+  async function bootBackground() {
+    await loadShared('SegmentaApi', 'browser-api.js');
+    await loadShared('SegmentaProtocol', 'protocol.js');
+    await loadShared('SegmentaValidate', 'validate.js');
+    await import(new URL('../chromium/background.js', import.meta.url).href);
+    return globalThis.SegmentaBackground;
+  }
+
+  test('background capture: the browser copy is erased only once the task reports bytes', async () => {
+    const settings = {
+      capture_enabled: true,
+      capture_torrents: true,
+      capture_magnet: true,
+      capture_extensions: ['zip'],
+      domain_denylist: [],
+      capture_confirm: false,
+    };
+    const env = setupFakeBrowser(settings, {}, {
+      statusReplies: [
+        { status: 'downloading', downloaded_bytes: 0 },
+        { status: 'downloading', downloaded_bytes: 2048 },
+      ],
+    });
+    const bg = await bootBackground();
+
+    bg.setCaptureTiming({ pollIntervalMs: 1 });
+    try {
+      await bg.onDownloadCreated({ id: 120, url: 'https://example.com/archive.zip', filename: 'archive.zip' });
+    } finally {
+      resetTiming(bg);
+    }
+
+    const polls = statusEventIndices(env.events);
+    assert.equal(polls.length, 2, `two polls must precede the discard: ${JSON.stringify(env.events)}`);
+    assert.equal(env.events.indexOf('native:download.add') < polls[0], true, 'add comes before the first poll');
+    assert.equal(polls[1] < env.events.indexOf('cancel:120'), true, 'no cancel before the task owns bytes');
+    assert.equal(polls[1] < env.events.indexOf('erase:120'), true, 'no erase before the task owns bytes');
+    assert.deepEqual(env.canceled, [120]);
+    assert.deepEqual(env.erased, [{ id: 120 }]);
+  });
+
+  test('background capture: a task that reports completed counts as owned', async () => {
+    const settings = {
+      capture_enabled: true,
+      capture_torrents: true,
+      capture_magnet: true,
+      capture_extensions: ['zip'],
+      domain_denylist: [],
+      capture_confirm: false,
+    };
+    const env = setupFakeBrowser(settings, {}, {
+      statusReplies: [{ status: 'completed', downloaded_bytes: 0 }],
+    });
+    const bg = await bootBackground();
+
+    await bg.onDownloadCreated({ id: 121, url: 'https://example.com/archive.zip', filename: 'archive.zip' });
+
+    assert.deepEqual(env.canceled, [121]);
+    assert.deepEqual(env.erased, [{ id: 121 }]);
+  });
+
+  test('background capture: a failed task resumes the download and keeps the browser copy', async () => {
+    const settings = {
+      capture_enabled: true,
+      capture_torrents: true,
+      capture_magnet: true,
+      capture_extensions: ['zip'],
+      domain_denylist: [],
+      capture_confirm: false,
+    };
+    const env = setupFakeBrowser(settings, {}, {
+      statusReplies: [{ status: 'failed', downloaded_bytes: 0 }],
+    });
+    const bg = await bootBackground();
+
+    await bg.onDownloadCreated({ id: 122, url: 'https://example.com/archive.zip', filename: 'archive.zip' });
+
+    assert.deepEqual(env.events, [
+      'pause:122',
+      'native:download.add',
+      'native:media.status',
+      'resume:122',
+      'native:download.cancel',
+      'notify',
+    ]);
+    assert.deepEqual(env.canceled, [], 'a failed task must never cancel the browser download');
+    assert.deepEqual(env.erased, [], 'a failed task must never erase the browser download');
+    // The orphan task is dropped without deleting any file.
+    assert.deepEqual(env.nativeCalls[2].message.params, { task_id: 'task-000001', delete_file: false });
+    assert.equal(env.notifications.length, 1);
+    assert.equal(env.notifications[0].title, 'Descarga conservada en el navegador');
+  });
+
+  test('background capture: an exhausted polling budget keeps the browser copy', async () => {
+    const settings = {
+      capture_enabled: true,
+      capture_torrents: true,
+      capture_magnet: true,
+      capture_extensions: ['zip'],
+      domain_denylist: [],
+      capture_confirm: false,
+    };
+    const env = setupFakeBrowser(settings, {}, {
+      statusReplies: [{ status: 'downloading', downloaded_bytes: 0 }],
+    });
+    const bg = await bootBackground();
+
+    bg.setCaptureTiming({ ownershipTimeoutMs: 5, pollIntervalMs: 1 });
+    try {
+      await bg.onDownloadCreated({ id: 123, url: 'https://example.com/archive.zip', filename: 'archive.zip' });
+    } finally {
+      resetTiming(bg);
+    }
+
+    assert.equal(env.statusCalls() > 0, true, 'the budget must be spent polling, not skipped');
+    assert.deepEqual(env.canceled, []);
+    assert.deepEqual(env.erased, []);
+    assert.equal(env.events.includes('resume:123'), true, `the download must be resumed: ${JSON.stringify(env.events)}`);
+    assert.equal(env.notifications.length, 1);
+  });
+
+  test('background capture: a failing status call never erases before the budget ends', async () => {
+    const settings = {
+      capture_enabled: true,
+      capture_torrents: true,
+      capture_magnet: true,
+      capture_extensions: ['zip'],
+      domain_denylist: [],
+      capture_confirm: false,
+    };
+    const env = setupFakeBrowser(settings, {}, { failingMethods: ['media.status'] });
+    const bg = await bootBackground();
+
+    bg.setCaptureTiming({ ownershipTimeoutMs: 6, pollIntervalMs: 1 });
+    try {
+      await bg.onDownloadCreated({ id: 124, url: 'https://example.com/archive.zip', filename: 'archive.zip' });
+    } finally {
+      resetTiming(bg);
+    }
+
+    assert.deepEqual(env.canceled, []);
+    assert.deepEqual(env.erased, []);
+    assert.equal(env.events.includes('resume:124'), true);
+    assert.equal(statusEventIndices(env.events).length > 0, true, 'the budget is spent polling');
   });
 }
