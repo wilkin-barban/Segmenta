@@ -33,7 +33,7 @@ Ciclo: agente implementa → yo verifico y hago QA real → error exacto vuelve 
 | ID | Entrega | Archivos principales | Estado |
 | --- | --- | --- | --- |
 | D0 | Documentación P0: README 0.1.2/0.2, CHANGELOG 0.1.0–0.1.2, QA 0.1.2, release notes 0.2.0 | `README.md`, `CHANGELOG.md`, `docs/qa/`, `packaging/release-notes-0.2.0.md` | hecho (`cfa702f`) |
-| D1 | OpenSpec 01/03/04/05/07/08/09/10/11 + nuevo 12 | `docs/openspec/` | en curso, partido en D1a1 (01/03), D1a2 (04/05), D1b1 (07/08), D1b2 (09/10/11/12) |
+| D1 | OpenSpec 01/03/04/05/07/08/09/10/11 + nuevo 12 | `docs/openspec/` | D1a2 hecho (`ccf74c7`); D1a1, D1b1 y D1b2 en curso |
 | R1 | Cold-start de captura con reconciliación `downloads.search` | `extension/*/background.js`, tests | implementado (`dfb1b2f`); falta QA real de cold start y alinear 03 §5.4 |
 | R2 | Probe multiarchivo de torrents | `crates/segmenta-daemon/src/torrent.rs`, tests | hecho (`d7075a6`) |
 | R3 | `extension` visible en `--help` y docs CLI | `crates/segmenta-cli/src/cli.rs`, `render.rs` | hecho (`9024726`) |
@@ -42,7 +42,7 @@ Ciclo: agente implementa → yo verifico y hago QA real → error exacto vuelve 
 | A1 | Hook argv seguro (`%file%`, `%folder%`, timeout) | nuevo `postprocess.rs`, `manager.rs`, `store.rs` | pendiente |
 | A2 | ClamAV integrado, cuarentena y código `ERR_ANTIVIRUS_FOUND` | `postprocess.rs`, schema v4, RPC, GUI, tests | pendiente |
 | L1 | Site logins Basic + keyring y UI | `manager.rs`, `rpc.rs`, `prefs.rs`, tests | pendiente |
-| U1 | UI: site logins, antivirus, retirar categorías, respetar `clip_monitor_enabled` | `prefs.rs`, `add_dialog.rs`, `model.rs` | pendiente |
+| U1 | UI: site logins, antivirus, retirar categorías, respetar `clip_monitor_enabled` | `prefs.rs`, `add_dialog.rs`, `model.rs` | pendiente — ver «Deuda GUI confirmada» |
 | E1 | Extensión manual + GUI; límites documentados | `browsers.rs`, `prefs.rs`, docs | pendiente |
 | Q1 | Gates completos, `.deb` 0.2.0, QA Ubuntu y artefactos | `packaging/`, `dist/`, QA docs | pendiente |
 | REL | Tag/Release 0.2.0 sólo con Q1 verde | git/GitHub | pendiente |
@@ -87,4 +87,14 @@ Para GUI: `xvfb-run -a cargo test -p segmenta-gui`; no aceptar skips por falta d
 
 - L1: D0 cerrado en `cfa702f`. README deja de afirmar alcance 0.1.0, instala el `.deb` que construye el repo y declara **0.2.0 en preparación**; CHANGELOG gana `[0.1.0]`–`[0.1.2]` con compare links y conserva `[Unreleased]` como placeholder; `docs/qa/segmenta-0.1.2-live.md` registra el QA real de Ubuntu (instalación 0.1.2-1, `native-ready` con `extension_installed:false`, `prepare` chromium/firefox-0.1.2, panel 4K/1080p/720p/360p/audio con 720p, handoff, captura aceptar 524288/524288 y rechazar sin tarea) y marca como no reproducido sólo Firefox 0.1.2 y la suspensión real del service worker MV3; `packaging/release-notes-0.2.0.md` creado con los límites del plan. Corregida de paso la afirmación falsa de `release-notes-0.1.2.md` («instalada y conectada»): los estados reales son `native-ready`, `native-missing`, `extension-installed` y `unsupported`.
 - L2: D1 se partió porque dos workers de documentación agotaron ~7 M de contexto sin devolver. Reparto definitivo con superficies disjuntas: D1a1 (01/03), D1a2 (04/05), D1b1 (07/08), D1b2 (09/10/11 + nuevo 12). Regla operativa nueva: ningún worker pasa de ~2 M sin devolver; la documentación se entrega por pares de archivos.
+
+## Deuda GUI confirmada (insumo de U1)
+
+Verificada contra el código durante D1a2; ninguna de estas contradicciones es un bug de documentación, son del código:
+
+1. `crates/segmenta-gui/src/prefs.rs:58-77` todavía pinta el `AdwExpanderRow` legacy de categorías: el contrato de 0.2 dice que no hay categorías en la UI. Retirar la fila y conservar sólo la lectura legacy del ajuste.
+2. Literales que ya tienen entrada en `segmenta-i18n` y no la usan: `prefs.rs:80` («Sesión»), `prefs.rs:119`/`124` («Modo»/«Servidor»), `prefs.rs:240` («Versión»), `window.rs:1188`/`1215` (notificaciones: debe usarse `FailedNotification`/`CompletedNotification`, cuya cadena real de completada es «Descarga terminada», no «completada»).
+3. `add_dialog.rs` prellena desde el portapapeles sin consultar `clip_monitor_enabled`: elegir una semántica y documentarla.
+4. `model.rs::DownloadStatus` no conoce `retrying` ni `finalizing`: se pintan como «Desconocida» y sin acciones.
+5. `window.rs:1410-1458` deriva las colas de `download.list` en lugar de `queue.list`, y limita el snapshot a 500 tareas.
 
