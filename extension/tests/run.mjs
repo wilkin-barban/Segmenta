@@ -6,6 +6,8 @@
 // non-zero when any test fails.
 const SUITES = [
   './protocol.test.mjs',
+  './quality.test.mjs',
+  './panel.test.mjs',
   './locales.test.mjs',
   './validate.test.mjs',
   './manifest.test.mjs',

@@ -190,5 +190,14 @@
   "taskAddedBodyGeneric": {
     "message": "The task opened in Segmenta.",
     "description": "Notification body when the host reports no folder."
+  },
+  "sentTitle": {
+    "message": "Sent to Segmenta"
+  },
+  "openSegmenta": {
+    "message": "Open Segmenta"
+  },
+  "viewProgress": {
+    "message": "View progress"
   }
 }

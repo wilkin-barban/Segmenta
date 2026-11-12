@@ -190,5 +190,14 @@
   "taskAddedBodyGeneric": {
     "message": "La tarea se abrió en Segmenta.",
     "description": "Cuerpo de la notificación cuando el host no informa la carpeta."
+  },
+  "sentTitle": {
+    "message": "Enviado a Segmenta"
+  },
+  "openSegmenta": {
+    "message": "Abrir Segmenta"
+  },
+  "viewProgress": {
+    "message": "Ver progreso"
   }
 }
