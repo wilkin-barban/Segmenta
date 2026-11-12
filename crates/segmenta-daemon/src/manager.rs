@@ -1253,9 +1253,12 @@ impl Manager {
         }
         // Public HLS/DASH: parse the manifest and report its variants.
         let client = media_http_client()?;
-        crate::stream_media::probe(&client, &url)
+        let mut probe = crate::stream_media::probe(&client, &url)
             .await
-            .map_err(Self::media_error)
+            .map_err(Self::media_error)?;
+        // Same grouped ladder as YouTube: dedupe by height and cap the options (S9).
+        crate::media::annotate_stream_probe(&mut probe);
+        Ok(probe)
     }
 
     /// `media.add`: probe, persist the task and start the backend runner.
@@ -1274,7 +1277,8 @@ impl Manager {
         let limit = crate::media::clamp_limit(params.playlist_limit).map_err(Self::media_error)?;
         let host = url.host_str().unwrap_or_default().to_string();
         if !crate::media::is_youtube(&host) {
-            return self.add_stream_task(url).await;
+            // The manifest pipeline resolves the requested height instead of a format id.
+            return self.add_stream_task(url, params.height).await;
         }
         let tool = crate::media::locate_tool("yt-dlp").map_err(Self::media_error)?;
         let kind_hint = if mode == "playlist" {
@@ -1355,7 +1359,13 @@ impl Manager {
             completed_at: None,
             filename: title.clone(),
             media_kind: Some(mode.to_string()),
-            media_format: params.format_id.clone(),
+            // Video quality is recorded by height: a raw `format_id` is never used to
+            // pick a video stream (S9). Only the audio mode keeps the audio id.
+            media_format: if mode == "audio" {
+                params.format_id.clone()
+            } else {
+                params.height.map(|height| format!("{height}p"))
+            },
             playlist_title: is_playlist.then(|| probe.title.clone()),
             playlist_count: is_playlist.then_some(limit.min(probe.playlist.count.max(1)) as u32),
             batch_id: batch_id.clone(),
@@ -1381,7 +1391,11 @@ impl Manager {
             kind: task_kind,
             url: url.to_string(),
             output,
-            format: params.format_id.clone(),
+            format: if mode == "audio" {
+                params.format_id.clone()
+            } else {
+                None
+            },
             playlist_limit: limit,
             height: params.height,
         };
@@ -1395,9 +1409,11 @@ impl Manager {
     }
 
     /// `media.add` for a public HLS/DASH manifest.
-    async fn add_stream_task(&self, url: url::Url) -> Result<Value, RpcError> {
+    async fn add_stream_task(&self, url: url::Url, height: Option<u32>) -> Result<Value, RpcError> {
         let client = media_http_client()?;
-        let selection = crate::stream_media::resolve(&client, &url, None)
+        // The requested height is honoured end to end: the manifest pipeline resolves
+        // it to one variant/representation instead of falling back to the best one.
+        let selection = crate::stream_media::resolve(&client, &url, height)
             .await
             .map_err(Self::media_error)?;
         let ffmpeg = crate::media::locate_tool("ffmpeg").map_err(Self::media_error)?;

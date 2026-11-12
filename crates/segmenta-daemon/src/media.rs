@@ -33,6 +33,39 @@ pub struct MediaFormat {
     pub kind: String,
 }
 
+/// Heights offered by the grouped quality ladder (S9).
+///
+/// The panel shows at most these four video options plus one audio-only entry;
+/// anything else the backend reports is dropped from the ladder (the raw
+/// `formats` list keeps every distinct height for programmatic callers).
+pub const QUALITY_HEIGHTS: [u32; 4] = [2160, 1080, 720, 360];
+
+/// Height preselected whenever it is available (S9).
+pub const DEFAULT_QUALITY_HEIGHT: u32 = 720;
+
+/// Label for one grouped quality: `4K` for 2160, `{height}p` otherwise.
+pub fn quality_label(height: u32) -> String {
+    if height == 2160 {
+        "4K".to_string()
+    } else {
+        format!("{height}p")
+    }
+}
+
+/// One entry of the grouped `qualities` ladder (S9).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QualityOption {
+    /// `2160`, `1080`, `720`, `360` or `audio`.
+    pub quality: String,
+    /// Human label (`4K`, `1080p`, `audio`).
+    pub label: String,
+    /// Vertical resolution; `None` for the audio-only entry.
+    pub height: Option<u32>,
+    /// Backend id of the selected candidate: the muxed/DASH winner for a height, the
+    /// highest bitrate for audio.
+    pub format_id: String,
+}
+
 /// Result of `media.probe`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProbeOutcome {
@@ -44,12 +77,30 @@ pub struct ProbeOutcome {
     pub duration_seconds: Option<u64>,
     /// Thumbnail URL when known.
     pub thumbnail: Option<String>,
-    /// Video formats, best first.
+    /// Video formats, best candidate per height, highest first.
     pub formats: Vec<MediaFormat>,
-    /// Audio formats, best first.
+    /// Audio formats, highest bitrate first.
     pub audio: Vec<MediaFormat>,
+    /// Grouped quality ladder: 2160, 1080, 720, 360 and `audio` when available.
+    pub qualities: Vec<QualityOption>,
+    /// Quality the panel preselects: 720 when available, else the closest height,
+    /// else `audio`.
+    pub default_quality: String,
     /// Playlist summary.
     pub playlist: PlaylistSummary,
+}
+
+/// The deduplicated format lists plus the ladder built from them (S9).
+#[derive(Debug, Clone)]
+pub struct GroupedProbe {
+    /// Video formats with a single best candidate per height, highest first.
+    pub formats: Vec<MediaFormat>,
+    /// Audio formats, highest bitrate first.
+    pub audio: Vec<MediaFormat>,
+    /// Ordered quality ladder.
+    pub qualities: Vec<QualityOption>,
+    /// Preselected quality tag.
+    pub default_quality: String,
 }
 
 /// Playlist count plus a bounded sample of entries.
@@ -166,11 +217,47 @@ pub fn is_youtube(host: &str) -> bool {
     host == "www.youtube.com" || host == "youtube.com" || host == "m.youtube.com"
 }
 
+/// One parsed backend format with the extra fields only the ranking needs.
+struct FormatCandidate {
+    format: MediaFormat,
+    /// Carries both a video and an audio track in one file.
+    muxed: bool,
+    /// DASH-style video-only stream.
+    dash: bool,
+    /// Bits per second used to break ties.
+    bitrate: u64,
+}
+
+impl FormatCandidate {
+    /// Muxed first, then DASH video-only, then anything else.
+    fn video_rank(&self) -> u8 {
+        if self.muxed {
+            0
+        } else if self.dash {
+            1
+        } else {
+            2
+        }
+    }
+}
+
+/// Highest declared bitrate of a format, `0` when the backend omits it.
+fn candidate_bitrate(format: &Value) -> u64 {
+    for key in ["tbr", "abr", "vbr", "bitrate"] {
+        if let Some(value) = format.get(key).and_then(Value::as_f64) {
+            if value > 0.0 {
+                return value.round() as u64;
+            }
+        }
+    }
+    0
+}
+
 fn classify_formats(info: &Value) -> (Vec<MediaFormat>, Vec<MediaFormat>) {
-    let mut video = Vec::new();
-    let mut audio = Vec::new();
+    let mut video: Vec<FormatCandidate> = Vec::new();
+    let mut audio: Vec<FormatCandidate> = Vec::new();
     let Some(entries) = info.get("formats").and_then(Value::as_array) else {
-        return (video, audio);
+        return (Vec::new(), Vec::new());
     };
     for format in entries {
         let id = format
@@ -188,6 +275,11 @@ fn classify_formats(info: &Value) -> (Vec<MediaFormat>, Vec<MediaFormat>) {
             .get("acodec")
             .and_then(Value::as_str)
             .unwrap_or("none");
+        let protocol = format
+            .get("protocol")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_ascii_lowercase();
         let ext = format.get("ext").and_then(Value::as_str).unwrap_or("bin");
         let height = format
             .get("height")
@@ -205,15 +297,151 @@ fn classify_formats(info: &Value) -> (Vec<MediaFormat>, Vec<MediaFormat>) {
             ext: ext.to_string(),
             kind: if has_video { "video" } else { "audio" }.to_string(),
         };
+        let candidate = FormatCandidate {
+            format: item,
+            muxed: has_video && has_audio,
+            // A video-only stream is the DASH branch even when yt-dlp reports an
+            // `https` protocol for it.
+            dash: protocol.contains("dash") || !has_audio,
+            bitrate: candidate_bitrate(format),
+        };
         if has_video {
-            video.push(item);
+            video.push(candidate);
         } else if has_audio {
-            audio.push(item);
+            audio.push(candidate);
         }
     }
-    video.sort_by_key(|format| std::cmp::Reverse(format.height));
-    audio.sort_by(|left, right| right.label.cmp(&left.label));
-    (video, audio)
+    // Highest height first; within one height the muxed format wins, then the DASH
+    // video-only one, then the higher bitrate.
+    video.sort_by(|left, right| {
+        right
+            .format
+            .height
+            .cmp(&left.format.height)
+            .then_with(|| left.video_rank().cmp(&right.video_rank()))
+            .then_with(|| right.bitrate.cmp(&left.bitrate))
+            .then_with(|| left.format.format_id.cmp(&right.format.format_id))
+    });
+    audio.sort_by(|left, right| {
+        right
+            .bitrate
+            .cmp(&left.bitrate)
+            .then_with(|| left.format.format_id.cmp(&right.format.format_id))
+    });
+    (
+        video
+            .into_iter()
+            .map(|candidate| candidate.format)
+            .collect(),
+        audio
+            .into_iter()
+            .map(|candidate| candidate.format)
+            .collect(),
+    )
+}
+
+/// Build the grouped ladder from an already ordered format list (S9).
+fn quality_ladder(formats: &[MediaFormat], audio: &[MediaFormat]) -> Vec<QualityOption> {
+    let mut ladder = Vec::new();
+    for height in QUALITY_HEIGHTS {
+        let Some(found) = formats.iter().find(|format| format.height == Some(height)) else {
+            continue;
+        };
+        ladder.push(QualityOption {
+            quality: height.to_string(),
+            label: quality_label(height),
+            height: Some(height),
+            format_id: found.format_id.clone(),
+        });
+    }
+    if let Some(best) = audio.first() {
+        ladder.push(QualityOption {
+            quality: "audio".to_string(),
+            label: "audio".to_string(),
+            height: None,
+            format_id: best.format_id.clone(),
+        });
+    }
+    ladder
+}
+
+/// `720` when available, else the closest available height, else `audio`.
+///
+/// Equidistant heights resolve towards the higher quality (the ladder is ordered
+/// highest first, so the first minimum wins).
+pub fn default_quality(qualities: &[QualityOption]) -> String {
+    if let Some(exact) = qualities
+        .iter()
+        .find(|quality| quality.height == Some(DEFAULT_QUALITY_HEIGHT))
+    {
+        return exact.quality.clone();
+    }
+    if let Some(height) = qualities
+        .iter()
+        .filter_map(|quality| quality.height)
+        .min_by_key(|height| height.abs_diff(DEFAULT_QUALITY_HEIGHT))
+    {
+        return height.to_string();
+    }
+    qualities
+        .iter()
+        .find(|quality| quality.quality == "audio")
+        .map(|quality| quality.quality.clone())
+        .unwrap_or_default()
+}
+
+/// Deduplicate the video formats by height and cap the ladder to the fixed set.
+///
+/// The caller orders the input best first, so the first format seen for a height is
+/// the one kept: muxed, then DASH video-only, then the higher bitrate.
+pub fn group_probe(formats: Vec<MediaFormat>, audio: Vec<MediaFormat>) -> GroupedProbe {
+    let mut seen: Vec<u32> = Vec::new();
+    let mut deduped = Vec::with_capacity(formats.len());
+    for format in formats {
+        if let Some(height) = format.height {
+            if seen.contains(&height) {
+                continue;
+            }
+            seen.push(height);
+        }
+        deduped.push(format);
+    }
+    let qualities = quality_ladder(&deduped, &audio);
+    let default_quality = default_quality(&qualities);
+    GroupedProbe {
+        formats: deduped,
+        audio,
+        qualities,
+        default_quality,
+    }
+}
+
+/// Group an already serialized stream probe (HLS/DASH) in place (S9).
+///
+/// Manifest variants arrive in manifest order and may repeat a height, so the same
+/// grouping the YouTube probe uses is applied here; streams carry no separate audio
+/// list, so the ladder stays video-only.
+pub fn annotate_stream_probe(probe: &mut Value) {
+    let formats: Vec<MediaFormat> = probe
+        .get("formats")
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default();
+    let audio: Vec<MediaFormat> = probe
+        .get("audio")
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_default();
+    let grouped = group_probe(formats, audio);
+    let Some(map) = probe.as_object_mut() else {
+        return;
+    };
+    let formats = serde_json::to_value(&grouped.formats).unwrap_or(Value::Null);
+    let qualities = serde_json::to_value(&grouped.qualities).unwrap_or(Value::Null);
+    map.insert("formats".to_string(), formats);
+    map.insert("qualities".to_string(), qualities);
+    map.insert(
+        "default_quality".to_string(),
+        Value::String(grouped.default_quality),
+    );
 }
 
 /// Parse the `yt-dlp -J` payload into a [`ProbeOutcome`].
@@ -229,6 +457,7 @@ pub fn parse_probe_json(info: &Value, kind: &str) -> Result<ProbeOutcome, MediaE
         .and_then(Value::as_str)
         .map(str::to_string);
     let (formats, audio) = classify_formats(info);
+    let grouped = group_probe(formats, audio);
 
     let mut playlist = PlaylistSummary::default();
     if let Some(entries) = info.get("entries").and_then(Value::as_array) {
@@ -263,7 +492,7 @@ pub fn parse_probe_json(info: &Value, kind: &str) -> Result<ProbeOutcome, MediaE
         }
     };
 
-    if formats.is_empty() && audio.is_empty() && playlist.count == 0 {
+    if grouped.formats.is_empty() && grouped.audio.is_empty() && playlist.count == 0 {
         return Err(MediaError::not_public(
             "the media has no downloadable public formats",
         ));
@@ -274,8 +503,10 @@ pub fn parse_probe_json(info: &Value, kind: &str) -> Result<ProbeOutcome, MediaE
         title,
         duration_seconds,
         thumbnail,
-        formats,
-        audio,
+        formats: grouped.formats,
+        audio: grouped.audio,
+        qualities: grouped.qualities,
+        default_quality: grouped.default_quality,
         playlist,
     })
 }
@@ -723,6 +954,57 @@ mod tests {
         std::fs::write(playlist.join("1.mp4"), b"12345").unwrap();
         assert_eq!(output_size(&playlist), Some(5));
         assert_eq!(output_size(&directory.path().join("missing")), None);
+    }
+
+    #[test]
+    fn qualities_group_by_height_and_cap_the_ladder() {
+        let info: Value = serde_json::from_str(
+            r#"{"title":"x","formats":[
+                {"format_id":"313","height":2160,"ext":"webm","vcodec":"vp9","acodec":"none","tbr":9000},
+                {"format_id":"137","height":1080,"ext":"mp4","vcodec":"avc1","acodec":"none","tbr":4500},
+                {"format_id":"22","height":720,"ext":"mp4","vcodec":"avc1","acodec":"mp4a","tbr":1500},
+                {"format_id":"18","height":360,"ext":"mp4","vcodec":"avc1","acodec":"mp4a","tbr":600},
+                {"format_id":"135","height":480,"ext":"mp4","vcodec":"avc1","acodec":"none","tbr":700},
+                {"format_id":"140","ext":"m4a","vcodec":"none","acodec":"mp4a","abr":128}]}"#,
+        )
+        .unwrap();
+        let probe = parse_probe_json(&info, "video").unwrap();
+        let tags: Vec<&str> = probe
+            .qualities
+            .iter()
+            .map(|entry| entry.quality.as_str())
+            .collect();
+        // 480 is a real format but not part of the documented ladder.
+        assert_eq!(tags, ["2160", "1080", "720", "360", "audio"]);
+        assert_eq!(probe.qualities[0].label, "4K");
+        assert_eq!(probe.qualities[1].label, "1080p");
+        assert_eq!(probe.qualities[4].label, "audio");
+        assert_eq!(probe.qualities[4].format_id, "140");
+        assert_eq!(probe.default_quality, "720");
+    }
+
+    #[test]
+    fn default_quality_falls_back_to_the_closest_height_or_audio() {
+        let option = |quality: &str, height: Option<u32>| QualityOption {
+            quality: quality.to_string(),
+            label: quality.to_string(),
+            height,
+            format_id: quality.to_string(),
+        };
+        assert_eq!(default_quality(&[]), "");
+        assert_eq!(
+            default_quality(&[option("1080", Some(1080)), option("720", Some(720))]),
+            "720"
+        );
+        assert_eq!(
+            default_quality(&[option("2160", Some(2160)), option("360", Some(360))]),
+            "360"
+        );
+        assert_eq!(
+            default_quality(&[option("1080", Some(1080)), option("audio", None)]),
+            "1080"
+        );
+        assert_eq!(default_quality(&[option("audio", None)]), "audio");
     }
 
     #[test]
