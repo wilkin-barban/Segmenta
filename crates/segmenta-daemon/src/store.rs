@@ -425,9 +425,11 @@ impl Default for Settings {
             capture_torrents: true,
             capture_magnet: true,
             capture_extensions: vec![
-                "7z", "avi", "bin", "bz2", "deb", "dmg", "flac", "gz", "iso", "m4a", "mkv", "mp3",
-                "mp4", "mpeg", "msi", "ogg", "pdf", "rar", "tar", "tgz", "webm", "wav", "xz",
-                "zip",
+                "3gp", "7z", "aac", "ace", "aif", "apk", "arj", "asf", "avi", "bin", "bz2", "exe",
+                "gz", "gzip", "img", "iso", "lzh", "m4a", "m4v", "mkv", "mov", "mp3", "mp4", "mpa",
+                "mpe", "mpeg", "mpg", "msi", "msu", "ogg", "ogv", "pdf", "plj", "pps", "ppt", "qt",
+                "r0*", "r1*", "ra", "rar", "rm", "rmvb", "sea", "sit", "sitx", "tar", "tif",
+                "tiff", "wav", "wma", "wmv", "z", "zip", "pkg",
             ]
             .into_iter()
             .map(str::to_string)
@@ -1182,6 +1184,20 @@ impl Store {
         }
         settings = serde_json::from_value(object)
             .map_err(|err| StoreError::Invalid(format!("stored settings are invalid: {err}")))?;
+        // 0.1.0 stored the old 24-extension list. Upgrade that exact default in
+        // memory for existing profiles; a custom list is left untouched.
+        let legacy_capture = [
+            "7z", "avi", "bin", "bz2", "deb", "dmg", "flac", "gz", "iso", "m4a", "mkv", "mp3",
+            "mp4", "mpeg", "msi", "ogg", "pdf", "rar", "tar", "tgz", "webm", "wav", "xz", "zip",
+        ];
+        if settings.capture_extensions
+            == legacy_capture
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+        {
+            settings.capture_extensions = Settings::default().capture_extensions;
+        }
         Ok(settings)
     }
 

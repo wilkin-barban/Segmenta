@@ -262,6 +262,7 @@ catalog! {
     MediaVideoBadge => { en: "Video", es: "Video", pt: "Vídeo" },
     MediaAudioBadge => { en: "Audio", es: "Audio", pt: "Áudio" },
     MediaPlaylistBadge => { en: "Playlist", es: "Playlist", pt: "Playlist" },
+    MediaTorrentBadge => { en: "Torrent", es: "Torrent", pt: "Torrent" },
     MediaTitle => { en: "Title", es: "Título", pt: "Título" },
     MediaKind => { en: "Kind", es: "Tipo", pt: "Tipo" },
     MediaFormats => { en: "video formats", es: "formatos de video", pt: "formatos de vídeo" },

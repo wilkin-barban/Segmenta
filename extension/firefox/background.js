@@ -114,10 +114,11 @@ if (typeof importScripts === 'function') {
   }
 
   async function getCachedSettings() {
+    const cacheVersion = '0.1.1';
     try {
       if (API.storage && typeof API.storage.get === 'function') {
-        const stored = await API.storage.get(['segmenta_settings']);
-        if (stored && stored.segmenta_settings) {
+        const stored = await API.storage.get(['segmenta_settings', 'segmenta_settings_version']);
+        if (stored && stored.segmenta_settings && stored.segmenta_settings_version === cacheVersion) {
           return stored.segmenta_settings;
         }
       }
@@ -127,7 +128,7 @@ if (typeof importScripts === 'function') {
     if (reply.ok && reply.data) {
       try {
         if (API.storage && typeof API.storage.set === 'function') {
-          await API.storage.set({ segmenta_settings: reply.data });
+          await API.storage.set({ segmenta_settings: reply.data, segmenta_settings_version: cacheVersion });
         }
       } catch (err) {}
       return reply.data;

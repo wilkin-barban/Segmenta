@@ -1665,7 +1665,7 @@ impl Manager {
             total_bytes,
             downloaded_bytes: 0,
             status: DownloadStatus::Pending,
-            supports_ranges: true,
+            supports_ranges: false,
             etag: None,
             last_modified: None,
             content_type: Some(
@@ -1686,7 +1686,7 @@ impl Manager {
             created_at: None,
             completed_at: None,
             filename: name.to_string(),
-            media_kind: None,
+            media_kind: Some(source_type.to_string()),
             media_format: None,
             playlist_title: None,
             playlist_count: None,

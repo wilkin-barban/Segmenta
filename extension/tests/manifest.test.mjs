@@ -16,7 +16,7 @@ export default function suite({ test }) {
   test('chromium manifest is a minimal MV3 manifest', async () => {
     const manifest = readJson('chromium', 'manifest.json');
     assert.equal(manifest.manifest_version, 3);
-    assert.equal(manifest.version, '0.1.0');
+    assert.equal(manifest.version, '0.1.1');
     assert.equal(manifest.default_locale, 'es');
     assert.equal(typeof manifest.name, 'string');
     assert.equal(typeof manifest.description, 'string');
@@ -91,7 +91,7 @@ export default function suite({ test }) {
   test('firefox manifest is a WebExtension with the gecko id', async () => {
     const manifest = readJson('firefox', 'manifest.json');
     assert.equal(manifest.manifest_version, 3);
-    assert.equal(manifest.version, '0.1.0');
+    assert.equal(manifest.version, '0.1.1');
     assert.equal(manifest.browser_specific_settings.gecko.id, 'segmenta@wilkin.github.io');
     assert.equal(manifest.permissions.includes('nativeMessaging'), true);
     assert.equal(manifest.permissions.includes('storage'), true);

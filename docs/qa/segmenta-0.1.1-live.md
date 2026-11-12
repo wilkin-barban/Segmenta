@@ -1,27 +1,38 @@
-# Segmenta 0.1.1 — QA en vivo (pendiente del usuario)
+# Segmenta 0.1.1 — QA en vivo
 
-Plan: `/home/wilkin/.commandcode/plans/segmenta-0.1.1.md`. Nada publicado; `v0.1.0` intacto.
+Plan: `/home/wilkin/.commandcode/plans/segmenta-0.1.1.md`. Release `v0.1.1`.
 
-## Estado por fase
+## Fases
 
 | Fase | Estado | Evidencia |
 | --- | --- | --- |
-| T1 hover/back | **Implementado y verificado** | `183b154`; `hovering_a_row_never_opens_the_detail`; suites GUI verdes |
-| T2 settings + reglas + Preferencias | **Implementado y verificado** | `642eabb`, `775bf1e`; `segmenta-core::rules` (4 tests), validación de settings, página Descargas web |
-| T3 detección de navegadores + RPC + assets | **Parcial** | detección con `snap`/`flatpak`, `extension.status`, `extension.install-native` (manifiestos por usuario, nunca sobrescribe), ZIPs y README en `/usr/share/segmenta/extensions`; falta la página **Navegadores** en la GUI |
-| T4 captura del navegador | Pendiente | `downloads.onCreated`, `contextMenus`, `download.add`, cancelación nativa |
-| T5 torrents (librqbit, schema v3) | Pendiente | `torrent.probe/add/status`, CLI, GUI, handler `magnet:` |
-| T6/T7 empaquetado 0.1.1, docs, gates | Pendiente | bump de versión, notas de release, `.deb` 0.1.1 |
+| T1 hover/back | **Verde** | `183b154`; `hovering_a_row_never_opens_the_detail`; GUI 11/11 |
+| T2 settings, reglas y Preferencias | **Verde** | `642eabb`, `775bf1e`; página Descargas web; lista completa de 54 extensiones; reglas `r0*`/`r1*` |
+| T3 detección e instalación | **Verde** | `7c32536`, `4b1061d`; página Navegadores; snap/Flatpak marcados; manifiestos por usuario; assets empaquetados |
+| T4 captura del navegador | **Verde** | `76b45d0`, `bbb4b20`; `downloads.onCreated`, `contextMenus`, cancelación, `.torrent`/magnet; 76 tests Node |
+| T5 torrents | **Verde** | `6c7879d`, `a33b2ff`, `6aa60d3`; schema v3, `librqbit`, motor compartido, RPC/CLI, cancelación y 46 suites |
+| T6/T7 empaquetado | **Verde** | `.deb` 0.1.1, 22/22 rutas, `check-package`, clippy y gui smoke |
 
-## Qué debe probar el QA (cuando T4/T5 estén)
+## Pruebas reales en Ubuntu
 
-1. Hover sobre la lista: el detalle **no** se abre; un clic sí; “Atrás” limpia la selección.
-2. Preferencias → Descargas web: activar captura, editar extensiones (`r05` cae en `r0*`), denylist.
-3. Navegadores: Chrome/Firefox oficiales “Listo”; snap reportado como no soportado; instalación del manifiesto por usuario.
-4. Captura real: descarga `.zip`/`.mp4` desde el navegador → se cancela la nativa y aparece en Segmenta con su nombre.
-5. `.torrent` multiarchivo y `magnet:` por menú contextual y por handler del sistema; rutas hostiles rechazadas.
+- Hover: no abre el detalle; clic normal sí. `segmenta-gui --smoke` → `SMOKE OK rows=1 segments=4`.
+- `segmenta torrent probe` con magnet y `.torrent` HTTP.
+- Motor torrent real: Sintel (`webtorrent.io/torrents/sintel.torrent`) descargó 91.160.439 B y se canceló correctamente.
+- Captura Chrome for Testing: ZIP 524.288 B descargado desde HTTP local, cancelado en el navegador y completado por Segmenta.
+- Firefox 160 oficial: extensión temporal, panel con calidades (prueba de 0.1.0; el manifiesto 0.1.1 conserva el mismo flujo).
+- `yt-dlp 2026.10.26`, `ffmpeg 8.0.1`; `allow_local_downloads` se activó solo para el fixture HTTP local.
 
-## Riesgos abiertos
+## Hallazgos abiertos
 
-- `librqbit` aún no evaluado en este workspace: si su API no cubre magnet/DHT, se documenta antes de tocar el schema v3.
-- La captura depende del permiso `downloads` (visible al instalar la extensión).
+- El primer download inmediatamente al arrancar Chrome puede ocurrir antes de que el service worker registre el listener; los downloads posteriores se capturan. Documentado como limitación de arranque en frío.
+- `torrent.probe` de `.torrent` multiarchivo aún devuelve `total_bytes=0` y un solo `files` de longitud 0; el motor real sí reporta el total durante la descarga. Mejora para 0.1.2.
+- El motor marca `supports_ranges=true` en la vista de torrent; no afecta la descarga, pero debería ser `false`.
+- Firefox snap sigue sin poder ejecutar el host nativo; Firefox oficial funciona.
+- El handler `magnet:` se instala como `.desktop`, pero el usuario debe registrarlo con `xdg-mime default segmenta-handler.desktop x-scheme-handler/magnet` si su escritorio no lo hace solo.
+
+## Artefactos
+
+- `segmenta_0.1.1-1_amd64.deb` — 6.8 MB — `a62123f795eb3855f8e4c676eb6f8395767d7f84d0fc5797f53a235c3ce7a450`
+- `segmenta-extension-0.1.1.zip` — `342980b7cd33e1e5e9a48788385c2bc8705d619db4a59436eb81773ac6e08ee6`
+- `segmenta-firefox-0.1.1.zip` — `95446187c127b0ec496ebf3e5f727816ebdafe22e36c2f1e0cba210f91040233`
+- `segmenta_0.1.1-1_amd64.deb.sha256`
