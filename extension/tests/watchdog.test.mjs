@@ -144,6 +144,10 @@ function setupFakeBrowser(settings, options = {}) {
       resume(id, cb) {
         resumed.push(id);
         timeline.push('resume:' + id);
+        // Lets a test arm another capture in the middle of a sweep.
+        if (typeof options.onResume === 'function') {
+          options.onResume(id, storageData);
+        }
         if (cb) cb();
       },
       cancel(id, cb) {
@@ -424,6 +428,46 @@ export default function suite({ test }) {
     assert.deepEqual(env.resumed.sort(), [704, 705], 'every salvageable paused download is resumed');
     assert.deepEqual(env.pendingRecords(), [], 'no unreadable record survives the sweep');
     assert.equal(env.alarms.active.size, 0, 'the watchdog is cleared once no record remains');
+  });
+
+  test('watchdog: a record without a window id yet is kept, not resumed', async () => {
+    // Number(null) is 0 and an integer: reading it as a window id would make a live
+    // confirmation window look gone and resume the download before its deadline.
+    const env = setupFakeBrowser(settingsWith());
+    env.storageData[PENDING_KEY] = [
+      { v: PENDING_SCHEMA, downloadId: 710, url: ZIP_URL, deadline: Date.now() + 60000, windowId: null },
+    ];
+    await bootWorker();
+    await env.fireAlarm();
+
+    assert.deepEqual(env.resumed, [], 'a record with an unrecorded window is not resumed');
+    assert.equal(env.pendingRecords().length, 1, 'the record survives until its deadline');
+    assert.equal(env.alarms.active.size, 1, 'and its watchdog stays armed');
+  });
+
+  test('watchdog: a capture armed while the sweep awaits is never dropped', async () => {
+    // The sweep resumes first and writes afterwards. Writing the list it read before
+    // those awaits would erase a capture armed in between, leaving it paused with no
+    // watchdog at all.
+    const armed = { v: PENDING_SCHEMA, downloadId: 721, url: ZIP_URL, deadline: Date.now() + 60000, windowId: null };
+    const env = setupFakeBrowser(settingsWith(), {
+      onResume: (id, storageData) => {
+        const current = Array.isArray(storageData[PENDING_KEY]) ? storageData[PENDING_KEY] : [];
+        storageData[PENDING_KEY] = current
+          .filter((record) => record && record.downloadId !== id)
+          .concat([armed]);
+      },
+    });
+    env.storageData[PENDING_KEY] = [
+      { v: PENDING_SCHEMA, downloadId: 720, url: ZIP_URL, deadline: Date.now() - 1000, windowId: 900 },
+    ];
+    await bootWorker();
+    await env.fireAlarm();
+
+    assert.deepEqual(env.resumed, [720], 'only the expired download is resumed');
+    const ids = env.pendingRecords().map((record) => record.downloadId);
+    assert.deepEqual(ids, [721], 'the capture armed during the sweep keeps its record');
+    assert.equal(env.alarms.active.size, 1, 'and its watchdog is not cleared');
   });
 
   test('watchdog: a fresh browser run heals a leftover record on startup', async () => {
