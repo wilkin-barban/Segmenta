@@ -691,6 +691,78 @@ fn edit_list(
     dialog.present(Some(parent));
 }
 
+/// Antivirus section: the engine is external, so the switch, the timeout and the
+/// quarantine folder are the only things the GUI owns (OpenSpec 12 §5).
+pub struct AntivirusPage {
+    pub page: adw::PreferencesPage,
+    pub group: adw::PreferencesGroup,
+    pub enabled: adw::SwitchRow,
+    pub timeout: adw::SpinRow,
+    pub quarantine: adw::ActionRow,
+}
+
+/// Builds the Antivirus page.
+///
+/// `save` receives the `settings.update` patch for one control; the caller decides how to
+/// send it, so the page stays testable without a daemon.
+pub fn antivirus_page(
+    _parent: &adw::ApplicationWindow,
+    settings: &Settings,
+    save: std::rc::Rc<dyn Fn(serde_json::Value)>,
+) -> AntivirusPage {
+    let page = adw::PreferencesPage::builder()
+        .title(tr(locale(), Msg::PrefsAntivirus))
+        .icon_name("security-high-symbolic")
+        .build();
+    let group = adw::PreferencesGroup::builder()
+        .title(tr(locale(), Msg::PrefsAntivirus))
+        .description(tr(locale(), Msg::AntivirusHint))
+        .build();
+
+    let enabled = adw::SwitchRow::builder()
+        .title(tr(locale(), Msg::AntivirusEnabled))
+        .subtitle(tr(locale(), Msg::AntivirusEnabledHint))
+        .active(settings.antivirus_enabled)
+        .build();
+    {
+        let save = std::rc::Rc::clone(&save);
+        enabled.connect_active_notify(move |row| {
+            save(serde_json::json!({ "antivirus_enabled": row.is_active() }));
+        });
+    }
+    group.add(&enabled);
+
+    let timeout = adw::SpinRow::with_range(1.0, 3600.0, 1.0);
+    timeout.set_title(tr(locale(), Msg::AntivirusTimeout));
+    timeout.set_subtitle(tr(locale(), Msg::AntivirusTimeoutHint));
+    timeout.set_value(settings.antivirus_timeout_secs.clamp(1, 3600) as f64);
+    {
+        let save = std::rc::Rc::clone(&save);
+        timeout.connect_value_notify(move |row| {
+            let seconds = row.value().clamp(1.0, 3600.0) as u64;
+            save(serde_json::json!({ "antivirus_timeout_secs": seconds }));
+        });
+    }
+    group.add(&timeout);
+
+    let quarantine = adw::ActionRow::builder()
+        .title(tr(locale(), Msg::AntivirusQuarantineDir))
+        .subtitle(settings.antivirus_quarantine_dir.clone())
+        .activatable(true)
+        .build();
+    quarantine.add_suffix(&gtk::Image::from_icon_name("folder-open-symbolic"));
+    group.add(&quarantine);
+
+    page.add(&group);
+    AntivirusPage {
+        page,
+        group,
+        enabled,
+        timeout,
+        quarantine,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_tokens;

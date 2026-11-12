@@ -5,6 +5,8 @@
 //! `gtk::init()` refuses to run twice, so every test body is executed on one
 //! dedicated harness thread that initialises the toolkit once.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -14,7 +16,8 @@ use serde_json::{json, Value};
 
 use segmenta_gui::adw::prelude::*;
 use segmenta_gui::client::{Client, DemoClient};
-use segmenta_gui::model::{DownloadStatus, Filter};
+use segmenta_gui::model::{DownloadStatus, Filter, Settings, ERR_ANTIVIRUS_UNAVAILABLE};
+use segmenta_gui::prefs;
 use segmenta_gui::window::{SegmentaWindow, ViewState};
 use segmenta_gui::{adw, glib, gtk};
 
@@ -171,6 +174,59 @@ fn download_row(task_id: &str, status: &str, segment_count: u32) -> Value {
 fn window_with(app: &adw::Application, fake: &DemoClient) -> SegmentaWindow {
     let client: Arc<dyn Client> = Arc::new(fake.clone());
     SegmentaWindow::new(app, client)
+}
+
+/// Empty application window used as the parent of the preferences dialog.
+fn prefs_parent(app: &adw::Application) -> adw::ApplicationWindow {
+    adw::ApplicationWindow::builder()
+        .application(app)
+        .title("Segmenta")
+        .build()
+}
+
+/// `settings.get` answer with the antivirus keys A2 persists (OpenSpec 12 §5).
+fn antivirus_settings() -> Settings {
+    serde_json::from_value(json!({
+        "max_connections": 8,
+        "download_dir": "/home/user/Descargas",
+        "antivirus_enabled": true,
+        "antivirus_timeout_secs": 300,
+        "antivirus_quarantine_dir": ANTIVIRUS_QUARANTINE_DIR
+    }))
+    .expect("the daemon settings payload must deserialize")
+}
+
+/// Records every `settings.update` patch the page enqueues, in order.
+/// Records the patches a preferences control enqueues.
+type PatchLog = (Rc<RefCell<Vec<Value>>>, Rc<dyn Fn(Value)>);
+
+fn recorded_patches() -> PatchLog {
+    let log: Rc<RefCell<Vec<Value>>> = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&log);
+    (
+        log,
+        Rc::new(move |patch: Value| sink.borrow_mut().push(patch)),
+    )
+}
+
+const ANTIVIRUS_QUARANTINE_DIR: &str = "/home/user/.local/share/segmenta/quarantine";
+
+/// Path the daemon reports for the file it moved out of Downloads.
+const QUARANTINED_FILE: &str = "/home/user/.local/share/segmenta/quarantine/eicar.com.txt";
+
+/// The three catalog spellings of the quarantine state, so the assertion does not
+/// depend on the locale the suite runs with.
+const QUARANTINE_LABELS: [&str; 3] = ["En cuarentena", "In quarantine", "Em quarentena"];
+
+/// A failed task the antivirus quarantined: `ERR_ANTIVIRUS_FOUND` (1046).
+fn quarantined_row() -> Value {
+    let mut row = download_row("infected", "failed", 1);
+    row["final_path"] = json!("/home/user/Descargas/eicar.com.txt");
+    row["filename"] = json!("eicar.com.txt");
+    row["error_code"] = json!(1046);
+    row["error_message"] = json!("ERR_ANTIVIRUS_FOUND: Eicar-Test-Signature FOUND");
+    row["quarantine_path"] = json!(QUARANTINED_FILE);
+    row
 }
 
 /// A row with no segments, cheap enough to build a snapshot of hundreds.
@@ -489,5 +545,162 @@ fn empty_and_error_states_are_distinct() {
         // Filters stay usable without rows.
         empty_window.set_filter(Filter::Active);
         assert_eq!(empty_window.filter(), Filter::Active);
+    });
+}
+
+#[test]
+fn antivirus_page_paints_the_values_the_daemon_sent() {
+    run_gui("antivirus_page_paints_the_values", || {
+        let app = app("io.github.wilkin.Segmenta.TestAntivirusPrefs");
+        let parent = prefs_parent(&app);
+        let settings = antivirus_settings();
+        let (_, save) = recorded_patches();
+        let page = prefs::antivirus_page(&parent, &settings, save);
+
+        assert!(
+            page.enabled.is_active(),
+            "the switch ignored `antivirus_enabled: true`"
+        );
+        assert_eq!(
+            page.timeout.value(),
+            300.0,
+            "the timeout row ignored `antivirus_timeout_secs`"
+        );
+        assert_eq!(
+            page.quarantine.subtitle().as_deref(),
+            Some(ANTIVIRUS_QUARANTINE_DIR),
+            "the folder row ignored `antivirus_quarantine_dir`"
+        );
+        assert!(
+            !page.page.title().is_empty(),
+            "the page has no title from the catalog"
+        );
+        // The explanation of the external engine rides on the group, and it must be a
+        // real sentence: the caveat of the switch is not a tooltip someone can miss.
+        let hint = page.group.description().unwrap_or_default().to_string();
+        assert!(
+            hint.len() > 60,
+            "the antivirus explanation is missing: `{hint}`"
+        );
+        assert_eq!(page.group.title().as_str(), page.page.title().as_str());
+    });
+}
+
+#[test]
+fn antivirus_controls_save_the_values_they_show() {
+    run_gui("antivirus_controls_save", || {
+        let app = app("io.github.wilkin.Segmenta.TestAntivirusSave");
+        let parent = prefs_parent(&app);
+        let settings = antivirus_settings();
+        let (log, save) = recorded_patches();
+        let page = prefs::antivirus_page(&parent, &settings, save);
+
+        page.enabled.set_active(false);
+        let last = log
+            .borrow()
+            .last()
+            .cloned()
+            .expect("the switch saved nothing");
+        assert_eq!(last, json!({ "antivirus_enabled": false }));
+
+        page.timeout.set_value(45.0);
+        let last = log
+            .borrow()
+            .last()
+            .cloned()
+            .expect("the timeout saved nothing");
+        assert_eq!(last, json!({ "antivirus_timeout_secs": 45 }));
+
+        // The row keeps the daemon's real bounds (1–3600 s), not a UI invention.
+        page.timeout.set_value(0.0);
+        assert_eq!(page.timeout.value(), 1.0, "the timeout accepted 0 s");
+        page.timeout.set_value(7_200.0);
+        assert_eq!(page.timeout.value(), 3600.0, "the timeout accepted 2 h");
+        let last = log
+            .borrow()
+            .last()
+            .cloned()
+            .expect("the clamped timeout saved nothing");
+        assert_eq!(last, json!({ "antivirus_timeout_secs": 3600 }));
+    });
+}
+
+#[test]
+fn quarantined_task_paints_the_state_and_the_quarantine_path() {
+    run_gui("quarantined_task_paints_the_state", || {
+        let app = app("io.github.wilkin.Segmenta.TestQuarantine");
+        let fake = DemoClient::with_downloads(vec![quarantined_row()]);
+        let window = window_with(&app, &fake);
+        assert!(pump_until(
+            || window.rows().len() == 1,
+            Duration::from_secs(5)
+        ));
+        assert!(window.click_task("infected"), "the task is not selectable");
+        assert!(
+            pump_until(
+                || window.detail_state().is_some() && window.detail_quarantine().is_some(),
+                Duration::from_secs(5)
+            ),
+            "the quarantined detail painted no state (state {:?})",
+            window.view_state()
+        );
+
+        let state = window.detail_state().expect("the state pill");
+        assert!(
+            QUARANTINE_LABELS.contains(&state.as_str()),
+            "the quarantined task is painted as `{state}`"
+        );
+        let path = window.detail_path().expect("the path label");
+        assert_eq!(path, QUARANTINED_FILE, "the detail painted `{path}`");
+        assert!(
+            !path.contains("Descargas"),
+            "the detail still claims the file is in Downloads: {path}"
+        );
+        let notice = window.detail_quarantine().expect("the quarantine notice");
+        assert!(
+            notice.contains(QUARANTINED_FILE),
+            "the notice hides the quarantine path: {notice}"
+        );
+        // Opening the Downloads folder would point at a file the daemon moved away.
+        let actions = window.detail_actions();
+        assert!(
+            !actions.contains(&"open_folder".to_string()),
+            "a quarantined task offers open_folder: {actions:?}"
+        );
+    });
+}
+
+#[test]
+fn missing_engine_failure_is_not_painted_as_quarantine() {
+    run_gui("missing_engine_is_not_quarantine", || {
+        let app = app("io.github.wilkin.Segmenta.TestAntivirusUnavailable");
+        let mut row = download_row("no-engine", "failed", 1);
+        row["error_code"] = json!(ERR_ANTIVIRUS_UNAVAILABLE);
+        row["error_message"] =
+            json!("ERR_ANTIVIRUS_UNAVAILABLE: neither clamdscan nor clamscan is available");
+        let fake = DemoClient::with_downloads(vec![row]);
+        let window = window_with(&app, &fake);
+        assert!(pump_until(
+            || window.rows().len() == 1,
+            Duration::from_secs(5)
+        ));
+        assert!(window.click_task("no-engine"));
+        assert!(
+            pump_until(|| window.detail_state().is_some(), Duration::from_secs(5)),
+            "the failed detail painted no state (state {:?})",
+            window.view_state()
+        );
+
+        // 1047 is the engine, not an infection: no quarantine label and no path.
+        let state = window.detail_state().expect("the state pill");
+        assert!(
+            !QUARANTINE_LABELS.contains(&state.as_str()),
+            "a missing engine is painted as `{state}`"
+        );
+        assert_eq!(window.detail_quarantine(), None);
+        assert_eq!(
+            window.detail_path().as_deref(),
+            Some("/home/user/Descargas/ubuntu-26.04-desktop-amd64.iso")
+        );
     });
 }
