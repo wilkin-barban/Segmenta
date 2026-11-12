@@ -513,8 +513,11 @@ if (typeof importScripts === 'function') {
       return { ok: false, downloadId: null };
     }
     const deadline = Number(raw.deadline);
+    // `null` means "the confirmation window is not recorded yet", never window 0:
+    // Number(null) is 0 and an integer, which would make a live window look gone.
+    const hasWindow = raw.windowId !== null && raw.windowId !== undefined;
     const windowId = Number(raw.windowId);
-    const windowIsKnown = raw.windowId === null || raw.windowId === undefined || Number.isInteger(windowId);
+    const windowIsKnown = !hasWindow || (Number.isInteger(windowId) && windowId > 0);
     const valid = Number(raw.v) === PENDING_CAPTURE_SCHEMA
       && Number.isFinite(deadline)
       && deadline > 0
@@ -533,7 +536,7 @@ if (typeof importScripts === 'function') {
         url: raw.url,
         filename: typeof raw.filename === 'string' ? raw.filename : '',
         referrer: typeof raw.referrer === 'string' ? raw.referrer : '',
-        windowId: Number.isInteger(windowId) ? windowId : null,
+        windowId: hasWindow && Number.isInteger(windowId) ? windowId : null,
         deadline: deadline,
       },
     };
@@ -685,40 +688,58 @@ if (typeof importScripts === 'function') {
       // Storage unreadable: the in-memory timers remain, nothing is resumed blind.
       return summary;
     }
-    if (records.length === 0) {
-      await clearCaptureWatchdogAlarm();
-      return summary;
-    }
     const now = Date.now();
-    const keep = [];
+    const resumeIds = [];
     for (const raw of records) {
       const parsed = parsePendingRecord(raw);
       if (!parsed.ok) {
         if (parsed.downloadId !== null) {
-          await resumeDownload(parsed.downloadId);
-          summary.resumed.push(parsed.downloadId);
+          resumeIds.push(parsed.downloadId);
         }
-        summary.dropped += 1;
         continue;
       }
       const record = parsed.record;
       if (record.deadline <= now) {
-        await resumeDownload(record.downloadId);
-        summary.resumed.push(record.downloadId);
+        resumeIds.push(record.downloadId);
+        continue;
+      }
+      // The window id is remembered right after it is created. A record without one
+      // still has its deadline, so keep it instead of resuming a live window.
+      if (record.windowId === null) {
         continue;
       }
       if (!(await confirmWindowStillOpen(record.windowId))) {
-        await resumeDownload(record.downloadId);
-        summary.resumed.push(record.downloadId);
-        continue;
+        resumeIds.push(record.downloadId);
       }
-      keep.push(record);
     }
+    for (const downloadId of resumeIds) {
+      await resumeDownload(downloadId);
+      summary.resumed.push(downloadId);
+    }
+    // The window checks await, so a capture can be armed meanwhile. The write is
+    // therefore computed from a fresh read inside the lock and removes only the ids
+    // this sweep decided to resume: a record armed during the sweep is never dropped
+    // and its alarm is never cleared.
+    let kept;
     try {
-      await withPendingStore(() => writePendingRecords(keep));
-    } catch (err) {}
-    summary.kept = keep.length;
-    if (keep.length === 0) {
+      kept = await withPendingStore(async () => {
+        const current = await readPendingRecords();
+        const survivors = current.filter((raw) => {
+          const parsed = parsePendingRecord(raw);
+          if (!parsed.ok) {
+            summary.dropped += 1;
+            return false;
+          }
+          return !resumeIds.includes(parsed.record.downloadId);
+        });
+        await writePendingRecords(survivors);
+        return survivors.length;
+      });
+    } catch (err) {
+      return summary;
+    }
+    summary.kept = kept;
+    if (kept === 0) {
       await clearCaptureWatchdogAlarm();
     } else {
       try {
