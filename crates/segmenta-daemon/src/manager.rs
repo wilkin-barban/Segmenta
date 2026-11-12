@@ -2047,6 +2047,12 @@ impl RpcHandler for Manager {
                 }
                 "extension.status" => {
                     let browsers = crate::browsers::detect();
+                    let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
+                    let config_home = std::env::var("XDG_CONFIG_HOME")
+                        .ok()
+                        .filter(|value| !value.is_empty())
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_else(|| home.join(".config"));
                     Ok(json!({
                         "extension_id": crate::browsers::CHROMIUM_EXTENSION_ID,
                         "host_path": crate::browsers::HOST_PATH,
@@ -2059,6 +2065,29 @@ impl RpcHandler for Manager {
                             "unsupported": browser.unsupported,
                             "manifest_path": browser.manifest_path.to_string_lossy(),
                             "manifest_present": browser.manifest_present,
+                            "user_manifest_present": crate::browsers::user_manifest_path(
+                                browser.id,
+                                &home,
+                                &config_home,
+                            )
+                            .map(|path| path.is_file())
+                            .unwrap_or(false),
+                            "extension_installed": crate::browsers::extension_installed(
+                                browser.id,
+                                &home,
+                                &config_home,
+                            ),
+                            "state": if browser.unsupported.is_some() {
+                                "unsupported"
+                            } else if browser.command.is_none() {
+                                "not-installed"
+                            } else if crate::browsers::extension_installed(browser.id, &home, &config_home) {
+                                "extension-installed"
+                            } else if browser.manifest_present {
+                                "native-ready"
+                            } else {
+                                "native-missing"
+                            },
                         })).collect::<Vec<_>>(),
                     }))
                 }

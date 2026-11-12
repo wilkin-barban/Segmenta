@@ -2,6 +2,9 @@
 
 use std::path::{Path, PathBuf};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 /// One browser the installer knows about.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Browser {
@@ -185,6 +188,76 @@ fn user_manifest_relative(id: &str) -> Option<&'static str> {
     })
 }
 
+/// Directory where a browser keeps unpacked/installed extensions.
+fn profile_roots(browser_id: &str, home: &Path, config_home: &Path) -> Vec<PathBuf> {
+    match browser_id {
+        "chrome" => vec![config_home.join("google-chrome")],
+        "chromium" => vec![config_home.join("chromium")],
+        "edge" => vec![config_home.join("microsoft-edge")],
+        "brave" => vec![config_home.join("BraveSoftware/Brave-Browser")],
+        "vivaldi" => vec![config_home.join("vivaldi")],
+        "opera" => vec![config_home.join("opera")],
+        "firefox" => vec![home.join(".mozilla/firefox")],
+        _ => Vec::new(),
+    }
+}
+
+/// Whether the browser profile shows the extension, read-only.
+///
+/// Chromium keeps an unpacked extension under `Default/Extensions/<id>`; Firefox
+/// records it under `<profile>/extensions/`. Nothing here writes to a profile.
+pub fn extension_installed(browser_id: &str, home: &Path, config_home: &Path) -> bool {
+    if browser_id == "firefox" {
+        for root in profile_roots(browser_id, home, config_home) {
+            let Ok(entries) = std::fs::read_dir(&root) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let extensions = entry.path().join("extensions");
+                let Ok(files) = std::fs::read_dir(&extensions) else {
+                    continue;
+                };
+                if files.flatten().any(|file| {
+                    file.file_name()
+                        .to_string_lossy()
+                        .starts_with(FIREFOX_EXTENSION_ID)
+                }) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+    for root in profile_roots(browser_id, home, config_home) {
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if entry
+                .path()
+                .join("Extensions")
+                .join(CHROMIUM_EXTENSION_ID)
+                .is_dir()
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Per-user manifest path for a browser, following XDG.
+pub fn user_manifest_path(browser_id: &str, home: &Path, config_home: &Path) -> Option<PathBuf> {
+    let relative = user_manifest_relative(browser_id)?;
+    let relative = relative.strip_prefix(".config/").unwrap_or(relative);
+    let base = if relative.starts_with(".mozilla") {
+        home.to_path_buf()
+    } else {
+        config_home.to_path_buf()
+    };
+    Some(base.join(relative).join("io.github.wilkin.segmenta.json"))
+}
+
 /// Manifest body for one browser family.
 pub fn manifest_json(family: &str) -> String {
     if family == "firefox" {
@@ -211,13 +284,29 @@ pub fn install_user_manifest(browser: &Browser, home: &Path) -> Result<PathBuf, 
     }
     let relative = user_manifest_relative(browser.id)
         .ok_or_else(|| format!("{} has no manifest location", browser.name))?;
-    let directory = home.join(relative);
+    if HOST_PATH.is_empty() {
+        return Err("the native host path is not configured".to_string());
+    }
+    // XDG_CONFIG_HOME wins over ~/.config for every browser that follows the spec.
+    let config_home = std::env::var("XDG_CONFIG_HOME")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"));
+    let relative = relative.strip_prefix(".config/").unwrap_or(relative);
+    let directory = if relative.starts_with(".mozilla") {
+        home.join(relative)
+    } else {
+        config_home.join(relative)
+    };
     std::fs::create_dir_all(&directory).map_err(|err| err.to_string())?;
     let path = directory.join("io.github.wilkin.segmenta.json");
     if path.exists() {
         return Ok(path);
     }
     std::fs::write(&path, manifest_json(browser.family)).map_err(|err| err.to_string())?;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+        .map_err(|err| err.to_string())?;
     Ok(path)
 }
 
@@ -285,6 +374,31 @@ mod tests {
         assert!(std::fs::read_to_string(firefox_manifest)
             .unwrap()
             .contains(FIREFOX_EXTENSION_ID));
+    }
+
+    #[test]
+    fn installed_extensions_are_detected_from_profiles_without_writing() {
+        let dir = fake_dir();
+        let home = dir.path().join("home");
+        let config_home = home.join(".config");
+        assert!(!extension_installed("chrome", &home, &config_home));
+        let profile = config_home
+            .join("google-chrome/Default/Extensions")
+            .join(CHROMIUM_EXTENSION_ID);
+        std::fs::create_dir_all(&profile).unwrap();
+        assert!(extension_installed("chrome", &home, &config_home));
+        assert!(!extension_installed("chromium", &home, &config_home));
+        let firefox_profile = home.join(".mozilla/firefox/abc.default/extensions");
+        std::fs::create_dir_all(&firefox_profile).unwrap();
+        std::fs::write(
+            firefox_profile.join(format!("{FIREFOX_EXTENSION_ID}.xpi")),
+            b"xpi",
+        )
+        .unwrap();
+        assert!(extension_installed("firefox", &home, &config_home));
+        // XDG wins for the per-user manifest path.
+        let path = user_manifest_path("chrome", &home, &config_home).unwrap();
+        assert!(path.starts_with(&config_home));
     }
 
     /// The constant and the shipped manifest must never drift again (0.1.2 P0).
