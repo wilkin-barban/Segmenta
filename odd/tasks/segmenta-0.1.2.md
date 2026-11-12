@@ -26,7 +26,7 @@ Sin tag ni Release hasta el QA real del usuario en Ubuntu. Rama `main`, commits 
 | T4 | S7, S8 | Orden de la lista, `focus_task`, `system.open`, `--show-task` y toast | inline + worker | `c0bfd60`, `763726b`, `1d15188` | hecho |
 | T5 | S9 | Panel de calidades agrupado, default 720p y handoff | worker | `1b60ef0`, `3375948`, `599ed3c`, `cd4c3a5` | hecho |
 | T6 | S10, S11 | Confirmación de captura y carpeta destino | worker ×2 + fixes | `d26ddda`, `b6ca348`, `f14c4cf`, `7d60465` | hecho |
-| T7 | todas | Gates, `.deb` 0.1.2 y QA en Ubuntu | inline | — | en curso |
+| T7 | todas | Gates, `.deb` 0.1.2 y QA en Ubuntu | inline | `33cd714` | hecho salvo el QA del usuario |
 
 ## Log
 
@@ -78,4 +78,7 @@ Sin tag ni Release hasta el QA real del usuario en Ubuntu. Rama `main`, commits 
 - L12: segunda regresión de la verificación, corregida en `f14c4cf`: la actualización de settings reemplazaba la lista 0.1.0 y perdía `dmg`, `flac`, `tgz` y `webm`; ahora es una unión idempotente y una lista personalizada nunca se reescribe.
 - L13: evidencia de las inversiones (copia en `/tmp`, nunca el worktree): mover `discard` antes de la espera de bytes rompe 14 tests; devolver `final_path` completo como carpeta rompe 1; sin `resume` en add fallido rompen 2; sin watchdog 1; nunca pausar 10. Gates del árbol corregido: 275 tests Rust, 141 Node, `pack --check` 19+19.
 - L14 (riesgo declarado, no corregido): si el service worker MV3 se suspende durante la espera de propiedad, la descarga puede quedar pausada sin poll en memoria. No se pierde nada, pero hay que reanudarla a mano; Firefox (MV2) no se ve afectado. Queda como candidato a 0.1.3.
+- L15 (revisión nativa del arreglo de captura): linaje `review-dee627e4c1000ef6` atado a `7d60465` con `committedOnly` y base `fe2a99cb`; tres lentes capturados (`risk`, `resilience`, `reliability`). Cierre: **escalado por causalidad desconocida** — el lente de resiliencia dejó `R4-1`/`R4-2` degradados por `unverified_location` y el refutador corroboró `R1-001` con «probe unavailable on pi». La acción del mantenedor es informativa y la revisión no autoriza entrega. El linaje anterior `review-916de24d72c08cc8` sigue pendiente de liberación por el usuario.
+- L16 (paquete 0.1.2): `33cd714` sube workspace y extensión a 0.1.2 y hace que el nombre del ZIP siga la versión del manifiesto (antes estaba fijo en 0.1.1). Evidencia: `dist/segmenta_0.1.2-1_amd64.deb` (7.120.652 B, sha256 `7240d3ad…`), `segmenta-extension-0.1.2.zip` (51.511 B, `77a87e2e…`), `segmenta-firefox-0.1.2.zip` (51.223 B, `d3fcf42b…`); `packaging/check-package.sh dist/segmenta_0.1.2-1_amd64.deb 0.1.2` → 22/22 rutas, desktop y appstream ok. Gates finales: `fmt` limpio, `clippy -D warnings` sin hallazgos, 275 tests Rust, 141 Node, `pack --check` 19+19.
+- L17 (pendiente del usuario, no ejecutado): tag, Release y QA real en Ubuntu con Chrome for Testing y Firefox oficial. Sin push ni publicación.
 
