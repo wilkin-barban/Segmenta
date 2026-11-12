@@ -102,6 +102,14 @@ Todos los mensajes siguen la especificación JSON-RPC 2.0 y declaran `"jsonrpc":
 * **Respuesta (`result`):**
   * `task_id` (string UUIDv4).
   * `status` (string: `"pending"` | `"probing"` | `"downloading"`).
+  * `filename` (string): nombre saneado de la tarea.
+  * `destination_dir` (string): **carpeta efectiva** donde se escribe el archivo, es decir
+    `destination_dir` del pedido o, si se omitió, el `download_dir` vigente.
+  * `final_path` (string): ruta absoluta **resuelta y desduplicada** que producirá la tarea
+    (`manual (1).deb` cuando `manual.deb` ya existe en la carpeta).
+* La ventana de confirmación de captura (S10) muestra exactamente ese par, y los mismos dos
+  campos viajan en el evento `task_added`. Ningún cliente necesita resolver la ruta por su
+  cuenta.
 
 ### 3.2. `download.pause`
 * **Parámetros:** `{"task_id": "c1f7a28e-..."}`
@@ -180,7 +188,8 @@ Todos los mensajes siguen la especificación JSON-RPC 2.0 y declaran `"jsonrpc":
 | `autostart` | boolean | false | systemd --user |
 | `download_dir` | string | `$XDG_DOWNLOAD_DIR` | ruta absoluta existente |
 | `category_dirs` | object | vacío | categoría → ruta absoluta |
-| `capture_extensions` | array[string] | lista de 04 | sin punto inicial |
+| `capture_extensions` | array[string] | lista de 04 ampliada en 0.1.2 | sin punto inicial; incluye `deb`, `rpm`, `appimage`, `xz`, `whl`, `jar`, `epub`, `vsix`, `xpi`, `msix` |
+| `capture_confirm` | boolean | true | pausa la descarga del navegador y abre la ventana de confirmación con nombre, host y carpeta efectiva; `false` captura sin preguntar |
 | `domain_denylist` | array[string] | [] | host exacto o sufijo explícito |
 | `schedule_start` | string/null | null | `HH:MM`, zona `America/Sao_Paulo` |
 | `schedule_stop` | string/null | null | `HH:MM` |
@@ -214,6 +223,21 @@ sitios no se devuelven: viven en el llavero (08) y se referencian por alias.
 ### 3.13. `system.status` y `system.shutdown`
 * **`system.status`:** Retorna versión del daemon, uptime en segundos, memoria en uso y conexiones activas.
 * **`system.shutdown`:** Pausa limpiamente todas las tareas activas, ejecuta checkpoint WAL y finaliza el proceso daemon con código de salida 0.
+
+### 3.14. `torrent.probe`, `torrent.add` y `torrent.status`
+* **`torrent.probe`:** `{"url": "magnet:?xt=urn:btih:..."}` o una URL `http(s)` de `.torrent`.
+  Devuelve `name`, `info_hash`, `total_bytes`, `files[]` y `source_type` (`magnet` | `torrent`).
+* **`torrent.add`:**
+  * **Parámetros:** `url` (obligatorio), `destination_dir` (string, opcional, ruta absoluta;
+    si se omite se usa `download_dir`), `seed_after_complete` (boolean, opcional, default false).
+  * **Respuesta:** `task_id`, `status` (`"downloading"`), `filename`, `info_hash`,
+    `destination_dir` (carpeta efectiva) y `final_path` (ruta resuelta y desduplicada del
+    payload). El evento `task_added` lleva el mismo par.
+  * Las rutas internas del torrent se sanean contra `destination_dir`: rutas absolutas,
+    `..` y cualquier escape de la carpeta base se rechazan con `-32602`.
+* **`torrent.status`:** `{"task_id": "..."}`; devuelve el estado de `download.status` más
+  `info_hash`, `seed_after_complete`, `uploaded_bytes`, `peers`, `files_count`, `files[]`,
+  `final_path` y `destination_dir`.
 
 ---
 
@@ -261,7 +285,7 @@ Todos los eventos emitidos por el daemon incluyen un identificador de secuencia 
 ```
 
 ### Eventos Definidos:
-1. **`task_added`**: Emitido cuando una nueva tarea ingresa a la cola.
+1. **`task_added`**: Emitido cuando una nueva tarea ingresa a la cola. Lleva la ubicación efectiva de la tarea (`destination_dir` y `final_path`) para todas las vías de alta: `download.add`, `media.add`, manifiestos y `torrent.add`.
 2. **`state_changed`**: Emitido en cualquier transición de la máquina de estados.
 3. **`segment_started`**: Un worker inicia la descarga de un bloque de bytes.
 4. **`segment_split`**: Un segmento activo fue dividido en caliente (contiene `donor_id`, `new_segment_id`, `midpoint`).
@@ -278,7 +302,7 @@ Todos los eventos emitidos por el daemon incluyen un identificador de secuencia 
 
 | `event_type` | `data` obligatorio |
 | --- | --- |
-| `task_added` | `task_id`, `status`, `url`, `final_path` |
+| `task_added` | `task_id`, `status`, `url`, `destination_dir`, `final_path` |
 | `state_changed` | `old_state`, `new_state`, `error_code?` |
 | `segment_started` | `segment_id`, `start_offset`, `end_offset` |
 | `segment_split` | `donor_segment_id`, `new_segment_id`, `midpoint`, `original_end` |

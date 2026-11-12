@@ -505,3 +505,111 @@ async fn system_open_rejects_an_unknown_task_before_touching_the_gui() {
         .expect_err("an unknown task must fail");
     assert_eq!(error.0, 1001);
 }
+
+/// S11: the `download.add` reply reports the directory the file is written into and
+/// the resolved, de-duplicated path the task will produce.
+#[tokio::test]
+async fn download_add_reports_the_effective_destination_and_final_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+    let destination = dir.path().join("capturas");
+    std::fs::create_dir_all(&destination).unwrap();
+    // The suggested name is already taken, so the effective path must be de-duplicated.
+    std::fs::write(destination.join("manual.deb"), b"already here").unwrap();
+    let mut events = h.bus.subscribe();
+
+    let added = call(
+        &h.manager,
+        "download.add",
+        json!({
+            "url": "https://example.test/manual.deb",
+            "destination_dir": destination.display().to_string(),
+            "filename": "manual.deb",
+            "start_immediately": false,
+        }),
+    )
+    .await
+    .unwrap();
+
+    let task_id = added["task_id"].as_str().unwrap().to_string();
+    assert_eq!(
+        added["destination_dir"],
+        json!(destination.display().to_string())
+    );
+    assert_eq!(
+        added["final_path"],
+        json!(destination.join("manual (1).deb").display().to_string())
+    );
+    assert_eq!(
+        h.store.get(&task_id).unwrap().unwrap().final_path,
+        destination.join("manual (1).deb").display().to_string()
+    );
+
+    // The event carries the same pair, so a client never re-resolves the path itself.
+    let event = tokio::time::timeout(Duration::from_millis(500), events.recv())
+        .await
+        .expect("task_added must be published")
+        .unwrap();
+    assert_eq!(event.event_type, "task_added");
+    assert_eq!(event.task_id.as_deref(), Some(task_id.as_str()));
+    assert_eq!(
+        event.data["destination_dir"],
+        json!(destination.display().to_string())
+    );
+    assert_eq!(
+        event.data["final_path"],
+        json!(destination.join("manual (1).deb").display().to_string())
+    );
+}
+
+/// S11: `capture_confirm` defaults to true, is writable and the extension list is widened.
+#[tokio::test]
+async fn settings_expose_capture_confirm_and_the_widened_extension_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+
+    let defaults = call(&h.manager, "settings.get", json!({})).await.unwrap();
+    assert_eq!(defaults["capture_confirm"], json!(true));
+    let extensions = defaults["capture_extensions"].as_array().unwrap();
+    for token in [
+        "deb", "rpm", "appimage", "xz", "whl", "jar", "epub", "vsix", "xpi", "msix",
+    ] {
+        assert!(
+            extensions.iter().any(|value| value == token),
+            "missing capture extension {token}"
+        );
+    }
+    // The previous defaults are kept.
+    for token in ["zip", "rar", "iso", "pdf"] {
+        assert!(
+            extensions.iter().any(|value| value == token),
+            "lost capture extension {token}"
+        );
+    }
+
+    let updated = call(
+        &h.manager,
+        "settings.update",
+        json!({ "capture_confirm": false }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(updated["capture_confirm"], json!(false));
+    let reread = call(&h.manager, "settings.get", json!({})).await.unwrap();
+    assert_eq!(reread["capture_confirm"], json!(false));
+
+    // Unknown keys and wrong types stay rejected.
+    for bad in [
+        json!({ "capture_confirm_typo": true }),
+        json!({ "capture_confirm": "yes" }),
+    ] {
+        let error = call(&h.manager, "settings.update", bad.clone())
+            .await
+            .expect_err("must reject");
+        assert_eq!(error.0, -32602, "patch {bad}: {error:?}");
+    }
+    assert_eq!(
+        call(&h.manager, "settings.get", json!({})).await.unwrap()["capture_confirm"],
+        json!(false)
+    );
+}

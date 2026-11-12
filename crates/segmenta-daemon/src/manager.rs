@@ -2,7 +2,7 @@
 //! the event bus and persists checkpoints in the order OpenSpec 08 mandates.
 
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
@@ -339,6 +339,7 @@ impl Manager {
                 "task_id": task_id,
                 "status": "pending",
                 "url": record.url,
+                "destination_dir": destination_dir.to_string_lossy(),
                 "final_path": record.final_path,
             }),
         );
@@ -355,6 +356,10 @@ impl Manager {
                 .map(|record| record.status.as_str().to_string())
                 .unwrap_or_else(|| "pending".to_string()),
             "filename": record.filename,
+            // S11: the confirmation window shows where the file will actually land, so the
+            // reply names the effective directory and the resolved, de-duplicated path.
+            "destination_dir": destination_dir.to_string_lossy(),
+            "final_path": record.final_path,
         }))
     }
 
@@ -818,6 +823,17 @@ fn memory_bytes() -> u64 {
 
 fn store_error(err: StoreError) -> RpcError {
     RpcError::internal(err.to_string())
+}
+
+/// Directory a task writes into, derived from its resolved `final_path`.
+///
+/// `torrent.add` resolves the payload path inside the destination directory and only the
+/// path is persisted, so a later `torrent.status` recovers the directory from it.
+fn task_directory(final_path: &str) -> String {
+    Path::new(final_path)
+        .parent()
+        .map(|dir| dir.to_string_lossy().into_owned())
+        .unwrap_or_else(|| final_path.to_string())
 }
 
 fn is_sensitive(name: &HeaderName) -> bool {
@@ -1378,6 +1394,7 @@ impl Manager {
                 "task_id": task_id,
                 "status": "downloading",
                 "url": record.url,
+                "destination_dir": dir.to_string_lossy(),
                 "final_path": record.final_path,
                 "media_kind": mode,
             }),
@@ -1466,6 +1483,7 @@ impl Manager {
                 "task_id": task_id,
                 "status": "downloading",
                 "url": record.url,
+                "destination_dir": dir.to_string_lossy(),
                 "final_path": record.final_path,
                 "media_kind": "stream",
             }),
@@ -1743,6 +1761,7 @@ impl Manager {
                 "task_id": task_id,
                 "status": "pending",
                 "url": url,
+                "destination_dir": destination_dir.to_string_lossy(),
                 "final_path": record.final_path,
             }),
         );
@@ -1859,6 +1878,9 @@ impl Manager {
             "status": "downloading",
             "filename": name,
             "info_hash": info_hash,
+            // S11: the effective location of the payload, not just its name.
+            "destination_dir": destination_dir.to_string_lossy(),
+            "final_path": record.final_path,
         }))
     }
 
@@ -1889,6 +1911,10 @@ impl Manager {
                 map.insert("files_count".to_string(), json!(t.files_count));
             }
             map.insert("files".to_string(), json!(files));
+            map.insert(
+                "destination_dir".to_string(),
+                json!(task_directory(&record.final_path)),
+            );
         }
         Ok(view)
     }

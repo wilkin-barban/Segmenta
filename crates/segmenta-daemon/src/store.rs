@@ -390,6 +390,8 @@ pub struct Settings {
     pub capture_torrents: bool,
     /// Capture `magnet:` links from the context menu and the system handler.
     pub capture_magnet: bool,
+    /// Ask for confirmation (name, host and destination folder) before capturing a file.
+    pub capture_confirm: bool,
     /// Domains that must never be captured.
     pub domain_denylist: Vec<String>,
     /// Scheduler start time `HH:MM`.
@@ -424,12 +426,14 @@ impl Default for Settings {
             capture_enabled: true,
             capture_torrents: true,
             capture_magnet: true,
+            capture_confirm: true,
             capture_extensions: vec![
-                "3gp", "7z", "aac", "ace", "aif", "apk", "arj", "asf", "avi", "bin", "bz2", "exe",
-                "gz", "gzip", "img", "iso", "lzh", "m4a", "m4v", "mkv", "mov", "mp3", "mp4", "mpa",
-                "mpe", "mpeg", "mpg", "msi", "msu", "ogg", "ogv", "pdf", "plj", "pps", "ppt", "qt",
-                "r0*", "r1*", "ra", "rar", "rm", "rmvb", "sea", "sit", "sitx", "tar", "tif",
-                "tiff", "wav", "wma", "wmv", "z", "zip", "pkg",
+                "3gp", "7z", "aac", "ace", "aif", "apk", "appimage", "arj", "asf", "avi", "bin",
+                "bz2", "deb", "epub", "exe", "gz", "gzip", "img", "iso", "jar", "lzh", "m4a",
+                "m4v", "mkv", "mov", "mp3", "mp4", "mpa", "mpe", "mpeg", "mpg", "msi", "msix",
+                "msu", "ogg", "ogv", "pdf", "plj", "pps", "ppt", "qt", "r0*", "r1*", "ra", "rar",
+                "rm", "rmvb", "rpm", "sea", "sit", "sitx", "tar", "tif", "tiff", "vsix", "wav",
+                "whl", "wma", "wmv", "xpi", "xz", "z", "zip", "pkg",
             ]
             .into_iter()
             .map(str::to_string)
@@ -527,6 +531,7 @@ pub const SETTING_KEYS: &[&str] = &[
     "capture_enabled",
     "capture_torrents",
     "capture_magnet",
+    "capture_confirm",
     "domain_denylist",
     "schedule_start",
     "schedule_stop",
@@ -538,6 +543,27 @@ pub const SETTING_KEYS: &[&str] = &[
     "postprocess_command",
     "appearance",
 ];
+
+/// The 24-extension default persisted by 0.1.0.
+const LEGACY_CAPTURE_EXTENSIONS_0_1_0: &[&str] = &[
+    "7z", "avi", "bin", "bz2", "deb", "dmg", "flac", "gz", "iso", "m4a", "mkv", "mp3", "mp4",
+    "mpeg", "msi", "ogg", "pdf", "rar", "tar", "tgz", "webm", "wav", "xz", "zip",
+];
+
+/// The 54-extension default persisted by 0.1.1, before the archive and package formats of
+/// 0.1.2 (`deb`, `rpm`, `appimage`, `whl`, `jar`, `epub`, `vsix`, `xpi`, `msix`, `xz`).
+const LEGACY_CAPTURE_EXTENSIONS_0_1_1: &[&str] = &[
+    "3gp", "7z", "aac", "ace", "aif", "apk", "arj", "asf", "avi", "bin", "bz2", "exe", "gz",
+    "gzip", "img", "iso", "lzh", "m4a", "m4v", "mkv", "mov", "mp3", "mp4", "mpa", "mpe", "mpeg",
+    "mpg", "msi", "msu", "ogg", "ogv", "pdf", "plj", "pps", "ppt", "qt", "r0*", "r1*", "ra", "rar",
+    "rm", "rmvb", "sea", "sit", "sitx", "tar", "tif", "tiff", "wav", "wma", "wmv", "z", "zip",
+    "pkg",
+];
+
+/// Whether a stored list is byte-for-byte one of the historical defaults.
+fn is_legacy_capture_list(current: &[String], legacy: &[&str]) -> bool {
+    current.len() == legacy.len() && current.iter().zip(legacy).all(|(token, old)| token == old)
+}
 
 fn is_hh_mm(value: &str) -> bool {
     let Some((hh, mm)) = value.split_once(':') else {
@@ -1184,19 +1210,17 @@ impl Store {
         }
         settings = serde_json::from_value(object)
             .map_err(|err| StoreError::Invalid(format!("stored settings are invalid: {err}")))?;
-        // 0.1.0 stored the old 24-extension list. Upgrade that exact default in
-        // memory for existing profiles; a custom list is left untouched.
-        let legacy_capture = [
-            "7z", "avi", "bin", "bz2", "deb", "dmg", "flac", "gz", "iso", "m4a", "mkv", "mp3",
-            "mp4", "mpeg", "msi", "ogg", "pdf", "rar", "tar", "tgz", "webm", "wav", "xz", "zip",
-        ];
-        if settings.capture_extensions
-            == legacy_capture
-                .iter()
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>()
-        {
-            settings.capture_extensions = Settings::default().capture_extensions;
+        // Older releases stored their own default list as a row. Upgrade that exact
+        // default in memory for existing profiles; a list the user customized is left
+        // untouched. Keys written before they existed already took their default above.
+        for legacy in [
+            LEGACY_CAPTURE_EXTENSIONS_0_1_1,
+            LEGACY_CAPTURE_EXTENSIONS_0_1_0,
+        ] {
+            if is_legacy_capture_list(&settings.capture_extensions, legacy) {
+                settings.capture_extensions = Settings::default().capture_extensions;
+                break;
+            }
         }
         Ok(settings)
     }
