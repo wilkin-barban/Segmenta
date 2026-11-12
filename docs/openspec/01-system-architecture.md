@@ -11,8 +11,8 @@
 > prevalece sobre la tabla de §3.2.
 >
 > **12 (scheduler, post-proceso y site logins)** es el documento normativo de esas tres
-> piezas en 0.2.0 y **todavía no existe** en `docs/openspec/`: lo que §7 y §8 describen es el
-> contrato objetivo de la release, no comportamiento entregado.
+> piezas en 0.2.0: lo que §7 y §8 describen es el contrato objetivo de la release, no
+> comportamiento entregado.
 
 > **Alcance de esta revisión:** la versión publicada es **0.1.2** (`Cargo.toml`,
 > `extension/*/manifest.json`) y **0.2.0 está en preparación**. Todo lo que aquí se describe sin
