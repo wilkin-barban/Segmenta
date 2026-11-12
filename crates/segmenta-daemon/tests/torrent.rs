@@ -59,7 +59,9 @@ async fn torrent_rpc_surface_magnet() {
         .await
         .expect("torrent add");
     let task_id = added["task_id"].as_str().unwrap();
-    assert_eq!(added["status"], "pending");
+    // The engine starts the transfer immediately, so the reply is "downloading"
+    // (the pre-engine slice answered "pending").
+    assert_eq!(added["status"], "downloading");
 
     let status = manager
         .call("torrent.status", Some(json!({"task_id": task_id})))
