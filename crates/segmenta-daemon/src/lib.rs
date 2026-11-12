@@ -9,6 +9,7 @@ pub mod ipc;
 pub mod logging;
 pub mod manager;
 pub mod media;
+pub mod postprocess;
 pub mod rpc;
 pub mod scheduler;
 pub mod secrets;

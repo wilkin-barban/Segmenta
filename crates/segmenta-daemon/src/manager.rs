@@ -20,6 +20,7 @@ use segmenta_core::{planner, CoreError};
 
 use crate::events::EventBus;
 use crate::ipc::{hello_result, RpcHandler};
+use crate::postprocess::{HookOptions, HookRun, HookTarget};
 use crate::rpc::{
     AddDownloadParams, CancelParams, ChecksumParam, DeleteParams, DownloadView, ListParams,
     MediaAddParams, MediaProbeParams, MediaStatusParams, QueueCreateParams, QueueRemoveParams,
@@ -28,7 +29,8 @@ use crate::rpc::{
 use crate::scheduler::{resolve_schedule, Clock, LocalClock, QueueSchedule};
 use crate::secrets::SecretStore;
 use crate::store::{
-    Checkpoint, DownloadRecord, DownloadStatus, SegmentRow, Settings, Store, StoreError,
+    Checkpoint, DownloadRecord, DownloadStatus, PostprocessRecord, SegmentRow, Settings, Store,
+    StoreError,
 };
 
 /// Live numbers of a running task, kept out of the database until a checkpoint.
@@ -649,7 +651,7 @@ impl Manager {
             let outcome = engine.await.unwrap_or_else(|err| TaskOutcome::Failed {
                 error: CoreError::Network(format!("engine task panicked: {err}")),
             });
-            finish_task(&store, &bus, &progress, &id, outcome);
+            finish_task(&store, &bus, &progress, &id, outcome).await;
             // The slot is free now: drop the in-flight entry before waking the queue
             // path, which reads it to decide how many tasks still fit, and wake the
             // scheduler instead of waiting for the next tick.
@@ -1313,7 +1315,7 @@ fn handle_event(
     }
 }
 
-fn finish_task(
+async fn finish_task(
     store: &Arc<Store>,
     bus: &Arc<EventBus>,
     progress: &Arc<Mutex<HashMap<String, ProgressSnapshot>>>,
@@ -1350,6 +1352,11 @@ fn finish_task(
             ) {
                 eprintln!("segmenta-daemon: final checkpoint failed for {task_id}: {err}");
             }
+            // Finalizing step: OpenSpec 12 §4 runs the hook once the bytes are in place and
+            // before the task is published as `completed`. No lock of the manager is held
+            // across the await: `running` belongs to the spawned task, which only touches it
+            // after this function returns.
+            run_postprocess(store, bus, task_id).await;
             let _ = store.set_status(task_id, DownloadStatus::Completed, None);
             tracing::info!(
                 task_id = %task_id,
@@ -1449,6 +1456,94 @@ fn finish_task(
                 .unwrap_or_else(|err| err.into_inner())
                 .remove(task_id);
         }
+    }
+}
+
+/// Run the configured post-processing hook of a task that just finished downloading.
+///
+/// Contract: OpenSpec 12 §4, implemented in [`crate::postprocess`]. This function only
+/// wires it into the lifecycle:
+///
+/// * no hook configured (`postprocess_command` empty) skips the phase and leaves the task
+///   exactly as it was before A1;
+/// * the task moves to `finalizing` while the hook runs, so a task is never published as
+///   `completed` before its post-processing ended;
+/// * the hook runs on the blocking pool — it waits on a child process, which must not
+///   occupy a runtime worker — and no manager lock is held across that await;
+/// * the outcome is recorded instead of swallowed, and the downloaded file is never
+///   touched: a failing hook leaves the bytes in place.
+///
+/// A non-zero exit is a recorded warning, not a failure. The branch that would fail the
+/// task (`HookRun::fails_task(true)`) cannot run in 0.2: no setting enables it and the 07
+/// catalog assigns no `ERR_POSTPROCESS_*` code, so no code is invented here (OpenSpec 12
+/// §8).
+async fn run_postprocess(store: &Arc<Store>, bus: &Arc<EventBus>, task_id: &str) {
+    let settings = match store.settings() {
+        Ok(settings) => settings,
+        Err(err) => {
+            tracing::warn!(task_id = %task_id, error = %err, "post-processing skipped: settings unreadable");
+            return;
+        }
+    };
+    if settings.postprocess_command.is_empty() {
+        return;
+    }
+    let record = match store.get(task_id) {
+        Ok(Some(record)) => record,
+        Ok(None) => return,
+        Err(err) => {
+            tracing::warn!(task_id = %task_id, error = %err, "post-processing skipped: task unreadable");
+            return;
+        }
+    };
+    let _ = store.set_status(task_id, DownloadStatus::Finalizing, None);
+    bus.publish(
+        "state_changed",
+        Some(task_id),
+        json!({ "old_state": "downloading", "new_state": "finalizing" }),
+    );
+
+    let command = settings.postprocess_command.clone();
+    let binary = command.first().cloned().unwrap_or_default();
+    let target = HookTarget::from_file(Path::new(&record.final_path));
+    let options = HookOptions::default();
+    let run = {
+        let command = command.clone();
+        let target = target.clone();
+        let options = options.clone();
+        tokio::task::spawn_blocking(move || crate::postprocess::run(&command, &target, &options))
+            .await
+            .unwrap_or_else(|err| {
+                HookRun::Ran(crate::postprocess::HookOutcome::not_run(
+                    &binary,
+                    &format!("the post-processing thread failed: {err}"),
+                ))
+            })
+    };
+
+    if let HookRun::Ran(outcome) = &run {
+        store.record_postprocess(
+            task_id,
+            PostprocessRecord {
+                exit_code: outcome.exit.code(),
+                message: outcome.message.clone(),
+            },
+        );
+        tracing::info!(
+            task_id = %task_id,
+            exit_code = ?outcome.exit.code(),
+            succeeded = outcome.exit.succeeded(),
+            message = %outcome.message,
+            "post-processing finished"
+        );
+    }
+    if run.fails_task(options.fail_on_error) {
+        // Unreachable in 0.2 (no setting enables it), kept so the decision of OpenSpec 12
+        // §4 cannot be lost when the setting and an `ERR_POSTPROCESS_*` code land.
+        tracing::warn!(
+            task_id = %task_id,
+            "post-processing is configured to fail the task, but no error code is assigned yet"
+        );
     }
 }
 
