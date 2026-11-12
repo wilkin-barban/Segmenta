@@ -54,30 +54,13 @@ pub fn present(
         .build();
     download_dir.add_suffix(&gtk::Image::from_icon_name("folder-open-symbolic"));
     storage.add(&download_dir);
-
-    let categories = adw::ExpanderRow::builder()
-        .title(tr(locale(), Msg::CategoriesReadOnly))
-        .subtitle(tr(locale(), Msg::CategoriesHint))
-        .build();
-    if settings.category_dirs.is_empty() {
-        let empty = adw::ActionRow::builder()
-            .title(tr(locale(), Msg::NoCategories))
-            .subtitle(tr(locale(), Msg::DownloadFolderHint))
-            .build();
-        categories.add_row(&empty);
-    } else {
-        for (category, folder) in &settings.category_dirs {
-            let row = adw::ActionRow::builder()
-                .title(category.clone())
-                .subtitle(folder.clone())
-                .build();
-            categories.add_row(&row);
-        }
-    }
-    storage.add(&categories);
+    // Per-category folders are not part of the 0.2 UI: no row, no editor. The
+    // `category_dirs` setting is still read from old databases and kept as is.
     general.add(&storage);
 
-    let session = adw::PreferencesGroup::builder().title("Sesión").build();
+    let session = adw::PreferencesGroup::builder()
+        .title(tr(locale(), Msg::SessionSection))
+        .build();
     let autostart = adw::SwitchRow::builder()
         .title(tr(locale(), Msg::Autostart))
         .subtitle(tr(locale(), Msg::AutostartHint))
@@ -116,12 +99,12 @@ pub fn present(
 
     let proxy = adw::PreferencesGroup::builder().title("Proxy").build();
     let proxy_mode = adw::ActionRow::builder()
-        .title("Modo")
+        .title(tr(locale(), Msg::ProxyMode))
         .subtitle(&settings.proxy_mode)
         .build();
     proxy.add(&proxy_mode);
     let proxy_url = adw::ActionRow::builder()
-        .title("Servidor")
+        .title(tr(locale(), Msg::ProxyServer))
         .subtitle(
             settings
                 .proxy_url
@@ -237,7 +220,7 @@ pub fn present(
     let info = adw::PreferencesGroup::new();
     let version = adw::ActionRow::builder()
         .title("Segmenta")
-        .subtitle(format!("Versión {}", env!("CARGO_PKG_VERSION")))
+        .subtitle(tr(locale(), Msg::VersionLabel).replace("{}", env!("CARGO_PKG_VERSION")))
         .build();
     info.add(&version);
     let license = adw::ActionRow::builder()

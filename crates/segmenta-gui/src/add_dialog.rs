@@ -24,6 +24,8 @@ fn locale() -> segmenta_i18n::Locale {
 pub struct AddDefaults {
     pub destination_dir: String,
     pub connections: u32,
+    /// `settings.get.clip_monitor_enabled`: the switch for the clipboard monitor.
+    pub clip_monitor_enabled: bool,
 }
 
 impl Default for AddDefaults {
@@ -31,6 +33,7 @@ impl Default for AddDefaults {
         AddDefaults {
             destination_dir: String::new(),
             connections: Settings::default().max_connections.max(16),
+            clip_monitor_enabled: Settings::default().clip_monitor_enabled,
         }
     }
 }
@@ -132,8 +135,9 @@ pub fn present(
         add_button: add_button.clone(),
     });
 
-    // Clipboard prefill: only when it already looks like a download URL.
-    prefill_from_clipboard(&form);
+    // Clipboard prefill: only when `clip_monitor_enabled` is on and the text already
+    // looks like a download URL.
+    prefill_from_clipboard(&form, defaults.clip_monitor_enabled);
 
     // Filename suggestion: the URL basename fills the entry until the user
     // types a name of their own.
@@ -222,7 +226,21 @@ pub fn present(
     dialog.clone()
 }
 
-fn prefill_from_clipboard(form: &Rc<Form>) {
+/// One semantic, documented once: with `clip_monitor_enabled` off the dialog never
+/// pre-fills from the clipboard; with it on the prefill only fills an empty entry and
+/// only when the clipboard already holds an http(s) URL.
+fn should_prefill_from_clipboard(
+    clip_monitor_enabled: bool,
+    current_url: &str,
+    text: &str,
+) -> bool {
+    clip_monitor_enabled && current_url.trim().is_empty() && looks_like_http_url(text)
+}
+
+fn prefill_from_clipboard(form: &Rc<Form>, clip_monitor_enabled: bool) {
+    if !clip_monitor_enabled {
+        return;
+    }
     let clipboard = form.dialog.clipboard();
     let form = Rc::downgrade(form);
     gtk::glib::spawn_future_local(async move {
@@ -235,7 +253,7 @@ fn prefill_from_clipboard(form: &Rc<Form>) {
         let Some(form) = form.upgrade() else {
             return;
         };
-        if !form.url.text().is_empty() || !looks_like_http_url(&text) {
+        if !should_prefill_from_clipboard(clip_monitor_enabled, &form.url.text(), &text) {
             return;
         }
         form.url.set_text(text.trim());
@@ -319,4 +337,27 @@ fn show_error(form: &Form, message: &str) {
 fn report_error(form: &Form, error: &ClientError) {
     show_error(form, &error.ui_message());
     form.add_button.set_sensitive(true);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_prefill_from_clipboard;
+
+    const URL: &str = "https://example.com/file.iso";
+
+    #[test]
+    fn the_clipboard_prefill_honours_clip_monitor_enabled() {
+        // The setting is the switch for the whole clipboard monitor, so with it off
+        // the dialog never pre-fills, even for a perfect URL.
+        assert!(!should_prefill_from_clipboard(false, "", URL));
+        assert!(should_prefill_from_clipboard(true, "", URL));
+        // With it on, the prefill keeps its old guards: the entry stays empty and
+        // the clipboard text has to look like an http(s) URL already.
+        assert!(!should_prefill_from_clipboard(
+            true,
+            "https://other.test/x",
+            URL
+        ));
+        assert!(!should_prefill_from_clipboard(true, "", "not a url"));
+    }
 }

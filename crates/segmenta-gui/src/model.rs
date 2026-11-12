@@ -15,7 +15,11 @@ pub enum DownloadStatus {
     Probing,
     Downloading,
     Paused,
+    /// Waiting for the next retry (core `retrying`).
+    Retrying,
     Verifying,
+    /// Flushing and publishing the file (core `finalizing`).
+    Finalizing,
     Completed,
     Failed,
     Cancelled,
@@ -36,7 +40,9 @@ impl DownloadStatus {
                 DownloadStatus::Probing => Msg::StatusProbing,
                 DownloadStatus::Downloading => Msg::StatusDownloading,
                 DownloadStatus::Paused => Msg::StatusPaused,
+                DownloadStatus::Retrying => Msg::StatusRetrying,
                 DownloadStatus::Verifying => Msg::StatusVerifying,
+                DownloadStatus::Finalizing => Msg::StatusFinalizing,
                 DownloadStatus::Completed => Msg::StatusCompleted,
                 DownloadStatus::Failed => Msg::StatusFailed,
                 DownloadStatus::Cancelled => Msg::StatusCancelled,
@@ -52,7 +58,9 @@ impl DownloadStatus {
             DownloadStatus::Probing => "system-search-symbolic",
             DownloadStatus::Downloading => "go-down-symbolic",
             DownloadStatus::Paused => "media-playback-pause-symbolic",
+            DownloadStatus::Retrying => "view-refresh-symbolic",
             DownloadStatus::Verifying => "emblem-ok-symbolic",
+            DownloadStatus::Finalizing => "document-save-symbolic",
             DownloadStatus::Completed => "emblem-ok-symbolic",
             DownloadStatus::Failed => "dialog-warning-symbolic",
             DownloadStatus::Cancelled => "process-stop-symbolic",
@@ -60,19 +68,35 @@ impl DownloadStatus {
         }
     }
 
-    /// Bytes are moving right now.
+    /// Work is in flight: bytes are moving, or the task is about to move them
+    /// (`retrying`, `finalizing`).
     pub fn is_active(&self) -> bool {
-        matches!(self, DownloadStatus::Downloading | DownloadStatus::Probing)
+        matches!(
+            self,
+            DownloadStatus::Downloading
+                | DownloadStatus::Probing
+                | DownloadStatus::Retrying
+                | DownloadStatus::Finalizing
+        )
     }
 
     /// A task that is running and can be paused.
+    ///
+    /// Mirrors `manager.rs::pause_task`, which accepts `pending`, `probing`,
+    /// `retrying`, `verifying` and `finalizing` as well as `downloading`.
     pub fn can_pause(&self) -> bool {
         self.is_active()
     }
 
     /// A task that stopped and can be started again without the file being lost.
+    ///
+    /// `retrying` is accepted too: `manager.rs::resume_task` takes `paused` and
+    /// `retrying` and re-queues the task, which is how a retry is forced now.
     pub fn can_resume(&self) -> bool {
-        matches!(self, DownloadStatus::Paused | DownloadStatus::Failed)
+        matches!(
+            self,
+            DownloadStatus::Paused | DownloadStatus::Failed | DownloadStatus::Retrying
+        )
     }
 
     /// A task with work in flight that can be cancelled.
@@ -83,6 +107,8 @@ impl DownloadStatus {
                 | DownloadStatus::Probing
                 | DownloadStatus::Downloading
                 | DownloadStatus::Paused
+                | DownloadStatus::Retrying
+                | DownloadStatus::Finalizing
         )
     }
 
@@ -451,14 +477,20 @@ impl DownloadStore {
             return false;
         };
         item.status = status;
-        if status.is_active() {
-            item.error_code = None;
-            item.error_message = None;
-        } else {
+        // `retrying` and `finalizing` are in flight but no bytes move, so the last
+        // speed and ETA belong to the previous attempt and must not be painted as live.
+        if !matches!(
+            status,
+            DownloadStatus::Downloading | DownloadStatus::Probing
+        ) {
             item.speed_bps = 0;
             if status != DownloadStatus::Failed {
                 item.eta_seconds = None;
             }
+        }
+        if status.is_active() {
+            item.error_code = None;
+            item.error_message = None;
         }
         true
     }

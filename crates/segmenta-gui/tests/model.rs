@@ -277,6 +277,37 @@ fn destructive_actions_are_gated_by_state() {
 }
 
 #[test]
+fn retrying_and_finalizing_are_real_states_not_unknown() {
+    // Core stores `retrying` and `finalizing` (segmenta-daemon store.rs); the GUI
+    // must not fall back to `Unknown` for either of them.
+    let retrying = row("a", "retrying");
+    assert_ne!(retrying.status, DownloadStatus::Unknown);
+    assert_eq!(retrying.status, DownloadStatus::Retrying);
+    assert_eq!(retrying.status.label(Locale::Es), "Reintentando");
+    assert_eq!(retrying.status.label(Locale::En), "Retrying");
+    // Waiting for the next retry: in flight, so it counts as active and the daemon
+    // accepts a pause (manager.rs::pause_task) and a resume (manager.rs::resume_task).
+    assert!(retrying.status.is_active());
+    assert!(retrying.status.can_pause());
+    assert!(retrying.status.can_resume());
+    assert!(retrying.status.can_cancel());
+    assert!(!retrying.status.can_delete());
+
+    let finalizing = row("a", "finalizing");
+    assert_ne!(finalizing.status, DownloadStatus::Unknown);
+    assert_eq!(finalizing.status, DownloadStatus::Finalizing);
+    assert_eq!(finalizing.status.label(Locale::Es), "Finalizando");
+    assert_eq!(finalizing.status.label(Locale::En), "Finalizing");
+    // Flushing and publishing: still work in flight, so pausable and cancellable,
+    // but there is nothing left to retry from.
+    assert!(finalizing.status.is_active());
+    assert!(finalizing.status.can_pause());
+    assert!(!finalizing.status.can_resume());
+    assert!(finalizing.status.can_cancel());
+    assert!(!finalizing.status.can_delete());
+}
+
+#[test]
 fn spanish_units_and_labels() {
     assert_eq!(format_bytes(0), "0 B");
     assert_eq!(format_bytes(512), "512 B");
