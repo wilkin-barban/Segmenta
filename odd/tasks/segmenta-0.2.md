@@ -38,7 +38,7 @@ Ciclo: agente implementa → yo verifico y hago QA real → error exacto vuelve 
 | R2 | Probe multiarchivo de torrents | `crates/segmenta-daemon/src/torrent.rs`, tests | hecho (`d7075a6`) |
 | R3 | `extension` visible en `--help` y docs CLI | `crates/segmenta-cli/src/cli.rs`, `render.rs` | hecho (`9024726`) |
 | S1 | Scheduler de colas nativo y ventanas horarias | nuevo `scheduler.rs`, `manager.rs`, `main.rs`, `store.rs` | hecho (`8099ee2`) |
-| S2 | `max_active` real por cola y liberación al terminar | `manager.rs`, tests | hecho (`4f4a5d5`) |
+| S2 | `max_active` real por cola y liberación al terminar | `manager.rs`, tests | hecho (`3c0d9fa`) |
 | A1 | Hook argv seguro (`%file%`, `%folder%`, timeout) | nuevo `postprocess.rs`, `manager.rs`, `store.rs` | pendiente |
 | A2 | ClamAV integrado, cuarentena y código `ERR_ANTIVIRUS_FOUND` | `postprocess.rs`, schema v4, RPC, GUI, tests | pendiente |
 | L1 | Site logins Basic + keyring y UI | `manager.rs`, `rpc.rs`, `prefs.rs`, tests | pendiente |
