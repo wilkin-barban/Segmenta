@@ -43,6 +43,10 @@ HTTP/HTTPS, YouTube público y HLS/DASH públicos sin cifrar.
 - Aceptar crea la tarea en Segmenta y sólo entonces cancela y borra la descarga del navegador.
   Rechazar, el timeout (~120 s), cerrar la ventana, un fallo del host o una descarga que no se
   puede pausar **reanudan** la descarga del navegador: no se pierde ningún archivo.
+- Un watchdog con `alarms` (permiso nuevo) vigila cada captura pendiente: se guarda antes de
+  pausar y se rehidrata al despertar el service worker o al arrancar el navegador, de modo que
+  ninguna descarga quede pausada si el worker se suspende, vence el plazo o falla el host. Si el
+  registro o el alarm no se pueden crear, no se pausa nada.
 - `capture_confirm` (por defecto `true`) permite volver al flujo sin ventana manteniendo el orden
   seguro. La lista por defecto de extensiones capturadas se amplía con `deb`, `rpm`, `appimage`,
   `xz`, `whl`, `jar`, `epub`, `vsix`, `xpi` y `msix`.
