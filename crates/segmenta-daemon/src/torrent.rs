@@ -86,3 +86,80 @@ pub async fn probe_torrent(
         }))
     }
 }
+
+/// Progress of a running torrent, as reported by `handle.stats()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TorrentProgress {
+    /// Bytes already written.
+    pub downloaded: u64,
+    /// Declared total size.
+    pub total: u64,
+    /// The torrent finished downloading.
+    pub finished: bool,
+}
+
+/// One process-wide session: `librqbit` must not be recreated per task or chunk.
+static SESSION: tokio::sync::OnceCell<std::sync::Arc<librqbit::Session>> =
+    tokio::sync::OnceCell::const_new();
+
+/// Returns the shared session, creating it on first use.
+pub async fn shared_session(
+    output_dir: &Path,
+) -> Result<std::sync::Arc<librqbit::Session>, String> {
+    SESSION
+        .get_or_try_init(|| async {
+            librqbit::Session::new(output_dir.to_path_buf())
+                .await
+                .map_err(|err| err.to_string())
+        })
+        .await
+        .cloned()
+}
+
+/// Adds a magnet or `.torrent` URL and drives it to completion.
+///
+/// Seeding stays off: the task stops as soon as the payload is complete, and a
+/// cancellation deletes the torrent from the session without touching the data.
+pub async fn run_torrent(
+    session: std::sync::Arc<librqbit::Session>,
+    source: String,
+    cancel: segmenta_core::engine::Canceller,
+    mut on_progress: impl FnMut(TorrentProgress),
+) -> Result<(), String> {
+    let response = session
+        .add_torrent(
+            librqbit::AddTorrent::from_url(source),
+            Some(librqbit::AddTorrentOptions {
+                overwrite: true,
+                paused: false,
+                ..Default::default()
+            }),
+        )
+        .await
+        .map_err(|err| err.to_string())?;
+    let (id, handle) = match response {
+        librqbit::AddTorrentResponse::Added(id, handle)
+        | librqbit::AddTorrentResponse::AlreadyManaged(id, handle) => (id, handle),
+        librqbit::AddTorrentResponse::ListOnly(_) => {
+            return Err("the torrent was opened in list-only mode".to_string())
+        }
+    };
+    loop {
+        if cancel.is_cancelled() {
+            let _ = session
+                .delete(librqbit::api::TorrentIdOrHash::Id(id), false)
+                .await;
+            return Err("cancelled".to_string());
+        }
+        let stats = handle.stats();
+        on_progress(TorrentProgress {
+            downloaded: stats.progress_bytes,
+            total: stats.total_bytes,
+            finished: stats.finished,
+        });
+        if stats.finished {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+}
