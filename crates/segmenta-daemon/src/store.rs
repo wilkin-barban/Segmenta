@@ -4,7 +4,7 @@
 //! The database never stores a secret: `download_secrets` and `site_logins` only keep
 //! an alias into the secret store (keyring or the 0600 fallback file).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
@@ -734,11 +734,64 @@ impl Settings {
     }
 }
 
+/// Result of the post-processing hook of one task (OpenSpec 12 §4).
+///
+/// Schema v4 owns the columns `postprocess_exit` and `postprocess_message` of
+/// `downloads` (OpenSpec 08, OpenSpec 12 §7) and that migration is **not** part of this
+/// unit: `schema.sql` is untouched, so the record lives in memory only and a daemon
+/// restart drops it. When the migration lands, [`Store::record_postprocess`] writes the
+/// same struct into those two columns and [`Store::postprocess`] reads them back, with no
+/// change in the caller.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostprocessRecord {
+    /// Exit code of the hook, `None` when it timed out, was killed or never started.
+    pub exit_code: Option<i32>,
+    /// Bounded human message: the reason plus the tail of the captured output.
+    pub message: String,
+}
+
+/// In-memory record of the post-processing outcomes of the running daemon.
+///
+/// Bounded on purpose: a daemon that runs for weeks must not accumulate one entry per
+/// finished task forever. The oldest entries are dropped once [`POSTPROCESS_LOG_LIMIT`]
+/// is reached; the outcome of a task that just finished is always the newest one.
+#[derive(Default)]
+struct PostprocessLog {
+    entries: HashMap<String, PostprocessRecord>,
+    order: VecDeque<String>,
+}
+
+impl PostprocessLog {
+    fn insert(&mut self, id: &str, record: PostprocessRecord) {
+        if self.entries.insert(id.to_string(), record).is_none() {
+            self.order.push_back(id.to_string());
+        }
+        while self.order.len() > POSTPROCESS_LOG_LIMIT {
+            if let Some(oldest) = self.order.pop_front() {
+                self.entries.remove(&oldest);
+            }
+        }
+    }
+
+    fn get(&self, id: &str) -> Option<&PostprocessRecord> {
+        self.entries.get(id)
+    }
+
+    fn remove(&mut self, id: &str) {
+        self.entries.remove(id);
+        self.order.retain(|entry| entry != id);
+    }
+}
+
+/// How many post-processing records stay in memory.
+pub const POSTPROCESS_LOG_LIMIT: usize = 256;
+
 /// The database handle. One connection guarded by a mutex: the daemon issues short
 /// statements, and WAL keeps readers from blocking the writer.
 pub struct Store {
     conn: Mutex<Connection>,
     path: PathBuf,
+    postprocess: Mutex<PostprocessLog>,
 }
 
 impl Store {
@@ -757,6 +810,7 @@ impl Store {
         let store = Store {
             conn: Mutex::new(conn),
             path: path.to_path_buf(),
+            postprocess: Mutex::new(PostprocessLog::default()),
         };
         store.migrate()?;
         set_mode(path, 0o600)?;
@@ -1194,9 +1248,35 @@ impl Store {
 
     /// Delete a task and everything that cascades from it.
     pub fn delete(&self, id: &str) -> Result<bool> {
-        let conn = self.lock();
-        let affected = conn.execute("DELETE FROM downloads WHERE id = ?1", params![id])?;
+        let affected = {
+            let conn = self.lock();
+            conn.execute("DELETE FROM downloads WHERE id = ?1", params![id])?
+        };
+        self.postprocess
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .remove(id);
         Ok(affected > 0)
+    }
+
+    /// Record the post-processing outcome of a task.
+    ///
+    /// See [`PostprocessRecord`]: this is the in-memory stand-in for the `postprocess_exit`
+    /// and `postprocess_message` columns of schema v4, which belongs to another unit.
+    pub fn record_postprocess(&self, id: &str, record: PostprocessRecord) {
+        self.postprocess
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .insert(id, record);
+    }
+
+    /// Post-processing outcome of a task, when one was recorded in this process.
+    pub fn postprocess(&self, id: &str) -> Option<PostprocessRecord> {
+        self.postprocess
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .get(id)
+            .cloned()
     }
 
     /// Non-sensitive headers of a task.
