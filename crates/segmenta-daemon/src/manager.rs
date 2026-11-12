@@ -1731,9 +1731,116 @@ impl Manager {
             }),
         );
 
+        // One shared librqbit session drives every torrent: seeding stays off, so the
+        // task ends as soon as the payload is complete or the user cancels it.
+        let cancel = Canceller::new();
+        let store = Arc::clone(&self.store);
+        let bus = Arc::clone(&self.bus);
+        let progress = Arc::clone(&self.progress);
+        let session_dir = destination_dir.clone();
+        let source = url.to_string();
+        let id = task_id.clone();
+        let path = record.final_path.clone();
+        let task_cancel = cancel.clone();
+        let handle = tokio::spawn(async move {
+            let result = async {
+                let session = crate::torrent::shared_session(&session_dir)
+                    .await
+                    .map_err(|err| (1044, err))?;
+                let _ = store.set_status(&id, DownloadStatus::Downloading, None);
+                bus.publish(
+                    "task_started",
+                    Some(&id),
+                    json!({ "status": "downloading" }),
+                );
+                crate::torrent::run_torrent(session, source, task_cancel, |line| {
+                    let _ = store.update_progress(&id, line.downloaded, Some(line.total));
+                    progress
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .insert(
+                            id.clone(),
+                            ProgressSnapshot {
+                                downloaded_bytes: line.downloaded,
+                                total_bytes: Some(line.total),
+                                speed_bps: 0,
+                                eta_seconds: None,
+                                segments: Vec::new(),
+                            },
+                        );
+                    bus.publish(
+                        "task_progress",
+                        Some(&id),
+                        json!({
+                            "downloaded_bytes": line.downloaded,
+                            "total_bytes": line.total,
+                            "speed_bps": 0,
+                            "eta_seconds": null,
+                            "segments": [],
+                        }),
+                    );
+                })
+                .await
+                .map_err(|err| (1044, err))
+            }
+            .await;
+            progress
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .remove(&id);
+            match result {
+                Ok(()) => {
+                    let _ = store.set_status(&id, DownloadStatus::Completed, None);
+                    bus.publish(
+                        "task_completed",
+                        Some(&id),
+                        json!({
+                            "final_path": path,
+                            "total_bytes": null,
+                            "checksum_ok": null,
+                            "media": false,
+                        }),
+                    );
+                }
+                Err((code, message)) => {
+                    let cancelled = message == "cancelled";
+                    let _ = store.set_status(
+                        &id,
+                        if cancelled {
+                            DownloadStatus::Cancelled
+                        } else {
+                            DownloadStatus::Failed
+                        },
+                        if cancelled {
+                            None
+                        } else {
+                            Some((code, message.clone()))
+                        },
+                    );
+                    bus.publish(
+                        if cancelled {
+                            "task_cancelled"
+                        } else {
+                            "task_failed"
+                        },
+                        Some(&id),
+                        json!({
+                            "error_code": code,
+                            "message": message,
+                            "retryable": false,
+                        }),
+                    );
+                }
+            }
+        });
+        self.running
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .insert(task_id.clone(), RunningTask { cancel, handle });
+
         Ok(json!({
             "task_id": task_id,
-            "status": "pending",
+            "status": "downloading",
             "filename": name,
             "info_hash": info_hash,
         }))
