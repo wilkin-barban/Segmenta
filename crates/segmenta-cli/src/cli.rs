@@ -2,16 +2,19 @@
 //!
 //! Exit codes: `0` success, `1` daemon/protocol failure, `2` invalid usage (clap).
 //!
-//! Every human word printed by the CLI comes from the [`segmenta_i18n`] catalog; the
-//! locale is resolved once in [`main`] and threaded down explicitly. Paths, commands,
-//! codes, method names and clap's own `--help` text are never translated.
+//! Every human word printed by the CLI comes from the [`segmenta_i18n`] catalog or from
+//! the help table below; the locale is resolved once in [`main`] and threaded down
+//! explicitly. Paths, commands, codes and method names are never translated.
+//!
+//! The `--help` text is generated from the clap definition itself (see [`help_text`]), so
+//! the documented subcommands and flags cannot drift away from the accepted ones.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use crate::client::{Client, ClientError};
 use crate::render;
-use clap::{Parser, Subcommand};
+use clap::{Arg, ArgAction, Command as ClapCommand, CommandFactory, Parser, Subcommand};
 use segmenta_i18n::{tr, Locale, Msg};
 use serde_json::{json, Value};
 
@@ -68,7 +71,12 @@ enum Command {
     /// List downloads.
     List {
         /// all, active, paused, completed, failed, cancelled or pending.
-        #[arg(short, long, default_value = "all")]
+        #[arg(
+            short,
+            long,
+            default_value = "all",
+            value_name = "all|active|paused|completed|failed|cancelled|pending"
+        )]
         filter: String,
         /// Page size.
         #[arg(short, long, default_value_t = 100)]
@@ -149,7 +157,7 @@ enum MediaAction {
         /// https media URL.
         url: String,
         /// video, audio or playlist.
-        #[arg(long, default_value = "video")]
+        #[arg(long, default_value = "video", value_name = "video|audio|playlist")]
         mode: String,
         /// Backend format id.
         #[arg(long)]
@@ -239,45 +247,483 @@ enum SystemAction {
     Shutdown,
 }
 
-/// Localized `--help` (clap's own help is English-only).
-fn help_text(locale: segmenta_i18n::Locale) -> String {
-    match locale {
-        segmenta_i18n::Locale::En => format!(
-            "segmenta {version}\n\nUsage: segmenta [--socket PATH] [--json] <command> [options]\n\n\
-             Commands:\n  add <url> [--dir DIR] [--name NAME] [-c N] [-H \"Name: value\"] [--sha256 HEX] [-q QUEUE] [-p N] [--no-start]\n\
-             \x20 list [-f all|active|paused|completed|failed] [-l N] [-o N]\n  status <id>\n  pause <id>\n  resume <id>\n\
-             \x20 cancel <id> [--delete-file]\n  delete <id> [--delete-file]\n  settings [get|set KEY VALUE ...]\n\
-             \x20 queues list|create NAME [--max-active N]|remove NAME|schedule NAME [--start HH:MM] [--stop HH:MM] [--on-complete ACTION]\n\
-             \x20 media probe <url> [--kind video|playlist|stream] [--limit N]\n  media add <url> [--mode video|audio|playlist] [--format-id ID] [--height H] [--limit N]\n  torrent probe <url>\n  torrent add <url> [--dir DIR] [--seed]\n  torrent status <id>\n  hello\n  system status|shutdown\n\n\
-             Global options:\n  --socket PATH   daemon socket (default $SEGMENTA_SOCKET or $XDG_RUNTIME_DIR/segmenta/daemon.sock)\n\
-             \x20 --json         machine-readable output\n  --version      print the version\n  --help         this help\n\n\
-             Exit codes: 0 success, 1 daemon/protocol error, 2 invalid usage.",
-            version = env!("CARGO_PKG_VERSION")
-        ),
-        segmenta_i18n::Locale::Es => format!(
-            "segmenta {version}\n\nUso: segmenta [--socket RUTA] [--json] <comando> [opciones]\n\n\
-             Comandos:\n  add <url> [--dir CARPETA] [--name NOMBRE] [-c N] [-H \"Nombre: valor\"] [--sha256 HEX] [-q COLA] [-p N] [--no-start]\n\
-             \x20 list [-f all|active|paused|completed|failed] [-l N] [-o N]\n  status <id>\n  pause <id>\n  resume <id>\n\
-             \x20 cancel <id> [--delete-file]\n  delete <id> [--delete-file]\n  settings [get|set CLAVE VALOR ...]\n\
-             \x20 queues list|create NOMBRE [--max-active N]|remove NOMBRE|schedule NOMBRE [--start HH:MM] [--stop HH:MM] [--on-complete ACCION]\n\
-             \x20 media probe <url> [--kind video|playlist|stream] [--limit N]\n  media add <url> [--mode video|audio|playlist] [--format-id ID] [--height H] [--limit N]\n  torrent probe <url>\n  torrent add <url> [--dir DIR] [--seed]\n  torrent status <id>\n  hello\n  system status|shutdown\n\n\
-             Opciones globales:\n  --socket RUTA   socket del daemon (por defecto $SEGMENTA_SOCKET o $XDG_RUNTIME_DIR/segmenta/daemon.sock)\n\
-             \x20 --json         salida legible por máquina\n  --version      muestra la versión\n  --help         esta ayuda\n\n\
-             Códigos de salida: 0 éxito, 1 error del daemon o del protocolo, 2 uso inválido.",
-            version = env!("CARGO_PKG_VERSION")
-        ),
-        segmenta_i18n::Locale::PtBr => format!(
-            "segmenta {version}\n\nUso: segmenta [--socket CAMINHO] [--json] <comando> [opções]\n\n\
-             Comandos:\n  add <url> [--dir PASTA] [--name NOME] [-c N] [-H \"Nome: valor\"] [--sha256 HEX] [-q FILA] [-p N] [--no-start]\n\
-             \x20 list [-f all|active|paused|completed|failed] [-l N] [-o N]\n  status <id>\n  pause <id>\n  resume <id>\n\
-             \x20 cancel <id> [--delete-file]\n  delete <id> [--delete-file]\n  settings [get|set CHAVE VALOR ...]\n\
-             \x20 queues list|create NOME [--max-active N]|remove NOME|schedule NOME [--start HH:MM] [--stop HH:MM] [--on-complete AÇÃO]\n\
-             \x20 media probe <url> [--kind video|playlist|stream] [--limit N]\n  media add <url> [--mode video|audio|playlist] [--format-id ID] [--height H] [--limit N]\n  torrent probe <url>\n  torrent add <url> [--dir DIR] [--seed]\n  torrent status <id>\n  hello\n  system status|shutdown\n\n\
-             Opções globais:\n  --socket CAMINHO   socket do daemon (padrão $SEGMENTA_SOCKET ou $XDG_RUNTIME_DIR/segmenta/daemon.sock)\n\
-             \x20 --json         saída legível por máquina\n  --version      mostra a versão\n  --help         esta ajuda\n\n\
-             Códigos de saída: 0 sucesso, 1 erro do daemon ou do protocolo, 2 uso inválido.",
-            version = env!("CARGO_PKG_VERSION")
-        ),
+/// The clap definition of the CLI surface.
+///
+/// The help renderer and its tests walk this definition, so a subcommand or a flag cannot
+/// be added without the documentation and the tests noticing.
+pub fn command() -> ClapCommand {
+    Cli::command()
+}
+
+/// Indent of one command line in the rendered help.
+const HELP_COMMAND_INDENT: &str = "  ";
+/// Indent of a command's description and of its flag list.
+const HELP_DETAIL_INDENT: &str = "      ";
+/// Column where flag lists wrap.
+const HELP_WIDTH: usize = 100;
+
+/// Every help string that is not derived from the clap definition: the section labels, the
+/// global option help and the one-line description of each command.
+///
+/// The key is a stable command path (`"media.add"`) or a fixed label (`"usage"`), and every
+/// entry carries the three locales, so no locale can silently fall back to English.
+const HELP_TEXT: &[(&str, &str, &str, &str)] = &[
+    (
+        "about",
+        "Control the Segmenta download daemon.",
+        "Controla el daemon de descargas de Segmenta.",
+        "Controla o daemon de downloads do Segmenta.",
+    ),
+    ("usage", "Usage:", "Uso:", "Uso:"),
+    ("commands", "Commands:", "Comandos:", "Comandos:"),
+    (
+        "global-options",
+        "Global options:",
+        "Opciones globales:",
+        "Opções globais:",
+    ),
+    (
+        "exit-codes",
+        "Exit codes: 0 success, 1 daemon/protocol error, 2 invalid usage.",
+        "Códigos de salida: 0 éxito, 1 error del daemon o del protocolo, 2 uso inválido.",
+        "Códigos de saída: 0 sucesso, 1 erro do daemon ou do protocolo, 2 uso inválido.",
+    ),
+    (
+        "opt.socket",
+        "daemon socket (default $SEGMENTA_SOCKET or $XDG_RUNTIME_DIR/segmenta/daemon.sock)",
+        "socket del daemon (por defecto $SEGMENTA_SOCKET o $XDG_RUNTIME_DIR/segmenta/daemon.sock)",
+        "socket do daemon (padrão $SEGMENTA_SOCKET ou $XDG_RUNTIME_DIR/segmenta/daemon.sock)",
+    ),
+    (
+        "opt.json",
+        "machine-readable output",
+        "salida legible por máquina",
+        "saída legível por máquina",
+    ),
+    ("opt.help", "this help", "esta ayuda", "esta ajuda"),
+    (
+        "opt.version",
+        "print the version",
+        "muestra la versión",
+        "mostra a versão",
+    ),
+    (
+        "add",
+        "Add a download.",
+        "Añade una descarga.",
+        "Adiciona um download.",
+    ),
+    (
+        "list",
+        "List downloads.",
+        "Lista las descargas.",
+        "Lista os downloads.",
+    ),
+    (
+        "status",
+        "Show one download, including its segments.",
+        "Muestra una descarga, incluidos sus segmentos.",
+        "Mostra um download, incluindo os seus segmentos.",
+    ),
+    (
+        "pause",
+        "Pause a download, keeping its bytes for a resume.",
+        "Pausa una descarga y conserva sus bytes para reanudarla.",
+        "Pausa um download e conserva os bytes para retomá-lo.",
+    ),
+    (
+        "resume",
+        "Resume a paused download.",
+        "Reanuda una descarga en pausa.",
+        "Retoma um download pausado.",
+    ),
+    (
+        "cancel",
+        "Cancel a download.",
+        "Cancela una descarga.",
+        "Cancela um download.",
+    ),
+    (
+        "delete",
+        "Remove the task from the daemon (and optionally its file).",
+        "Elimina la tarea del daemon (y opcionalmente su archivo).",
+        "Remove a tarefa do daemon (e opcionalmente o seu arquivo).",
+    ),
+    (
+        "settings",
+        "Read or update settings.",
+        "Lee o actualiza los ajustes.",
+        "Lê ou atualiza as configurações.",
+    ),
+    (
+        "settings.get",
+        "Print the effective settings.",
+        "Muestra los ajustes efectivos.",
+        "Mostra as configurações efetivas.",
+    ),
+    (
+        "settings.set",
+        "Update settings: `settings set max_connections 8`.",
+        "Actualiza ajustes: `settings set max_connections 8`.",
+        "Atualiza configurações: `settings set max_connections 8`.",
+    ),
+    (
+        "queues",
+        "Manage queues.",
+        "Gestiona las colas.",
+        "Gerencia as filas.",
+    ),
+    (
+        "queues.list",
+        "List queues with their counters.",
+        "Lista las colas con sus contadores.",
+        "Lista as filas com os seus contadores.",
+    ),
+    (
+        "queues.create",
+        "Create a queue.",
+        "Crea una cola.",
+        "Cria uma fila.",
+    ),
+    (
+        "queues.remove",
+        "Remove a queue; its pending tasks move to main.",
+        "Elimina una cola; sus tareas pendientes pasan a main.",
+        "Remove uma fila; as suas tarefas pendentes passam para main.",
+    ),
+    (
+        "queues.schedule",
+        "Store a schedule for a queue.",
+        "Guarda un horario para una cola.",
+        "Guarda um horário para uma fila.",
+    ),
+    (
+        "media",
+        "Media helpers for YouTube and public streams.",
+        "Ayudas multimedia para YouTube y streams públicos.",
+        "Auxiliares de mídia para YouTube e streams públicos.",
+    ),
+    (
+        "media.probe",
+        "Inspect a media URL without downloading it.",
+        "Inspecciona una URL de medios sin descargarla.",
+        "Inspeciona uma URL de mídia sem baixá-la.",
+    ),
+    (
+        "media.add",
+        "Enqueue a media download.",
+        "Encola una descarga multimedia.",
+        "Enfileira um download de mídia.",
+    ),
+    (
+        "torrent",
+        "Torrent helpers for magnet links and .torrent files.",
+        "Ayudas para torrents con enlaces magnet y archivos .torrent.",
+        "Auxiliares de torrent para links magnet e arquivos .torrent.",
+    ),
+    (
+        "torrent.probe",
+        "Inspect a .torrent URL or magnet without downloading it.",
+        "Inspecciona una URL .torrent o un magnet sin descargarlo.",
+        "Inspeciona uma URL .torrent ou um magnet sem baixá-lo.",
+    ),
+    (
+        "torrent.add",
+        "Enqueue a .torrent URL or magnet link.",
+        "Encola una URL .torrent o un enlace magnet.",
+        "Enfileira uma URL .torrent ou um link magnet.",
+    ),
+    (
+        "torrent.status",
+        "Show one torrent task.",
+        "Muestra una tarea de torrent.",
+        "Mostra uma tarefa de torrent.",
+    ),
+    (
+        "extension",
+        "Manage browser extensions and manifests.",
+        "Gestiona las extensiones del navegador y sus manifiestos.",
+        "Gerencia as extensões do navegador e seus manifestos.",
+    ),
+    (
+        "extension.status",
+        "Show extension status across browsers.",
+        "Muestra el estado de la extensión en cada navegador.",
+        "Mostra o estado da extensão em cada navegador.",
+    ),
+    (
+        "extension.prepare",
+        "Unzip and prepare browser extension.",
+        "Descomprime y prepara la extensión del navegador.",
+        "Descompacta e prepara a extensão do navegador.",
+    ),
+    (
+        "extension.install-native",
+        "Install per-user native messaging manifests.",
+        "Instala los manifiestos de mensajería nativa por usuario.",
+        "Instala os manifestos de mensagens nativas por usuário.",
+    ),
+    (
+        "extension.open",
+        "Open browser extensions page.",
+        "Abre la página de extensiones del navegador.",
+        "Abre a página de extensões do navegador.",
+    ),
+    (
+        "hello",
+        "Ask the daemon for its protocol and version.",
+        "Consulta al daemon su protocolo y versión.",
+        "Consulta o daemon sobre o seu protocolo e versão.",
+    ),
+    (
+        "system",
+        "Daemon diagnostics and lifecycle.",
+        "Diagnóstico y ciclo de vida del daemon.",
+        "Diagnóstico e ciclo de vida do daemon.",
+    ),
+    (
+        "system.status",
+        "Version, uptime, memory and live connections.",
+        "Versión, tiempo activo, memoria y conexiones activas.",
+        "Versão, tempo ativo, memória e conexões ativas.",
+    ),
+    (
+        "system.shutdown",
+        "Pause every task and stop the daemon.",
+        "Pausa todas las tareas y detiene el daemon.",
+        "Pausa todas as tarefas e para o daemon.",
+    ),
+];
+
+/// Look up one help string; `None` when the key is not in [`HELP_TEXT`].
+fn help_word(locale: Locale, key: &str) -> Option<&'static str> {
+    HELP_TEXT
+        .iter()
+        .find(|(candidate, ..)| *candidate == key)
+        .map(|(_, en, es, pt_br)| match locale {
+            Locale::En => *en,
+            Locale::Es => *es,
+            Locale::PtBr => *pt_br,
+        })
+}
+
+/// A section label. A missing key renders empty instead of panicking inside `--help`.
+fn word(locale: Locale, key: &str) -> &'static str {
+    help_word(locale, key).unwrap_or_default()
+}
+
+/// The localized `--help`, generated from the clap definition.
+///
+/// Every command line, positional and flag is derived from [`command`], so the documented
+/// surface is exactly the accepted one. Only the descriptions and labels come from
+/// [`HELP_TEXT`].
+pub fn help_text(locale: Locale) -> String {
+    let root = command();
+    let mut out = format!("segmenta {}\n", env!("CARGO_PKG_VERSION"));
+    out.push_str(word(locale, "about"));
+    out.push_str("\n\n");
+
+    // Usage line: the global options and the subcommand placeholder come from clap.
+    out.push_str(word(locale, "usage"));
+    out.push(' ');
+    out.push_str(root.get_name());
+    for arg in root.get_arguments().filter(|arg| !arg.is_positional()) {
+        out.push(' ');
+        out.push_str(&optional(arg, &option_usage(arg)));
+    }
+    out.push(' ');
+    out.push_str(if root.is_subcommand_required_set() {
+        "<COMMAND>"
+    } else {
+        "[<COMMAND>]"
+    });
+    out.push_str("\n\n");
+
+    out.push_str(word(locale, "commands"));
+    out.push('\n');
+    for sub in visible_subcommands(&root) {
+        render_command(&mut out, locale, "", sub);
+    }
+
+    out.push('\n');
+    out.push_str(word(locale, "global-options"));
+    out.push('\n');
+    let mut rows: Vec<(String, &'static str)> = root
+        .get_arguments()
+        .filter(|arg| !arg.is_positional())
+        .map(|arg| {
+            let key = format!("opt.{}", arg.get_long().unwrap_or_default());
+            (option_usage(arg), word(locale, &key))
+        })
+        .collect();
+    rows.push(("-h|--help".to_string(), word(locale, "opt.help")));
+    rows.push(("-V|--version".to_string(), word(locale, "opt.version")));
+    let width = rows.iter().map(|(flags, _)| flags.len()).max().unwrap_or(0) + 2;
+    for (flags, text) in rows {
+        out.push_str(&format!("{HELP_COMMAND_INDENT}{flags:<width$}{text}\n"));
+    }
+
+    out.push('\n');
+    out.push_str(word(locale, "exit-codes"));
+    out.push('\n');
+    out
+}
+
+/// Render one command: its line, its one-line description and its flag list, then its own
+/// subcommands.
+fn render_command(out: &mut String, locale: Locale, parent: &str, cmd: &ClapCommand) {
+    let path = if parent.is_empty() {
+        cmd.get_name().to_string()
+    } else {
+        format!("{parent} {}", cmd.get_name())
+    };
+    out.push_str(HELP_COMMAND_INDENT);
+    out.push_str(&path);
+    for arg in cmd.get_positionals() {
+        out.push(' ');
+        out.push_str(&positional_usage(arg));
+    }
+    if has_visible_subcommands(cmd) {
+        out.push(' ');
+        out.push_str(if cmd.is_subcommand_required_set() {
+            "<COMMAND>"
+        } else {
+            "[<COMMAND>]"
+        });
+    }
+    out.push('\n');
+
+    out.push_str(HELP_DETAIL_INDENT);
+    out.push_str(&command_description(locale, cmd, &path));
+    out.push('\n');
+
+    let flags: Vec<String> = cmd
+        .get_arguments()
+        .filter(|arg| !arg.is_positional())
+        .map(|arg| optional(arg, &option_usage(arg)))
+        .collect();
+    push_wrapped(out, HELP_DETAIL_INDENT, &flags);
+
+    for sub in visible_subcommands(cmd) {
+        render_command(out, locale, &path, sub);
+    }
+}
+
+/// The localized one-line description of a command, falling back to the clap doc comment.
+fn command_description(locale: Locale, cmd: &ClapCommand, path: &str) -> String {
+    let key = command_key(path);
+    if let Some(description) = help_word(locale, &key) {
+        return description.to_string();
+    }
+    cmd.get_about()
+        .map(|about| about.to_string())
+        .unwrap_or_default()
+}
+
+/// The [`HELP_TEXT`] key of a rendered command path (`"media add"` -> `"media.add"`).
+fn command_key(path: &str) -> String {
+    path.split_whitespace().collect::<Vec<_>>().join(".")
+}
+
+/// Subcommands as a user sees them (`help` is clap's own alias and is handled by [`main`]).
+fn visible_subcommands(cmd: &ClapCommand) -> impl Iterator<Item = &ClapCommand> {
+    cmd.get_subcommands().filter(|sub| sub.get_name() != "help")
+}
+
+fn has_visible_subcommands(cmd: &ClapCommand) -> bool {
+    visible_subcommands(cmd).next().is_some()
+}
+
+/// `[--dir DIR]` for an optional option, `--browser BROWSER` for a required one.
+fn optional(arg: &Arg, usage: &str) -> String {
+    if arg.is_required_set() {
+        usage.to_string()
+    } else {
+        format!("[{usage}]")
+    }
+}
+
+/// `--long VALUE`, `-s|--long VALUE` or a bare flag, in the order clap stores the argument.
+fn option_usage(arg: &Arg) -> String {
+    let mut usage = match (arg.get_short(), arg.get_long()) {
+        (Some(short), Some(long)) => format!("-{short}|--{long}"),
+        (Some(short), None) => format!("-{short}"),
+        (None, Some(long)) => format!("--{long}"),
+        (None, None) => String::new(),
+    };
+    if takes_value(arg) {
+        usage.push(' ');
+        usage.push_str(&value_name(arg));
+    }
+    usage
+}
+
+/// `<URL>`, `<URL>...` or `[PAIRS]...` for a positional.
+fn positional_usage(arg: &Arg) -> String {
+    let name = value_name(arg);
+    let mut usage = if arg.is_required_set() {
+        format!("<{name}>")
+    } else {
+        format!("[{name}]")
+    };
+    if is_multiple(arg) {
+        usage.push_str("...");
+    }
+    usage
+}
+
+/// The placeholder clap would use: an explicit `value_name`, else the long name, else the id.
+fn value_name(arg: &Arg) -> String {
+    if let Some(name) = arg.get_value_names().and_then(|names| names.first()) {
+        return name.to_string();
+    }
+    if let Some(long) = arg.get_long() {
+        return long.to_uppercase().replace('-', "_");
+    }
+    arg.get_id().as_str().to_uppercase()
+}
+
+/// Whether the argument consumes a value (`--dir DIR`) or is a bare flag (`--no-start`).
+fn takes_value(arg: &Arg) -> bool {
+    if matches!(
+        arg.get_action(),
+        ArgAction::SetTrue | ArgAction::SetFalse | ArgAction::Help | ArgAction::Version
+    ) {
+        return false;
+    }
+    arg.get_num_args()
+        .map(|range| range.max_values() > 0)
+        .unwrap_or(true)
+}
+
+/// Whether the argument accepts several values (`[PAIRS]...`).
+fn is_multiple(arg: &Arg) -> bool {
+    matches!(arg.get_action(), ArgAction::Append | ArgAction::Count)
+        || arg
+            .get_num_args()
+            .map(|range| range.max_values() > 1)
+            .unwrap_or(false)
+}
+
+/// Append `items` as space-separated lines of at most [`HELP_WIDTH`] columns.
+fn push_wrapped(out: &mut String, indent: &str, items: &[String]) {
+    let mut line = String::new();
+    for item in items {
+        if !line.is_empty() && indent.len() + line.len() + 1 + item.len() > HELP_WIDTH {
+            out.push_str(indent);
+            out.push_str(&line);
+            out.push('\n');
+            line.clear();
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(item);
+    }
+    if !line.is_empty() {
+        out.push_str(indent);
+        out.push_str(&line);
+        out.push('\n');
     }
 }
 
@@ -315,14 +761,33 @@ fn resolve_task_id(
     }
 }
 
+/// Whether the arguments ask for the localized help: `--help`/`-h` anywhere, or clap's own
+/// `help` subcommand in the command position.
+fn help_requested(args: &[String]) -> bool {
+    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
+        return true;
+    }
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--json" => index += 1,
+            "--socket" => index += 2,
+            arg if arg.starts_with("--socket=") => index += 1,
+            arg => return arg == "help",
+        }
+    }
+    false
+}
+
 /// Parse the arguments and run one command.
 pub fn main() -> ExitCode {
     // `--help` must follow LC_ALL/LC_MESSAGES/LANG like every other visible string.
-    if std::env::args().any(|arg| arg == "--help" || arg == "-h") {
+    let args: Vec<String> = std::env::args().collect();
+    if help_requested(&args) {
         println!("{}", help_text(segmenta_i18n::current()));
         return ExitCode::SUCCESS;
     }
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(args);
     let locale = segmenta_i18n::current();
     match run(cli, locale) {
         Ok(text) => {
