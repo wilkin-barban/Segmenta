@@ -583,16 +583,18 @@ fn upgraded_capture_list(legacy: &[&str]) -> Vec<String> {
     upgraded
 }
 
-fn is_hh_mm(value: &str) -> bool {
-    let Some((hh, mm)) = value.split_once(':') else {
-        return false;
-    };
+/// Parse an `HH:MM` value into minutes since midnight.
+///
+/// The workspace has a single definition of a valid wall-clock time, shared by
+/// `settings.update`, `queue.schedule` and the scheduler that evaluates the window.
+pub fn parse_hh_mm(value: &str) -> Option<u32> {
+    let (hh, mm) = value.split_once(':')?;
     if hh.len() != 2 || mm.len() != 2 {
-        return false;
+        return None;
     }
     match (hh.parse::<u32>(), mm.parse::<u32>()) {
-        (Ok(h), Ok(m)) => h < 24 && m < 60,
-        _ => false,
+        (Ok(h), Ok(m)) if h < 24 && m < 60 => Some(h * 60 + m),
+        _ => None,
     }
 }
 
@@ -684,7 +686,7 @@ impl Settings {
             ("schedule_stop", &self.schedule_stop),
         ] {
             if let Some(value) = value {
-                if !is_hh_mm(value) {
+                if parse_hh_mm(value).is_none() {
                     return Err(StoreError::Invalid(format!("{name} must be HH:MM")));
                 }
             }
@@ -1108,6 +1110,45 @@ impl Store {
         Ok(rows)
     }
 
+    /// Tasks of one queue that are waiting for a slot, highest priority first.
+    ///
+    /// `limit` is the number of free slots the caller has, so the scheduler never reads
+    /// more candidates than it can start.
+    pub fn pending_for_queue(&self, queue: &str, limit: usize) -> Result<Vec<DownloadRecord>> {
+        let conn = self.lock();
+        let limit = limit.clamp(1, 1000) as i64;
+        let mut statement = conn.prepare(
+            "SELECT id, url, final_url, final_path, temp_path, total_bytes, downloaded_bytes,
+                    status, supports_ranges, etag, last_modified, content_type, expected_checksum,
+                    error_code, error_message, retry_count, priority, queue_name, download_type,
+                    created_at, completed_at,
+                    media_kind, media_format, playlist_title, playlist_count, batch_id
+             FROM downloads WHERE queue_name = ?1 AND status = 'pending'
+             ORDER BY priority DESC, created_at ASC, rowid ASC LIMIT ?2",
+        )?;
+        let mapped = statement.query_map(params![queue, limit], row_to_record)?;
+        let mut rows = Vec::new();
+        for row in mapped {
+            rows.push(row?);
+        }
+        Ok(rows)
+    }
+
+    /// Tasks of one queue that occupy a `max_active` slot right now.
+    ///
+    /// A paused task does not hold a slot and neither does a terminal one, exactly the
+    /// state list OpenSpec 12 §3 names.
+    pub fn active_count(&self, queue: &str) -> Result<u32> {
+        let conn = self.lock();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM downloads WHERE queue_name = ?1 AND status IN
+             ('downloading', 'probing', 'retrying', 'verifying', 'finalizing')",
+            params![queue],
+            |row| row.get(0),
+        )?;
+        Ok(count.max(0) as u32)
+    }
+
     /// Segments of one task, ordered by start offset.
     pub fn segments(&self, id: &str) -> Result<Vec<SegmentRow>> {
         let conn = self.lock();
@@ -1368,8 +1409,38 @@ impl Store {
         Ok(())
     }
 
+    /// Persisted schedule of one queue (`queue_schedule:<name>`), if any.
+    ///
+    /// It lives in `settings`, so `settings.get` never returns it (OpenSpec 07 §3.10).
+    pub fn queue_schedule(&self, name: &str) -> Result<Option<Value>> {
+        let conn = self.lock();
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT value_json FROM settings WHERE key = ?1",
+                params![format!("queue_schedule:{name}")],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(raw.and_then(|raw| serde_json::from_str::<Value>(&raw).ok()))
+    }
+
     /// Store the scheduler of a queue.
+    ///
+    /// The window is validated here so a schedule the scheduler could not evaluate is
+    /// never persisted (OpenSpec 12 §2); `action_on_complete` keeps accepting free text
+    /// and is reduced to `none` when it is read, as OpenSpec 07 §3.11 specifies.
     pub fn schedule_queue(&self, name: &str, schedule: &Value) -> Result<()> {
+        for key in ["start_time", "stop_time"] {
+            match schedule.get(key) {
+                None | Some(Value::Null) => {}
+                Some(Value::String(value)) if parse_hh_mm(value).is_some() => {}
+                Some(_) => {
+                    return Err(StoreError::Invalid(format!(
+                        "schedule.{key} must be HH:MM between 00:00 and 23:59"
+                    )))
+                }
+            }
+        }
         let mut conn = self.lock();
         let tx = conn.transaction()?;
         let exists: Option<i64> = tx

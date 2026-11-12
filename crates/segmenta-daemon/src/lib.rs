@@ -10,6 +10,7 @@ pub mod logging;
 pub mod manager;
 pub mod media;
 pub mod rpc;
+pub mod scheduler;
 pub mod secrets;
 pub mod store;
 pub mod stream_media;
