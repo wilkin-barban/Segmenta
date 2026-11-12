@@ -346,6 +346,23 @@ pub struct TorrentFileRecord {
     pub selected: bool,
 }
 
+/// One `torrent_files` row as the ingest path hands it to the store.
+///
+/// `path` is the sanitized path the torrent declares for the file, relative to the
+/// task's destination directory, so a row never spells an absolute location the payload
+/// does not have.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TorrentFileInsert {
+    /// Position inside the metainfo, contiguous from 0.
+    pub file_index: u32,
+    /// Sanitized path of the file.
+    pub path: String,
+    /// Declared length in bytes.
+    pub length: u64,
+    /// Whether the file belongs to the download.
+    pub selected: bool,
+}
+
 /// One row of `segments`.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SegmentRow {
@@ -1020,6 +1037,34 @@ impl Store {
                 selected as i64
             ],
         )?;
+        Ok(())
+    }
+
+    /// Insert every `torrent_files` row of one task in a single transaction, so a torrent
+    /// is either fully enumerated or not enumerated at all.
+    pub fn insert_torrent_files(
+        &self,
+        download_id: &str,
+        files: &[TorrentFileInsert],
+    ) -> Result<()> {
+        let conn = self.lock();
+        let tx = conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO torrent_files (download_id, file_index, path, length, selected)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )?;
+            for file in files {
+                stmt.execute(params![
+                    download_id,
+                    file.file_index,
+                    file.path,
+                    file.length as i64,
+                    file.selected as i64
+                ])?;
+            }
+        }
+        tx.commit()?;
         Ok(())
     }
 

@@ -30,7 +30,7 @@ use crate::scheduler::{resolve_schedule, Clock, LocalClock, QueueSchedule};
 use crate::secrets::SecretStore;
 use crate::store::{
     Checkpoint, DownloadRecord, DownloadStatus, PostprocessRecord, SegmentRow, Settings, Store,
-    StoreError,
+    StoreError, TorrentFileInsert,
 };
 
 /// Live numbers of a running task, kept out of the database until a checkpoint.
@@ -1047,6 +1047,88 @@ fn store_error(err: StoreError) -> RpcError {
     RpcError::internal(err.to_string())
 }
 
+/// One file of a torrent, as `torrent.add` derives it from the probe.
+struct TorrentFileSpec {
+    file_index: u32,
+    path: String,
+    length: u64,
+    selected: bool,
+}
+
+/// Read the `files[]` array `torrent.probe` reported, or the one an add already carries.
+///
+/// Every entry must have a non-empty `path` and a `length`; `index` falls back to the
+/// array position so an add that forwards metadata without indexes still yields
+/// contiguous rows, and `selected` defaults to `true` because nothing tracks a per-file
+/// selection yet.
+fn torrent_file_specs(files: Option<&Value>) -> Result<Vec<TorrentFileSpec>, RpcError> {
+    let Some(value) = files else {
+        return Ok(Vec::new());
+    };
+    let entries = value
+        .as_array()
+        .ok_or_else(|| RpcError::invalid_params("files must be an array"))?;
+    let mut specs = Vec::with_capacity(entries.len());
+    for (position, entry) in entries.iter().enumerate() {
+        let path = entry
+            .get("path")
+            .and_then(|v| v.as_str())
+            .filter(|path| !path.is_empty())
+            .ok_or_else(|| {
+                RpcError::invalid_params(format!("torrent file {position} has no path"))
+            })?;
+        let length = entry
+            .get("length")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| {
+                RpcError::invalid_params(format!("torrent file {position} has no length"))
+            })?;
+        let index = entry
+            .get("index")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(position as u64);
+        let file_index = u32::try_from(index).map_err(|_| {
+            RpcError::invalid_params(format!("torrent file {position} has an invalid index"))
+        })?;
+        let selected = entry
+            .get("selected")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        specs.push(TorrentFileSpec {
+            file_index,
+            path: path.to_string(),
+            length,
+            selected,
+        });
+    }
+    Ok(specs)
+}
+
+/// Validate one reported file path and turn it into the row to persist.
+///
+/// `sanitize_torrent_path` rejects absolute paths, `..`, `.` and unusable components
+/// against `destination_dir`; what is stored is that sanitized path relative to the
+/// destination directory, which is exactly what the probe reported.
+fn torrent_file_row(
+    destination_dir: &Path,
+    spec: &TorrentFileSpec,
+) -> Result<TorrentFileInsert, RpcError> {
+    let resolved = crate::torrent::sanitize_torrent_path(destination_dir, &spec.path)
+        .map_err(|err| RpcError::invalid_params(format!("invalid torrent file path: {err}")))?;
+    let relative = resolved.strip_prefix(destination_dir).map_err(|_| {
+        RpcError::invalid_params(format!(
+            "invalid torrent file path: {} escapes the destination directory",
+            spec.path
+        ))
+    })?;
+    Ok(TorrentFileInsert {
+        file_index: spec.file_index,
+        path: relative.to_string_lossy().into_owned(),
+        length: spec.length,
+        selected: spec.selected,
+    })
+}
+
 /// Directory a task writes into, derived from its resolved `final_path`.
 ///
 /// `torrent.add` resolves the payload path inside the destination directory and only the
@@ -1988,21 +2070,60 @@ impl Manager {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let client = media_http_client()?;
-        let probe_res = crate::torrent::probe_torrent(&client, url).await?;
-        let name = probe_res
+        // The probe is what tells the add which files to persist. An add that already
+        // carries `files[]` — the caller just called `torrent.probe` — is taken at its
+        // word: re-fetching a `.torrent` the caller already decoded would only repeat
+        // the network cost and could disagree with what it was shown.
+        let metadata = if params.get("files").is_some() {
+            params.clone()
+        } else {
+            let client = media_http_client()?;
+            crate::torrent::probe_torrent(&client, url).await?
+        };
+        let name = metadata
             .get("name")
             .and_then(|v| v.as_str())
             .unwrap_or("download.bin");
-        let info_hash = probe_res
+        let info_hash = metadata
             .get("info_hash")
             .and_then(|v| v.as_str())
             .unwrap_or("0000000000000000000000000000000000000000");
-        let total_bytes = probe_res.get("total_bytes").and_then(|v| v.as_u64());
-        let source_type = probe_res
+        let total_bytes = metadata.get("total_bytes").and_then(|v| v.as_u64());
+        let source_type = metadata
             .get("source_type")
             .and_then(|v| v.as_str())
-            .unwrap_or("torrent");
+            .unwrap_or_else(|| {
+                if url.starts_with("magnet:") {
+                    "magnet"
+                } else {
+                    "torrent"
+                }
+            });
+
+        let mut specs = torrent_file_specs(metadata.get("files"))?;
+        if specs.is_empty() {
+            // A magnet has no file list until its session resolves the metadata, so the
+            // 0.1.x name-derived row is the only thing there is to persist. A decodable
+            // `.torrent` always reports at least one file, so an empty list there is a
+            // failed probe: fail the add instead of inventing an index-0 row.
+            if source_type != "magnet" {
+                return Err(RpcError::invalid_params(
+                    "invalid .torrent: the probe reported no files",
+                ));
+            }
+            specs.push(TorrentFileSpec {
+                file_index: 0,
+                path: name.to_string(),
+                length: total_bytes.unwrap_or(0),
+                selected: true,
+            });
+        }
+        // Validate every path before the first write, so a hostile metainfo never leaves
+        // a half-persisted task behind.
+        let files: Vec<TorrentFileInsert> = specs
+            .iter()
+            .map(|spec| torrent_file_row(&destination_dir, spec))
+            .collect::<Result<_, _>>()?;
 
         let task_id = uuid::Uuid::new_v4().to_string();
         if !destination_dir.exists() {
@@ -2073,20 +2194,11 @@ impl Manager {
                 },
                 url,
                 seed_after_complete,
-                1,
+                files.len() as u32,
             )
             .map_err(store_error)?;
-
-        let file_path = crate::torrent::sanitize_torrent_path(&destination_dir, name)
-            .map_err(|err| RpcError::invalid_params(format!("invalid torrent file path: {err}")))?;
         self.store
-            .insert_torrent_file(
-                &task_id,
-                0,
-                &file_path.to_string_lossy(),
-                total_bytes.unwrap_or(0),
-                true,
-            )
+            .insert_torrent_files(&task_id, &files)
             .map_err(store_error)?;
 
         self.bus.publish(

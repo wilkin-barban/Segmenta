@@ -371,3 +371,279 @@ async fn probe_rejects_pieces_that_do_not_cover_the_declared_lengths() {
         .expect_err("the single-file budget must be checked too");
     assert_eq!(err.code, -32602);
 }
+
+// ---------------------------------------------------------------------------
+// R2b: `torrent.add` persists one `torrent_files` row per reported file
+// instead of collapsing every torrent into index 0.
+// ---------------------------------------------------------------------------
+
+/// A manager wired to a fresh store whose download directory lives under `dir`.
+fn manager_for(dir: &Path) -> (Arc<Manager>, Arc<Store>) {
+    let store = Arc::new(Store::open(&dir.join("segmenta.db")).unwrap());
+    let settings = Settings {
+        download_dir: dir.join("downloads").display().to_string(),
+        ..Settings::default()
+    };
+    store
+        .update_settings(
+            serde_json::to_value(&settings)
+                .unwrap()
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    let secret_store: Arc<dyn segmenta_daemon::SECRET_STORE_TRAIT> =
+        Arc::from(segmenta_daemon::open_secret_store(dir, None).unwrap());
+    let bus = Arc::new(EventBus::new());
+    let (shutdown, _rx) = watch::channel(false);
+    let manager = Arc::new(Manager::new(store.clone(), secret_store, bus, shutdown));
+    (manager, store)
+}
+
+/// `torrent.status` for one task, failing the test with the RPC error otherwise.
+async fn torrent_status(manager: &Manager, task_id: &str) -> serde_json::Value {
+    manager
+        .call("torrent.status", Some(json!({ "task_id": task_id })))
+        .await
+        .expect("torrent status")
+}
+
+#[tokio::test]
+async fn add_persists_one_row_per_file_of_a_multi_file_torrent() {
+    let dir = tempfile::tempdir().unwrap();
+    let (manager, _store) = manager_for(dir.path());
+    // 5 + 7 + 3 bytes in 4-byte pieces needs 4 hashes.
+    let body = torrent_bytes(
+        "Ubuntu ISO",
+        4,
+        None,
+        Some(&[
+            (vec!["a.txt"], 5),
+            (vec!["dir", "b.txt"], 7),
+            (vec!["c.txt"], 3),
+        ]),
+        4 * 20,
+    );
+    let server = segmenta_core::testserver::RangeServer::with_body(body).await;
+    let destination = dir.path().join("torrentes");
+    let added = manager
+        .call(
+            "torrent.add",
+            Some(json!({
+                "url": server.url(),
+                "destination_dir": destination.display().to_string(),
+            })),
+        )
+        .await
+        .expect("multi-file add");
+    server.shutdown().await;
+    let task_id = added["task_id"].as_str().unwrap().to_string();
+
+    let status = torrent_status(&manager, &task_id).await;
+    assert_eq!(
+        status["files_count"],
+        json!(3),
+        "files_count must be the real count"
+    );
+    let files = status["files"].as_array().expect("files array");
+    assert_eq!(files.len(), 3, "one row per probed file");
+    let expected = [("a.txt", 5), ("dir/b.txt", 7), ("c.txt", 3)];
+    for (index, (path, length)) in expected.iter().enumerate() {
+        assert_eq!(
+            files[index]["file_index"],
+            json!(index),
+            "contiguous indexes"
+        );
+        assert_eq!(files[index]["path"], json!(path));
+        assert_eq!(files[index]["length"], json!(length));
+        assert_eq!(files[index]["selected"], json!(true));
+    }
+
+    // `torrent.status` keeps reporting the task itself after the multi-row insert.
+    assert_eq!(status["task_id"], json!(task_id));
+    assert_eq!(status["total_bytes"], json!(15));
+    assert_eq!(
+        status["final_path"],
+        json!(destination.join("Ubuntu ISO").display().to_string())
+    );
+    assert_eq!(
+        status["destination_dir"],
+        json!(destination.display().to_string())
+    );
+}
+
+#[tokio::test]
+async fn add_keeps_a_single_file_torrent_to_one_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let (manager, _store) = manager_for(dir.path());
+    // 9 bytes in 4-byte pieces needs 3 hashes.
+    let body = torrent_bytes("ubuntu.iso", 4, Some(9), None, 3 * 20);
+    let server = segmenta_core::testserver::RangeServer::with_body(body).await;
+    let added = manager
+        .call(
+            "torrent.add",
+            Some(json!({
+                "url": server.url(),
+                "destination_dir": dir.path().join("torrentes").display().to_string(),
+            })),
+        )
+        .await
+        .expect("single-file add");
+    server.shutdown().await;
+    let task_id = added["task_id"].as_str().unwrap().to_string();
+
+    let status = torrent_status(&manager, &task_id).await;
+    assert_eq!(status["files_count"], json!(1));
+    let files = status["files"].as_array().expect("files array");
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0]["file_index"], json!(0));
+    assert_eq!(files[0]["path"], json!("ubuntu.iso"));
+    assert_eq!(files[0]["length"], json!(9));
+    assert_eq!(files[0]["selected"], json!(true));
+}
+
+#[tokio::test]
+async fn add_stores_the_sanitized_paths_the_probe_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let (manager, _store) = manager_for(dir.path());
+    // 3 files of 1 byte in 4-byte pieces needs 1 hash.
+    let body = torrent_bytes(
+        "hostile",
+        4,
+        None,
+        Some(&[
+            (vec!["../escape.bin"], 1),
+            (vec!["/etc/passwd"], 1),
+            (vec!["dir\\..\\evil.dll"], 1),
+        ]),
+        20,
+    );
+    let server = segmenta_core::testserver::RangeServer::with_body(body).await;
+    let destination = dir.path().join("torrentes");
+    let probe = manager
+        .call("torrent.probe", Some(json!({ "url": server.url() })))
+        .await
+        .expect("hostile probe");
+    let added = manager
+        .call(
+            "torrent.add",
+            Some(json!({
+                "url": server.url(),
+                "destination_dir": destination.display().to_string(),
+            })),
+        )
+        .await
+        .expect("hostile add");
+    server.shutdown().await;
+    let task_id = added["task_id"].as_str().unwrap().to_string();
+
+    let status = torrent_status(&manager, &task_id).await;
+    assert_eq!(status["files_count"], json!(3));
+    let probed: Vec<String> = probe["files"]
+        .as_array()
+        .expect("probe files")
+        .iter()
+        .map(|file| file["path"].as_str().expect("probe path").to_string())
+        .collect();
+    let stored: Vec<String> = status["files"]
+        .as_array()
+        .expect("stored files")
+        .iter()
+        .map(|file| file["path"].as_str().expect("stored path").to_string())
+        .collect();
+    assert_eq!(stored, probed, "the row keeps the path the probe sanitized");
+    for path in &stored {
+        let relative = Path::new(path);
+        assert!(!relative.is_absolute(), "{path} is absolute");
+        assert!(
+            relative
+                .components()
+                .all(|component| matches!(component, std::path::Component::Normal(_))),
+            "{path} keeps a hostile component"
+        );
+        let resolved =
+            sanitize_torrent_path(&destination, path).expect("stored path resolves inside");
+        assert!(resolved.starts_with(&destination), "{path} escaped");
+    }
+}
+
+#[tokio::test]
+async fn add_does_not_reprobe_a_torrent_that_already_carries_its_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    let (manager, store) = manager_for(dir.path());
+    // Port 1 refuses connections: a re-probe would fail with ERR_NETWORK.
+    let added = manager
+        .call(
+            "torrent.add",
+            Some(json!({
+                "url": "http://127.0.0.1:1/never-fetched.torrent",
+                "name": "Album",
+                "info_hash": "",
+                "total_bytes": 12,
+                "source_type": "torrent",
+                "destination_dir": dir.path().join("torrentes").display().to_string(),
+                "files": [
+                    { "index": 0, "path": "01.mp3", "length": 6, "selected": true },
+                    { "index": 1, "path": "cd2/02.mp3", "length": 6, "selected": true },
+                ],
+            })),
+        )
+        .await
+        .expect("an add that carries metadata must not re-probe");
+    let task_id = added["task_id"].as_str().unwrap().to_string();
+    let torrent = store
+        .get_torrent(&task_id)
+        .expect("torrent row")
+        .expect("torrent row exists");
+    assert_eq!(torrent.files_count, 2);
+
+    let status = torrent_status(&manager, &task_id).await;
+    let files = status["files"].as_array().expect("files array");
+    assert_eq!(files.len(), 2);
+    assert_eq!(files[0]["path"], json!("01.mp3"));
+    assert_eq!(files[0]["length"], json!(6));
+    assert_eq!(files[1]["file_index"], json!(1));
+    assert_eq!(files[1]["path"], json!("cd2/02.mp3"));
+}
+
+#[tokio::test]
+async fn add_refuses_a_torrent_whose_probe_reported_no_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let (manager, store) = manager_for(dir.path());
+    let err = manager
+        .call(
+            "torrent.add",
+            Some(json!({
+                "url": "http://127.0.0.1:1/never-fetched.torrent",
+                "name": "Album",
+                "total_bytes": 0,
+                "source_type": "torrent",
+                "files": [],
+            })),
+        )
+        .await
+        .expect_err("a torrent without files must not invent an index-0 row");
+    assert_eq!(err.code, -32602);
+    assert!(
+        store.list(None, 10, 0).unwrap().is_empty(),
+        "a rejected add must not persist a task"
+    );
+}
+
+#[tokio::test]
+async fn add_fails_with_the_probe_error_and_persists_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let (manager, store) = manager_for(dir.path());
+    let err = manager
+        .call(
+            "torrent.add",
+            Some(json!({ "url": "http://127.0.0.1:1/never-fetched.torrent" })),
+        )
+        .await
+        .expect_err("a failed probe must fail the add");
+    assert_eq!(err.code, 1004);
+    assert!(
+        store.list(None, 10, 0).unwrap().is_empty(),
+        "a failed probe must not persist a task"
+    );
+}
