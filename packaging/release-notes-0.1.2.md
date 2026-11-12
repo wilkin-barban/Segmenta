@@ -6,8 +6,9 @@ HTTP/HTTPS, YouTube público y HLS/DASH públicos sin cifrar.
 
 ## Estado real de la extensión
 
-- La GUI ya no dice «Listo» sólo porque exista un manifiesto nativo: distingue **manifiesto
-  nativo listo**, **extensión no instalada**, **instalada** y **conectada**, por navegador.
+- La GUI ya no dice «Listo» sólo porque exista un manifiesto nativo: informa el estado real por
+  navegador (`native-ready`, `native-missing`, `extension-installed`, `unsupported`) en lugar de
+  asumir que la extensión está instalada.
 - El identificador del add-on de Firefox es el que se publica, `segmenta@wilkin.github.io`, y
   un test lo ata al manifiesto real para que no vuelvan a divergir.
 - Los manifiestos por usuario respetan `XDG_CONFIG_HOME`, se escriben `0644`, validan el host y
