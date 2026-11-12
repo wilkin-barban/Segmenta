@@ -15,7 +15,8 @@ function setupFakeBrowser(settings, nativeReplies = {}, options = {}) {
   const events = [];
   const notifications = [];
   const failing = Array.isArray(options.failingMethods) ? options.failingMethods : [];
-  const storageData = { segmenta_settings: settings, segmenta_settings_version: '0.1.1' };
+  // Keep in step with SegmentaBackground.SETTINGS_CACHE_VERSION (asserted below).
+  const storageData = { segmenta_settings: settings, segmenta_settings_version: '0.1.2' };
   let nextTaskId = 0;
 
   function defaultTaskId() {
@@ -43,6 +44,9 @@ function setupFakeBrowser(settings, nativeReplies = {}, options = {}) {
     runtime: {
       id: EXTENSION_ID,
       lastError: undefined,
+      getURL(relative) {
+        return `chrome-extension://${EXTENSION_ID}/${String(relative).replace(/^\/+/, '')}`;
+      },
       sendNativeMessage(host, message, callback) {
         nativeCalls.push({ host, message });
         events.push('native:' + message.method);
@@ -86,12 +90,34 @@ function setupFakeBrowser(settings, nativeReplies = {}, options = {}) {
         addListener(fn) { this.listeners.push(fn); },
         removeListener(fn) { this.listeners = this.listeners.filter(l => l !== fn); },
       },
+      // A capture pauses first and only cancels once the host owns the file.
+      pause(id, cb) {
+        events.push('pause:' + id);
+        if (cb) cb();
+      },
+      resume(id, cb) {
+        events.push('resume:' + id);
+        if (cb) cb();
+      },
       cancel(id, cb) {
         canceled.push(id);
+        events.push('cancel:' + id);
         if (cb) cb();
       },
       erase(query, cb) {
         erased.push(query);
+        events.push('erase:' + query.id);
+        if (cb) cb();
+      },
+    },
+    windows: {
+      onRemoved: { listeners: [], addListener(fn) { this.listeners.push(fn); } },
+      create(data, cb) {
+        events.push('window:create');
+        if (cb) cb({ id: 900 });
+      },
+      remove(id, cb) {
+        events.push('window:remove:' + id);
         if (cb) cb();
       },
     },
@@ -158,6 +184,9 @@ export default function suite({ test }) {
       capture_magnet: true,
       capture_extensions: ['zip'],
       domain_denylist: [],
+      // The window itself is covered by confirm.test.mjs; these tests pin the
+      // non-interactive safe order (pause -> add -> cancel+erase).
+      capture_confirm: false,
     };
     const env = setupFakeBrowser(settings);
     await loadShared('SegmentaApi', 'browser-api.js');
@@ -170,8 +199,15 @@ export default function suite({ test }) {
 
     assert.deepEqual(env.canceled, [101]);
     assert.deepEqual(env.erased, [{ id: 101 }]);
-    // A captured file is added and then focused: no other host traffic is allowed.
-    assert.deepEqual(env.events, ['native:download.add', 'notify', 'native:system.open']);
+    // Paused first, added second, discarded third: no other host traffic is allowed.
+    assert.deepEqual(env.events, [
+      'pause:101',
+      'native:download.add',
+      'cancel:101',
+      'erase:101',
+      'notify',
+      'native:system.open',
+    ]);
     assert.deepEqual(env.nativeCalls.map((call) => call.message.method), ['download.add', 'system.open']);
     assert.equal(env.nativeCalls[0].message.params.url, 'https://example.com/archive.zip');
     assert.deepEqual(env.nativeCalls[1].message.params, { task_id: 'task-000001' });
@@ -205,6 +241,9 @@ export default function suite({ test }) {
       capture_magnet: true,
       capture_extensions: ['zip'],
       domain_denylist: [],
+      // The window itself is covered by confirm.test.mjs; these tests pin the
+      // non-interactive safe order (pause -> add -> cancel+erase).
+      capture_confirm: false,
     };
     const env = setupFakeBrowser(settings);
     await loadShared('SegmentaApi', 'browser-api.js');
@@ -226,6 +265,9 @@ export default function suite({ test }) {
       capture_magnet: true,
       capture_extensions: ['zip'],
       domain_denylist: [],
+      // The window itself is covered by confirm.test.mjs; these tests pin the
+      // non-interactive safe order (pause -> add -> cancel+erase).
+      capture_confirm: false,
     };
     const env = setupFakeBrowser(settings);
     await loadShared('SegmentaApi', 'browser-api.js');
@@ -248,6 +290,9 @@ export default function suite({ test }) {
       capture_magnet: true,
       capture_extensions: ['zip'],
       domain_denylist: [],
+      // The window itself is covered by confirm.test.mjs; these tests pin the
+      // non-interactive safe order (pause -> add -> cancel+erase).
+      capture_confirm: false,
     };
     const env = setupFakeBrowser(settings);
     await loadShared('SegmentaApi', 'browser-api.js');
@@ -261,6 +306,14 @@ export default function suite({ test }) {
     await bg.onDownloadCreated({ id: 106, url: 'https://example.com/archive.zip', filename: 'archive.zip' });
 
     assert.deepEqual(env.canceled, [106]);
+    assert.deepEqual(env.events, [
+      'pause:106',
+      'native:download.add',
+      'cancel:106',
+      'erase:106',
+      'notify',
+      'native:system.open',
+    ]);
     assert.deepEqual(env.nativeCalls.map((call) => call.message.method), ['download.add', 'system.open']);
   });
 
@@ -271,6 +324,9 @@ export default function suite({ test }) {
       capture_magnet: true,
       capture_extensions: ['zip'],
       domain_denylist: [],
+      // The window itself is covered by confirm.test.mjs; these tests pin the
+      // non-interactive safe order (pause -> add -> cancel+erase).
+      capture_confirm: false,
     };
     const env = setupFakeBrowser(settings);
     await loadShared('SegmentaApi', 'browser-api.js');
@@ -283,6 +339,20 @@ export default function suite({ test }) {
     await bg.onDownloadCreated({ id: 108, url: 'magnet:?xt=urn:btih:1234567890abcdef1234567890abcdef12345678' });
 
     assert.deepEqual(env.canceled, [107, 108]);
+    assert.deepEqual(env.events, [
+      'pause:107',
+      'native:torrent.add',
+      'cancel:107',
+      'erase:107',
+      'notify',
+      'native:system.open',
+      'pause:108',
+      'native:torrent.add',
+      'cancel:108',
+      'erase:108',
+      'notify',
+      'native:system.open',
+    ]);
     assert.deepEqual(env.nativeCalls.map((call) => call.message.method), [
       'torrent.add',
       'system.open',
@@ -300,6 +370,7 @@ export default function suite({ test }) {
       capture_magnet: true,
       capture_extensions: ['r0*', 'r1*'],
       domain_denylist: [],
+      capture_confirm: false,
     };
     const env = setupFakeBrowser(settings);
     await loadShared('SegmentaApi', 'browser-api.js');
@@ -313,6 +384,20 @@ export default function suite({ test }) {
     await bg.onDownloadCreated({ id: 111, url: 'https://example.com/archive.zip', filename: 'archive.zip' });
 
     assert.deepEqual(env.canceled, [109, 110]);
+    assert.deepEqual(env.events, [
+      'pause:109',
+      'native:download.add',
+      'cancel:109',
+      'erase:109',
+      'notify',
+      'native:system.open',
+      'pause:110',
+      'native:download.add',
+      'cancel:110',
+      'erase:110',
+      'notify',
+      'native:system.open',
+    ]);
     assert.deepEqual(env.nativeCalls.map((call) => call.message.method), [
       'download.add',
       'system.open',
@@ -474,6 +559,16 @@ export default function suite({ test }) {
     assert.deepEqual(env.nativeCalls, []);
     assert.deepEqual(env.events, []);
     assert.equal(env.notifications.length, 0);
+  });
+
+  test('background capture: the fake cache version matches the background constant', async () => {
+    setupFakeBrowser({});
+    await loadShared('SegmentaApi', 'browser-api.js');
+    await loadShared('SegmentaProtocol', 'protocol.js');
+    await loadShared('SegmentaValidate', 'validate.js');
+    await import(new URL('../chromium/background.js', import.meta.url).href);
+
+    assert.equal(globalThis.SegmentaBackground.SETTINGS_CACHE_VERSION, '0.1.2');
   });
 
   test('background open: a failing host error is reported and nothing is announced', async () => {

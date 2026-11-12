@@ -63,6 +63,7 @@ export default function suite({ test }) {
       readExt('shared', 'panel.js'),
       readExt('chromium', 'content.js'),
       readExt('chromium', 'popup.js'),
+      readExt('chromium', 'confirm.js'),
     ];
     const used = matchAllKeys(sources.join('\n'), [
       "\\bt\\(\\s*'([A-Za-z0-9_]+)'",
@@ -138,9 +139,11 @@ export default function suite({ test }) {
       ['chromium', 'content.js'],
       ['chromium', 'document.js'],
       ['chromium', 'popup.js'],
+      ['chromium', 'confirm.js'],
       ['firefox', 'background.js'],
       ['firefox', 'content.js'],
       ['firefox', 'document.js'],
+      ['firefox', 'confirm.js'],
     ];
     for (const parts of codeFiles) {
       const raw = readExt(...parts);

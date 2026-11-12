@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Segmenta</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font: 13px/1.45 system-ui, -apple-system, 'Segoe UI', sans-serif;
+      }
+      body {
+        margin: 0;
+        padding: 16px;
+        background: #1d1d20;
+        color: #f6f6f6;
+      }
+      h1 {
+        margin: 0 0 6px;
+        font-size: 15px;
+        font-weight: 700;
+      }
+      p {
+        margin: 0 0 12px;
+        color: #c9c9cf;
+      }
+      dl {
+        margin: 0 0 14px;
+        padding: 10px 12px;
+        border: 1px solid #3a3a44;
+        border-radius: 8px;
+        background: #121214;
+      }
+      dt {
+        margin: 0;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: #9a9aa4;
+      }
+      dd {
+        margin: 2px 0 10px;
+        word-break: break-word;
+      }
+      dd:last-of-type {
+        margin-bottom: 0;
+      }
+      .actions {
+        display: flex;
+        gap: 10px;
+      }
+      button {
+        flex: 1;
+        padding: 9px 10px;
+        border: 0;
+        border-radius: 8px;
+        font: 600 13px/1.2 system-ui, sans-serif;
+        cursor: pointer;
+      }
+      #accept {
+        background: #3584e4;
+        color: #ffffff;
+      }
+      #accept:hover {
+        background: #4a93ea;
+      }
+      #reject {
+        background: #3a3a44;
+        color: #f6f6f6;
+      }
+      #reject:hover {
+        background: #4a4a56;
+      }
+      button:disabled {
+        background: #3a3a44;
+        color: #9a9aa4;
+        cursor: default;
+      }
+      .status {
+        margin: 12px 0 0;
+        font-size: 12px;
+        min-height: 16px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .status.error {
+        color: #ffb3bf;
+      }
+      .status.ok {
+        color: #b6f0c8;
+      }
+    </style>
+  </head>
+  <body>
+    <h1 id="title"></h1>
+    <p id="intro"></p>
+    <dl>
+      <dt id="name-label"></dt>
+      <dd id="name"></dd>
+      <dt id="host-label"></dt>
+      <dd id="host"></dd>
+      <dt id="folder-label"></dt>
+      <dd id="folder"></dd>
+    </dl>
+    <div class="actions">
+      <button id="accept" type="button" disabled></button>
+      <button id="reject" type="button" disabled></button>
+    </div>
+    <p id="status" class="status"></p>
+    <script src="shared/browser-api.js"></script>
+    <script src="confirm.js"></script>
+  </body>
+</html>

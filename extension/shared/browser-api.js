@@ -179,6 +179,17 @@
 
   const downloads = {
     onCreated: createEventWrapper('downloads', 'onCreated'),
+    // Pausing keeps the bytes the browser already received, so a capture can be
+    // confirmed without ever losing data; cancel/erase are only used once the
+    // daemon owns the file.
+    pause(downloadId) {
+      const ns = resolveNamespace(null, 'downloads');
+      return invoke(resolveRuntime(), ns, 'pause', [downloadId]);
+    },
+    resume(downloadId) {
+      const ns = resolveNamespace(null, 'downloads');
+      return invoke(resolveRuntime(), ns, 'resume', [downloadId]);
+    },
     cancel(downloadId) {
       const ns = resolveNamespace(null, 'downloads');
       return invoke(resolveRuntime(), ns, 'cancel', [downloadId]);
@@ -186,6 +197,20 @@
     erase(query) {
       const ns = resolveNamespace(null, 'downloads');
       return invoke(resolveRuntime(), ns, 'erase', [query]);
+    },
+  };
+
+  // The confirmation window is our own extension page: `windows` needs no extra
+  // permission and the page never sees anything it cannot display.
+  const windows = {
+    onRemoved: createEventWrapper('windows', 'onRemoved'),
+    create(createData) {
+      const ns = resolveNamespace(null, 'windows');
+      return invoke(resolveRuntime(), ns, 'create', [createData]);
+    },
+    remove(windowId) {
+      const ns = resolveNamespace(null, 'windows');
+      return invoke(resolveRuntime(), ns, 'remove', [windowId]);
     },
   };
 
@@ -217,6 +242,7 @@
     addListener: addListener,
     resolveRuntime: resolveRuntime,
     downloads: downloads,
+    windows: windows,
     contextMenus: contextMenus,
     storage: storage,
   };

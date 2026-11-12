@@ -21,6 +21,45 @@ export const targets = [
 ];
 export const languages = ['es', 'en', 'pt_BR'];
 
+/**
+ * Files every shipped target must contain. The capture confirmation window is part
+ * of the payload: without it the extension can only choose between losing the
+ * download and capturing it without asking.
+ */
+export const requiredFiles = {
+  chromium: [
+    'manifest.json',
+    'background.js',
+    'popup.html',
+    'popup.js',
+    'confirm.html',
+    'confirm.js',
+    'shared/browser-api.js',
+    'shared/protocol.js',
+    'shared/validate.js',
+    'icons/icon-128.png',
+  ],
+  firefox: [
+    'manifest.json',
+    'background.js',
+    'popup.html',
+    'popup.js',
+    'confirm.html',
+    'confirm.js',
+    'shared/browser-api.js',
+    'shared/protocol.js',
+    'shared/validate.js',
+    'icons/icon-128.png',
+  ],
+};
+
+/** Relative paths the target is missing from the staged file list. */
+export function missingFiles(target, files) {
+  const expected = requiredFiles[target] || [];
+  const present = new Set(files.map((file) => file.split(path.sep).join('/')));
+  return expected.filter((file) => !present.has(file));
+}
+
 /** Recursively list files relative to `root`. */
 export function walk(root, prefix = '') {
   const out = [];
@@ -192,6 +231,9 @@ function main() {
     syncLocales(target.name);
     const files = walk(root);
     const problems = validateLocales(root, files);
+    for (const missing of missingFiles(target.name, files)) {
+      problems.push(`missing required file ${missing}`);
+    }
     if (problems.length > 0) {
       failed = true;
       for (const problem of problems) console.error(`pack: ${target.name}: ${problem}`);
