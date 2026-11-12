@@ -92,6 +92,8 @@ struct DemoState {
     events: VecDeque<ClientEvent>,
     error: Option<ClientError>,
     settings: Option<Value>,
+    /// Queues answered by `queue.list`, in daemon order.
+    queues: Vec<String>,
     list_calls: usize,
 }
 
@@ -100,9 +102,19 @@ impl DemoClient {
         DemoClient {
             state: Arc::new(Mutex::new(DemoState {
                 settings: Some(default_settings()),
+                // The daemon always has `main`; `set_queues` replaces the whole list.
+                queues: vec!["main".to_string()],
                 ..DemoState::default()
             })),
         }
+    }
+
+    /// Queues answered by `queue.list`, in the order the daemon lists them.
+    ///
+    /// An empty list is meaningful: it is how a test proves the sidebar does not
+    /// invent queues from the downloads.
+    pub fn set_queues(&self, names: Vec<&str>) {
+        self.state.lock().unwrap().queues = names.into_iter().map(str::to_string).collect();
     }
 
     /// Rows are stored exactly as the daemon sends them: `download.list` drops
@@ -197,12 +209,46 @@ impl Client for DemoClient {
             })),
             "download.list" => {
                 state.list_calls += 1;
-                let mut rows = Vec::with_capacity(state.rows.len());
-                for row in &state.rows {
+                // Same paging as the daemon (OpenSpec 07 §3.3): `limit` is optional
+                // and `offset` skips rows after the filter.
+                let limit = params.get("limit").and_then(Value::as_u64);
+                let offset = params.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
+                let mut rows = Vec::new();
+                for row in state.rows.iter().skip(offset) {
+                    if limit.is_some_and(|limit| rows.len() as u64 >= limit) {
+                        break;
+                    }
                     let mut row = row.clone();
                     row["segments"] = json!([]);
                     rows.push(row);
                 }
+                Ok(Value::Array(rows))
+            }
+            "queue.list" => {
+                let rows: Vec<Value> = state
+                    .queues
+                    .iter()
+                    .map(|name| {
+                        let queued: Vec<&Value> = state
+                            .rows
+                            .iter()
+                            .filter(|row| row["queue_name"].as_str() == Some(name.as_str()))
+                            .collect();
+                        let count = |status: &str| {
+                            queued
+                                .iter()
+                                .filter(|row| row["status"].as_str() == Some(status))
+                                .count()
+                        };
+                        json!({
+                            "name": name,
+                            "max_active": 3,
+                            "active": count("downloading"),
+                            "pending": count("pending"),
+                            "paused": count("paused")
+                        })
+                    })
+                    .collect();
                 Ok(Value::Array(rows))
             }
             "download.status" => {
