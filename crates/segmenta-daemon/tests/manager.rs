@@ -451,3 +451,57 @@ async fn system_status_reports_the_selected_backend() {
     let status = call(&h.manager, "system.status", json!({})).await.unwrap();
     assert_eq!(status["secret_backend"], "unavailable");
 }
+
+/// `system.open` must launch the GUI with a fixed argv and never through a shell.
+#[tokio::test]
+async fn system_open_launches_the_gui_with_the_task_as_an_argument() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+    h.store
+        .insert_download(&record("focus-me", DownloadStatus::Pending))
+        .unwrap();
+
+    let args_file = dir.path().join("argv.txt");
+    let gui = dir.path().join("segmenta-gui");
+    std::fs::write(
+        &gui,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n",
+            args_file.display()
+        ),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&gui, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    std::env::set_var("SEGMENTA_GUI", &gui);
+    let result = call(&h.manager, "system.open", json!({ "task_id": "focus-me" })).await;
+    std::env::remove_var("SEGMENTA_GUI");
+
+    let value = result.expect("an existing task must open the GUI");
+    assert_eq!(value["opened"], json!(true));
+    assert_eq!(value["task_id"], json!("focus-me"));
+    assert_eq!(value["gui_path"], json!(gui.to_string_lossy()));
+
+    // The child is detached, so its argv is read with a bounded wait.
+    let mut argv = String::new();
+    for _ in 0..100 {
+        if let Ok(text) = std::fs::read_to_string(&args_file) {
+            argv = text;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(argv, "--show-task\nfocus-me\n");
+}
+
+/// The GUI is never spawned for a task that does not exist.
+#[tokio::test]
+async fn system_open_rejects_an_unknown_task_before_touching_the_gui() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+    let error = call(&h.manager, "system.open", json!({ "task_id": "missing" }))
+        .await
+        .expect_err("an unknown task must fail");
+    assert_eq!(error.0, 1001);
+}

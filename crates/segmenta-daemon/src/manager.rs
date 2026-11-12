@@ -2045,6 +2045,20 @@ impl RpcHandler for Manager {
                         .map_err(|err| RpcError::invalid_params(err.to_string()))?;
                     self.delete_task(parsed).await
                 }
+                "system.open" => {
+                    let parsed: TaskIdParams = serde_json::from_value(parse(params)?)
+                        .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                    self.store
+                        .get(&parsed.task_id)
+                        .map_err(store_error)?
+                        .ok_or_else(|| RpcError::task_not_found(&parsed.task_id))?;
+                    let gui = open_in_gui(&parsed.task_id)?;
+                    Ok(json!({
+                        "opened": true,
+                        "task_id": parsed.task_id,
+                        "gui_path": gui.to_string_lossy(),
+                    }))
+                }
                 "extension.status" => {
                     let browsers = crate::browsers::detect();
                     let home = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default());
@@ -2206,6 +2220,62 @@ impl RpcHandler for Manager {
 /// Planner helper kept public for the daemon tests.
 pub fn planned_segments(total: u64, connections: u32) -> Vec<planner::SegmentRange> {
     planner::initial_segments(total, connections)
+}
+
+/// Whether `path` is a regular file this user can execute.
+fn is_executable(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.metadata()
+        .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
+}
+
+/// GUI binary used by `system.open`.
+///
+/// `SEGMENTA_GUI` wins so a development build or a test can point at another
+/// binary; otherwise the GUI is expected next to the daemon, which is where the
+/// package installs both.
+fn gui_binary() -> Option<PathBuf> {
+    if let Some(value) = std::env::var_os("SEGMENTA_GUI") {
+        let path = PathBuf::from(value);
+        return is_executable(&path).then_some(path);
+    }
+    let current = std::env::current_exe().ok()?;
+    let sibling = current.parent()?.join("segmenta-gui");
+    is_executable(&sibling).then_some(sibling)
+}
+
+/// Brings the GUI forward with one task focused.
+///
+/// The argv is fixed and no shell is involved, so a task id can never turn into
+/// a command. The child is reaped by a detached thread: the daemon outlives the
+/// GUI and must not accumulate zombies.
+fn open_in_gui(task_id: &str) -> Result<PathBuf, RpcError> {
+    let gui = gui_binary().ok_or_else(|| {
+        RpcError::new(
+            1053,
+            "ERR_GUI_NOT_FOUND",
+            "segmenta-gui is not installed next to the daemon",
+        )
+    })?;
+    let mut child = std::process::Command::new(&gui)
+        .arg("--show-task")
+        .arg(task_id)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|err| {
+            RpcError::new(
+                1053,
+                "ERR_GUI_NOT_FOUND",
+                format!("cannot run {}: {err}", gui.display()),
+            )
+        })?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(gui)
 }
 
 /// HTTPS client for manifest and fragment downloads.
