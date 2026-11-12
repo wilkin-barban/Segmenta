@@ -178,5 +178,17 @@
   "notAvailable": {
     "message": "Segmenta no está disponible en esta página.",
     "description": "Página sin botón flotante."
+  },
+  "taskAddedTitle": {
+    "message": "Añadida a Segmenta",
+    "description": "Título de la notificación cuando la tarea se crea."
+  },
+  "taskAddedBody": {
+    "message": "Carpeta de destino: $1",
+    "description": "Cuerpo de la notificación con la carpeta destino."
+  },
+  "taskAddedBodyGeneric": {
+    "message": "La tarea se abrió en Segmenta.",
+    "description": "Cuerpo de la notificación cuando el host no informa la carpeta."
   }
 }

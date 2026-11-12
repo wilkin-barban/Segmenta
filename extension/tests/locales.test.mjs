@@ -79,6 +79,36 @@ export default function suite({ test }) {
     }
   });
 
+  test('the task-added toast keys keep the documented Spanish title', async () => {
+    const keys = ['taskAddedTitle', 'taskAddedBody', 'taskAddedBodyGeneric'];
+    for (const locale of LOCALES) {
+      const catalog = readJson('_locales', locale, 'messages.json');
+      for (const key of keys) {
+        assert.equal(
+          typeof (catalog[key] && catalog[key].message),
+          'string',
+          `${locale} is missing ${key}`,
+        );
+      }
+    }
+    assert.equal(
+      readJson('_locales', 'es', 'messages.json').taskAddedTitle.message,
+      'A\u00f1adida a Segmenta',
+    );
+  });
+
+  test('per-browser locale copies stay identical to the canonical catalogs', async () => {
+    for (const target of ['chromium', 'firefox']) {
+      for (const locale of LOCALES) {
+        assert.equal(
+          readExt(target, '_locales', locale, 'messages.json'),
+          readExt('_locales', locale, 'messages.json'),
+          `${target}/_locales/${locale}/messages.json is stale`,
+        );
+      }
+    }
+  });
+
   test('manifests only reference locale keys that exist', async () => {
     const catalog = readJson('_locales', 'es', 'messages.json');
     for (const target of ['chromium', 'firefox']) {

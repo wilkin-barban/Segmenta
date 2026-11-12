@@ -2,12 +2,42 @@ import assert from 'node:assert/strict';
 import { loadShared } from './helpers.mjs';
 
 const EXTENSION_ID = 'abcdefghijklmnopabcdefghijklmnop';
+const YOUTUBE_WATCH = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
+const SENDER = { id: EXTENSION_ID, url: YOUTUBE_WATCH };
+const TASK_ADDED_TITLE = 'Añadida a Segmenta';
 
-function setupFakeBrowser(settings, nativeReplies = {}) {
+function setupFakeBrowser(settings, nativeReplies = {}, options = {}) {
   const canceled = [];
   const erased = [];
   const nativeCalls = [];
+  // Everything the background does after a successful add, in call order, so the
+  // "notify first, then focus" contract can be asserted exactly.
+  const events = [];
+  const notifications = [];
+  const failing = Array.isArray(options.failingMethods) ? options.failingMethods : [];
   const storageData = { segmenta_settings: settings, segmenta_settings_version: '0.1.1' };
+  let nextTaskId = 0;
+
+  function defaultTaskId() {
+    nextTaskId += 1;
+    return 'task-' + String(nextTaskId).padStart(6, '0');
+  }
+
+  const notificationsApi = {
+    create(idOrOptions, optionsOrCallback, maybeCallback) {
+      const notificationId = typeof idOrOptions === 'string' ? idOrOptions : '';
+      const createOptions = typeof idOrOptions === 'string' ? optionsOrCallback : idOrOptions;
+      const callback = typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback;
+      notifications.push({
+        id: notificationId,
+        title: createOptions.title,
+        message: createOptions.message,
+      });
+      events.push('notify');
+      if (callback) callback(notificationId);
+      return Promise.resolve(notificationId);
+    },
+  };
 
   globalThis.chrome = {
     runtime: {
@@ -15,7 +45,21 @@ function setupFakeBrowser(settings, nativeReplies = {}) {
       lastError: undefined,
       sendNativeMessage(host, message, callback) {
         nativeCalls.push({ host, message });
-        const reply = nativeReplies[message.method] || { jsonrpc: '2.0', id: message.id, result: { ok: true } };
+        events.push('native:' + message.method);
+        if (failing.indexOf(message.method) !== -1) {
+          callback({ jsonrpc: '2.0', id: message.id, error: { code: -32601, message: 'method not found' } });
+          return;
+        }
+        const canned = nativeReplies[message.method];
+        const reply = canned
+          ? Object.assign({}, canned, { id: message.id })
+          : {
+            jsonrpc: '2.0',
+            id: message.id,
+            result: message.method === 'system.open'
+              ? { opened: true }
+              : { task_id: defaultTaskId(), status: 'downloading' },
+          };
         callback(reply);
       },
     },
@@ -57,7 +101,11 @@ function setupFakeBrowser(settings, nativeReplies = {}) {
     },
   };
 
-  return { canceled, erased, nativeCalls, storageData };
+  if (options.notifications !== false) {
+    globalThis.chrome.notifications = notificationsApi;
+  }
+
+  return { canceled, erased, nativeCalls, notifications, events, storageData };
 }
 
 export default function suite({ test }) {
@@ -122,9 +170,11 @@ export default function suite({ test }) {
 
     assert.deepEqual(env.canceled, [101]);
     assert.deepEqual(env.erased, [{ id: 101 }]);
-    assert.equal(env.nativeCalls.length, 1);
-    assert.equal(env.nativeCalls[0].message.method, 'download.add');
+    // A captured file is added and then focused: no other host traffic is allowed.
+    assert.deepEqual(env.events, ['native:download.add', 'notify', 'native:system.open']);
+    assert.deepEqual(env.nativeCalls.map((call) => call.message.method), ['download.add', 'system.open']);
     assert.equal(env.nativeCalls[0].message.params.url, 'https://example.com/archive.zip');
+    assert.deepEqual(env.nativeCalls[1].message.params, { task_id: 'task-000001' });
   });
 
   test('background capture: denylisted host skipped', async () => {
@@ -211,7 +261,7 @@ export default function suite({ test }) {
     await bg.onDownloadCreated({ id: 106, url: 'https://example.com/archive.zip', filename: 'archive.zip' });
 
     assert.deepEqual(env.canceled, [106]);
-    assert.equal(env.nativeCalls.length, 1);
+    assert.deepEqual(env.nativeCalls.map((call) => call.message.method), ['download.add', 'system.open']);
   });
 
   test('background capture: torrent routed to torrent.add', async () => {
@@ -233,9 +283,14 @@ export default function suite({ test }) {
     await bg.onDownloadCreated({ id: 108, url: 'magnet:?xt=urn:btih:1234567890abcdef1234567890abcdef12345678' });
 
     assert.deepEqual(env.canceled, [107, 108]);
-    assert.equal(env.nativeCalls.length, 2);
-    assert.equal(env.nativeCalls[0].message.method, 'torrent.add');
-    assert.equal(env.nativeCalls[1].message.method, 'torrent.add');
+    assert.deepEqual(env.nativeCalls.map((call) => call.message.method), [
+      'torrent.add',
+      'system.open',
+      'torrent.add',
+      'system.open',
+    ]);
+    assert.deepEqual(env.nativeCalls[1].message.params, { task_id: 'task-000001' });
+    assert.deepEqual(env.nativeCalls[3].message.params, { task_id: 'task-000002' });
   });
 
   test('background capture: r0* and r1* prefix match', async () => {
@@ -258,6 +313,129 @@ export default function suite({ test }) {
     await bg.onDownloadCreated({ id: 111, url: 'https://example.com/archive.zip', filename: 'archive.zip' });
 
     assert.deepEqual(env.canceled, [109, 110]);
-    assert.equal(env.nativeCalls.length, 2);
+    assert.deepEqual(env.nativeCalls.map((call) => call.message.method), [
+      'download.add',
+      'system.open',
+      'download.add',
+      'system.open',
+    ]);
+  });
+
+  test('background add: successful media.add focuses the task after the add reply', async () => {
+    const taskId = '123e4567-e89b-12d3-a456-426614174000';
+    const env = setupFakeBrowser({}, {
+      'media.add': { jsonrpc: '2.0', id: 1, result: { task_id: taskId, status: 'downloading' } },
+    });
+    await loadShared('SegmentaApi', 'browser-api.js');
+    await loadShared('SegmentaProtocol', 'protocol.js');
+    await loadShared('SegmentaValidate', 'validate.js');
+    await import(new URL('../chromium/background.js', import.meta.url).href);
+    const bg = globalThis.SegmentaBackground;
+
+    const result = await bg.handle({ type: 'segmenta.add', url: YOUTUBE_WATCH, mode: 'video' }, SENDER);
+
+    assert.equal(result.ok, true);
+    assert.equal(result.data.task_id, taskId);
+    assert.deepEqual(env.events, ['native:media.add', 'notify', 'native:system.open']);
+    assert.deepEqual(env.nativeCalls[1].message, {
+      jsonrpc: '2.0',
+      id: env.nativeCalls[1].message.id,
+      method: 'system.open',
+      params: { task_id: taskId },
+    });
+  });
+
+  test('background add: a failing system.open never changes the add result', async () => {
+    const taskId = '123e4567-e89b-12d3-a456-426614174001';
+    const env = setupFakeBrowser(
+      {},
+      { 'media.add': { jsonrpc: '2.0', id: 1, result: { task_id: taskId, status: 'downloading' } } },
+      { failingMethods: ['system.open'] },
+    );
+    await loadShared('SegmentaApi', 'browser-api.js');
+    await loadShared('SegmentaProtocol', 'protocol.js');
+    await loadShared('SegmentaValidate', 'validate.js');
+    await import(new URL('../chromium/background.js', import.meta.url).href);
+    const bg = globalThis.SegmentaBackground;
+
+    const result = await bg.handle({ type: 'segmenta.add', url: YOUTUBE_WATCH, mode: 'video' }, SENDER);
+
+    assert.equal(result.ok, true);
+    assert.equal(result.data.task_id, taskId);
+    assert.deepEqual(env.events, ['native:media.add', 'notify', 'native:system.open']);
+  });
+
+  test('background add: a missing notifications API never fails the add', async () => {
+    const taskId = '123e4567-e89b-12d3-a456-426614174002';
+    const env = setupFakeBrowser(
+      {},
+      { 'media.add': { jsonrpc: '2.0', id: 1, result: { task_id: taskId, status: 'downloading' } } },
+      { notifications: false },
+    );
+    await loadShared('SegmentaApi', 'browser-api.js');
+    await loadShared('SegmentaProtocol', 'protocol.js');
+    await loadShared('SegmentaValidate', 'validate.js');
+    await import(new URL('../chromium/background.js', import.meta.url).href);
+    const bg = globalThis.SegmentaBackground;
+
+    const result = await bg.handle({ type: 'segmenta.add', url: YOUTUBE_WATCH, mode: 'audio' }, SENDER);
+
+    assert.equal(result.ok, true);
+    assert.equal(env.notifications.length, 0);
+    assert.deepEqual(env.events, ['native:media.add', 'native:system.open']);
+  });
+
+  test('background add: an add without task_id is not focused', async () => {
+    const env = setupFakeBrowser({}, {
+      'media.add': { jsonrpc: '2.0', id: 1, result: { status: 'downloading' } },
+    });
+    await loadShared('SegmentaApi', 'browser-api.js');
+    await loadShared('SegmentaProtocol', 'protocol.js');
+    await loadShared('SegmentaValidate', 'validate.js');
+    await import(new URL('../chromium/background.js', import.meta.url).href);
+    const bg = globalThis.SegmentaBackground;
+
+    const result = await bg.handle({ type: 'segmenta.add', url: YOUTUBE_WATCH, mode: 'video' }, SENDER);
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(env.events, ['native:media.add']);
+  });
+
+  test('background add: the notification carries the folder from final_path', async () => {
+    const taskId = '123e4567-e89b-12d3-a456-426614174003';
+    const env = setupFakeBrowser({}, {
+      'download.add': {
+        jsonrpc: '2.0',
+        id: 1,
+        result: { task_id: taskId, status: 'downloading', final_path: '/home/u/Descargas/ubuntu.iso' },
+      },
+      'media.add': {
+        jsonrpc: '2.0',
+        id: 2,
+        result: { task_id: taskId, status: 'downloading', destination_dir: '/srv/segmenta/video' },
+      },
+    });
+    await loadShared('SegmentaApi', 'browser-api.js');
+    await loadShared('SegmentaProtocol', 'protocol.js');
+    await loadShared('SegmentaValidate', 'validate.js');
+    await import(new URL('../chromium/background.js', import.meta.url).href);
+    const bg = globalThis.SegmentaBackground;
+
+    await bg.handle({ type: 'segmenta.capture', url: 'https://example.com/ubuntu.iso' }, SENDER);
+    assert.equal(env.notifications.length, 1);
+    assert.equal(env.notifications[0].title, TASK_ADDED_TITLE);
+    assert.equal(env.notifications[0].message.includes('/home/u/Descargas'), true);
+    assert.equal(env.notifications[0].message.includes('ubuntu.iso'), false);
+
+    // destination_dir wins over final_path when the host sends both.
+    await bg.handle({ type: 'segmenta.add', url: YOUTUBE_WATCH, mode: 'video' }, SENDER);
+    assert.equal(env.notifications.length, 2);
+    assert.equal(env.notifications[1].message.includes('/srv/segmenta/video'), true);
+    assert.deepEqual(env.nativeCalls.map((call) => call.message.method), [
+      'download.add',
+      'system.open',
+      'media.add',
+      'system.open',
+    ]);
   });
 }

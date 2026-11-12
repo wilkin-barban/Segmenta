@@ -178,5 +178,17 @@
   "notAvailable": {
     "message": "O Segmenta não está disponível nesta página.",
     "description": "Página sem botão flutuante."
+  },
+  "taskAddedTitle": {
+    "message": "Adicionada ao Segmenta",
+    "description": "Título da notificação quando a tarefa é criada."
+  },
+  "taskAddedBody": {
+    "message": "Pasta de destino: $1",
+    "description": "Corpo da notificação com a pasta de destino."
+  },
+  "taskAddedBodyGeneric": {
+    "message": "A tarefa foi aberta no Segmenta.",
+    "description": "Corpo da notificação quando o host não informa a pasta."
   }
 }

@@ -113,6 +113,135 @@ if (typeof importScripts === 'function') {
     return { ok: true, data: verdict.result };
   }
 
+  // ---- "Added to Segmenta" toast and task focus (S8) --------------------------
+  // After a successful add the user must see where the task landed and get Segmenta
+  // in front focused on it. Both steps are best effort on purpose: the task already
+  // exists in the daemon, so a muted notification or a missing GUI can never turn a
+  // successful add into a failed one.
+  const NOTIFICATION_ID = 'segmenta-task-added';
+  const NOTIFICATION_TIMEOUT_MS = 2000;
+  const NOTIFICATION_ICON = 'icons/icon-128.png';
+  // ASCII source, Spanish literal: the catalogs supply the real title.
+  const TASK_ADDED_TITLE_FALLBACK = 'A\u00f1adida a Segmenta';
+  const TASK_ADDED_BODY_FALLBACK = 'La tarea se abri\u00f3 en Segmenta.';
+
+  function message(key, substitutions) {
+    if (!API || typeof API.getMessage !== 'function') {
+      return '';
+    }
+    const text = substitutions === undefined ? API.getMessage(key) : API.getMessage(key, substitutions);
+    return typeof text === 'string' ? text : '';
+  }
+
+  function parentDirectory(value) {
+    if (typeof value !== 'string') {
+      return '';
+    }
+    const trimmed = value.trim().replace(/[\\/]+$/, '');
+    if (!trimmed) {
+      return '';
+    }
+    const cut = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
+    if (cut === 0) {
+      return trimmed.slice(0, 1);
+    }
+    return cut > 0 ? trimmed.slice(0, cut) : '';
+  }
+
+  /** Folder the task lands in: destination_dir, else the parent of final_path. */
+  function destinationFolder(data) {
+    if (!data || typeof data !== 'object') {
+      return '';
+    }
+    const destination = typeof data.destination_dir === 'string' ? data.destination_dir.trim() : '';
+    if (destination) {
+      return destination;
+    }
+    return parentDirectory(typeof data.final_path === 'string' ? data.final_path : '');
+  }
+
+  function taskAddedBody(folder) {
+    if (folder) {
+      return message('taskAddedBody', [folder]) || folder;
+    }
+    return message('taskAddedBodyGeneric') || TASK_ADDED_BODY_FALLBACK;
+  }
+
+  function notificationsApi() {
+    const runtime = API && typeof API.resolveRuntime === 'function' ? API.resolveRuntime() : null;
+    return runtime && runtime.notifications ? runtime.notifications : null;
+  }
+
+  // Resolves to true when the toast was handed to the browser; it never rejects.
+  // An absent API, a refused permission, a create() error and a silent browser are
+  // all reported as "no toast" instead of an error.
+  function showTaskNotification(folder) {
+    const notifications = notificationsApi();
+    if (!notifications || typeof notifications.create !== 'function') {
+      return Promise.resolve(false);
+    }
+    const options = {
+      type: 'basic',
+      iconUrl: NOTIFICATION_ICON,
+      title: message('taskAddedTitle') || TASK_ADDED_TITLE_FALLBACK,
+      message: taskAddedBody(folder),
+    };
+    return new Promise((resolve) => {
+      let settled = false;
+      let timer = null;
+      const finish = (value) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timer) {
+          clearTimeout(timer);
+        }
+        resolve(value);
+      };
+      timer = setTimeout(() => finish(false), NOTIFICATION_TIMEOUT_MS);
+      try {
+        const returned = notifications.create(NOTIFICATION_ID, options, () => finish(true));
+        if (returned && typeof returned.then === 'function') {
+          returned.then(() => finish(true), () => finish(false));
+        } else if (typeof returned !== 'undefined') {
+          finish(true);
+        }
+      } catch (err) {
+        finish(false);
+      }
+    });
+  }
+
+  function openTask(taskId) {
+    return callHost(() => PROTOCOL.buildSystemOpen({ taskId: taskId }));
+  }
+
+  /** Notify first (with the destination folder), then focus the task. Never throws. */
+  async function announceAddedTask(data) {
+    const taskId = data && typeof data.task_id === 'string' ? data.task_id.trim() : '';
+    if (!taskId) {
+      return false;
+    }
+    try {
+      await showTaskNotification(destinationFolder(data));
+    } catch (err) {}
+    try {
+      await openTask(taskId);
+    } catch (err) {}
+    return true;
+  }
+
+  // Calls the host once; on success it also announces the new task without ever
+  // altering the reply the caller (popup/panel/content script) receives.
+  async function callHostAndAnnounce(build) {
+    const reply = await callHost(build);
+    if (reply && reply.ok) {
+      await announceAddedTask(reply.data);
+    }
+    return reply;
+  }
+
   async function getCachedSettings() {
     const cacheVersion = '0.1.1';
     try {
@@ -258,13 +387,15 @@ if (typeof importScripts === 'function') {
     } catch (err) {}
 
     if (isTorrentFile || isMagnet) {
-      await callHost(() => PROTOCOL.buildTorrentAdd({ url: url }));
+      await callHostAndAnnounce(() => PROTOCOL.buildTorrentAdd({ url: url }));
     } else {
-      await callHost(() => PROTOCOL.buildDownloadAdd({
-        url: url,
-        filename: downloadItem.filename,
-        referrer: downloadItem.referrer,
-      }));
+      await callHostAndAnnounce(() =>
+        PROTOCOL.buildDownloadAdd({
+          url: url,
+          filename: downloadItem.filename,
+          referrer: downloadItem.referrer,
+        }),
+      );
     }
   }
 
@@ -318,7 +449,7 @@ if (typeof importScripts === 'function') {
           }),
         );
       case 'segmenta.add':
-        return callHost(() =>
+        return callHostAndAnnounce(() =>
           PROTOCOL.buildAdd({
             url: value.url,
             mode: value.mode,
@@ -331,7 +462,7 @@ if (typeof importScripts === 'function') {
       case 'segmenta.status':
         return callHost(() => PROTOCOL.buildStatus({ taskId: value.taskId }));
       case 'segmenta.capture':
-        return callHost(() =>
+        return callHostAndAnnounce(() =>
           PROTOCOL.buildDownloadAdd({
             url: value.url,
             filename: value.filename,
@@ -339,7 +470,7 @@ if (typeof importScripts === 'function') {
           }),
         );
       case 'segmenta.torrent.add':
-        return callHost(() => PROTOCOL.buildTorrentAdd({ url: value.url }));
+        return callHostAndAnnounce(() => PROTOCOL.buildTorrentAdd({ url: value.url }));
       default:
         return Promise.resolve(failure('ERR_INVALID_TYPE', 'message type is not allowed'));
     }
@@ -369,11 +500,18 @@ if (typeof importScripts === 'function') {
   global.SegmentaBackground = {
     HOST_NAME: HOST_NAME,
     NATIVE_TIMEOUT_MS: NATIVE_TIMEOUT_MS,
+    NOTIFICATION_ID: NOTIFICATION_ID,
     handle: handle,
     hostFailure: hostFailure,
     onDownloadCreated: onDownloadCreated,
     getCachedSettings: getCachedSettings,
     matchExtension: matchExtension,
     isHostDenylisted: isHostDenylisted,
+    parentDirectory: parentDirectory,
+    destinationFolder: destinationFolder,
+    taskAddedBody: taskAddedBody,
+    showTaskNotification: showTaskNotification,
+    announceAddedTask: announceAddedTask,
+    callHostAndAnnounce: callHostAndAnnounce,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);
