@@ -478,3 +478,371 @@ async fn the_exit_action_uses_the_existing_shutdown_channel() {
     );
     server.shutdown().await;
 }
+
+/// Whether `status` is one of the states that occupies a `max_active` slot (OpenSpec 12 §3).
+fn holds_slot(status: DownloadStatus) -> bool {
+    matches!(
+        status,
+        DownloadStatus::Downloading
+            | DownloadStatus::Probing
+            | DownloadStatus::Retrying
+            | DownloadStatus::Verifying
+            | DownloadStatus::Finalizing
+    )
+}
+
+/// Pending tasks of a queue, read through the same query the scheduler uses.
+fn pending_len(h: &Harness, queue: &str) -> usize {
+    h.store.pending_for_queue(queue, 100).unwrap().len()
+}
+
+/// Poll a condition in real time, for at most ~15 s.
+async fn wait_until(mut check: impl FnMut() -> bool) -> bool {
+    for _ in 0..600 {
+        if check() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    check()
+}
+
+/// Cancel every task of a queue, leaving no engine behind for the next test file.
+async fn cancel_all(h: &Harness, ids: &[&str]) {
+    for id in ids {
+        let _ = call(
+            &h.manager,
+            "download.cancel",
+            json!({ "task_id": id, "delete_file": false }),
+        )
+        .await;
+    }
+}
+
+/// A slow server keeps a task in flight long enough to observe the slot it holds.
+async fn slow_server() -> RangeServer {
+    RangeServer::start(ServerConfig {
+        body: vec![4u8; 128 * 1024],
+        chunk_size: 2048,
+        slow: Some(Duration::from_millis(15)),
+        ..ServerConfig::default()
+    })
+    .await
+}
+
+#[tokio::test]
+async fn max_active_one_starts_one_task_and_the_next_only_after_it_ends() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+    let server = slow_server().await;
+    allow_local_downloads(&h, dir.path()).await;
+    create_queue(&h, "uno", 1).await;
+    for id in ["first", "second"] {
+        h.store
+            .insert_download(&record(id, "uno", server.url().as_str(), dir.path()))
+            .unwrap();
+    }
+
+    // One hour between ticks: only a completion may start the second task.
+    let sched = QueueScheduler::new(
+        Arc::clone(&h.manager),
+        host_actions(&h),
+        Duration::from_secs(3600),
+    );
+    let handle = tokio::spawn(sched.run(h.shutdown.clone()));
+
+    let mut started_after_the_first_ended = false;
+    for _ in 0..600 {
+        let first = status_of(&h, "first");
+        let second = status_of(&h, "second");
+        assert!(
+            h.store.active_count("uno").unwrap() <= 1,
+            "max_active 1 was exceeded: first={first:?} second={second:?}"
+        );
+        if holds_slot(second) {
+            assert!(
+                !holds_slot(first),
+                "the second task started while the first still held the slot"
+            );
+            started_after_the_first_ended = true;
+        }
+        if matches!(
+            first,
+            DownloadStatus::Completed | DownloadStatus::Failed | DownloadStatus::Cancelled
+        ) && matches!(
+            second,
+            DownloadStatus::Completed | DownloadStatus::Failed | DownloadStatus::Cancelled
+        ) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    assert!(
+        started_after_the_first_ended,
+        "the second task never started after the first freed its slot"
+    );
+    assert_eq!(status_of(&h, "first"), DownloadStatus::Completed);
+    assert_eq!(status_of(&h, "second"), DownloadStatus::Completed);
+    // Both tasks are terminal in the database, so neither may keep an in-flight entry:
+    // a leaked entry would keep counting against the queue limit forever.
+    assert!(
+        wait_until(|| h.manager.running_count() == 0).await,
+        "a finished task must free its in-flight entry, found {}",
+        h.manager.running_count()
+    );
+
+    h.manager.request_shutdown();
+    handle.await.unwrap();
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn max_active_two_starts_two_of_three_pending_tasks() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+    let server = slow_server().await;
+    allow_local_downloads(&h, dir.path()).await;
+    create_queue(&h, "dos", 2).await;
+    let ids = ["a", "b", "c"];
+    for id in ids {
+        h.store
+            .insert_download(&record(id, "dos", server.url().as_str(), dir.path()))
+            .unwrap();
+    }
+
+    let mut sched = scheduler(&h);
+    sched.tick();
+
+    assert_eq!(
+        h.store.active_count("dos").unwrap(),
+        2,
+        "max_active 2 must start exactly two tasks"
+    );
+    assert_eq!(pending_len(&h, "dos"), 1, "one task must still wait");
+    assert_eq!(h.manager.running_count(), 2);
+
+    cancel_all(&h, &ids).await;
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn max_active_above_the_pending_count_starts_them_all() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+    let server = slow_server().await;
+    allow_local_downloads(&h, dir.path()).await;
+    create_queue(&h, "ocho", 8).await;
+    let ids = ["only", "other"];
+    for id in ids {
+        h.store
+            .insert_download(&record(id, "ocho", server.url().as_str(), dir.path()))
+            .unwrap();
+    }
+
+    let mut sched = scheduler(&h);
+    sched.tick();
+
+    assert_eq!(
+        h.store.active_count("ocho").unwrap(),
+        2,
+        "a limit above the pending count must not hold tasks back"
+    );
+    assert_eq!(pending_len(&h, "ocho"), 0);
+
+    cancel_all(&h, &ids).await;
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn raising_max_active_starts_the_pending_tasks_that_now_fit() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+    let server = slow_server().await;
+    allow_local_downloads(&h, dir.path()).await;
+    create_queue(&h, "tres", 1).await;
+    let ids = ["one", "two", "three"];
+    for id in ids {
+        h.store
+            .insert_download(&record(id, "tres", server.url().as_str(), dir.path()))
+            .unwrap();
+    }
+
+    let mut sched = scheduler(&h);
+    sched.tick();
+    assert_eq!(h.store.active_count("tres").unwrap(), 1);
+    assert_eq!(pending_len(&h, "tres"), 2);
+
+    // The limit lives in the `queues` row: raising it must be seen by the next start,
+    // with no stale value cached in the manager.
+    h.store.set_queue_max_active("tres", 3).unwrap();
+    sched.tick();
+
+    assert_eq!(
+        h.store.active_count("tres").unwrap(),
+        3,
+        "the raised limit must start the two waiting tasks"
+    );
+    assert_eq!(pending_len(&h, "tres"), 0);
+
+    cancel_all(&h, &ids).await;
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_cancelled_task_frees_its_slot_for_the_next_pending_task() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+    let server = slow_server().await;
+    allow_local_downloads(&h, dir.path()).await;
+    create_queue(&h, "cancel", 1).await;
+    for id in ["first", "second"] {
+        h.store
+            .insert_download(&record(id, "cancel", server.url().as_str(), dir.path()))
+            .unwrap();
+    }
+
+    // One hour between ticks: only the cancellation wake-up can start `second`.
+    let sched = QueueScheduler::new(
+        Arc::clone(&h.manager),
+        host_actions(&h),
+        Duration::from_secs(3600),
+    );
+    let handle = tokio::spawn(sched.run(h.shutdown.clone()));
+
+    assert!(
+        wait_until(|| status_of(&h, "first") == DownloadStatus::Downloading).await,
+        "the first task never started"
+    );
+    assert_eq!(status_of(&h, "second"), DownloadStatus::Pending);
+
+    call(
+        &h.manager,
+        "download.cancel",
+        json!({ "task_id": "first", "delete_file": false }),
+    )
+    .await
+    .unwrap();
+
+    let started = wait_until(|| status_of(&h, "second") != DownloadStatus::Pending).await;
+    assert!(
+        started,
+        "a cancelled task did not free its slot for the next pending task"
+    );
+    let finished = wait_terminal(&h, "second").await;
+    assert_eq!(finished, DownloadStatus::Completed, "second: {finished:?}");
+
+    h.manager.request_shutdown();
+    handle.await.unwrap();
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_failed_task_frees_its_slot_for_the_next_pending_task() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+    let broken = RangeServer::start(ServerConfig {
+        force_status: Some(404),
+        ..ServerConfig::default()
+    })
+    .await;
+    let server = slow_server().await;
+    let settings = Settings {
+        allow_local_downloads: true,
+        download_dir: dir.path().display().to_string(),
+        max_connections: 2,
+        max_retries: 0,
+        ..Settings::default()
+    };
+    call(
+        &h.manager,
+        "settings.update",
+        serde_json::to_value(&settings).unwrap(),
+    )
+    .await
+    .unwrap();
+    create_queue(&h, "fallo", 1).await;
+    h.store
+        .insert_download(&record(
+            "broken",
+            "fallo",
+            broken.url().as_str(),
+            dir.path(),
+        ))
+        .unwrap();
+    h.store
+        .insert_download(&record(
+            "healthy",
+            "fallo",
+            server.url().as_str(),
+            dir.path(),
+        ))
+        .unwrap();
+
+    // One hour between ticks: only the failure wake-up can start `healthy`.
+    let sched = QueueScheduler::new(
+        Arc::clone(&h.manager),
+        host_actions(&h),
+        Duration::from_secs(3600),
+    );
+    let handle = tokio::spawn(sched.run(h.shutdown.clone()));
+
+    let started = wait_until(|| status_of(&h, "healthy") != DownloadStatus::Pending).await;
+    assert!(
+        started,
+        "a failed task did not free its slot for the next pending task"
+    );
+    let failed = wait_terminal(&h, "broken").await;
+    assert_eq!(failed, DownloadStatus::Failed, "broken: {failed:?}");
+    let finished = wait_terminal(&h, "healthy").await;
+    assert_eq!(finished, DownloadStatus::Completed, "healthy: {finished:?}");
+
+    h.manager.request_shutdown();
+    handle.await.unwrap();
+    broken.shutdown().await;
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn download_add_never_starts_more_than_the_queue_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+    let server = slow_server().await;
+    allow_local_downloads(&h, dir.path()).await;
+    create_queue(&h, "manual", 1).await;
+
+    // `start_immediately` is the default: two adds into one slot.
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        let added = call(
+            &h.manager,
+            "download.add",
+            json!({ "url": server.url().as_str(), "queue_name": "manual" }),
+        )
+        .await
+        .unwrap();
+        ids.push(added["task_id"].as_str().unwrap().to_string());
+    }
+
+    assert_eq!(
+        h.store.active_count("manual").unwrap(),
+        1,
+        "`download.add` started more tasks than `max_active` allows"
+    );
+    assert_eq!(pending_len(&h, "manual"), 1, "the second add must wait");
+
+    let sched = QueueScheduler::new(
+        Arc::clone(&h.manager),
+        host_actions(&h),
+        Duration::from_secs(3600),
+    );
+    let handle = tokio::spawn(sched.run(h.shutdown.clone()));
+    for id in &ids {
+        let finished = wait_terminal(&h, id).await;
+        assert_eq!(finished, DownloadStatus::Completed, "{id}: {finished:?}");
+    }
+
+    h.manager.request_shutdown();
+    handle.await.unwrap();
+    server.shutdown().await;
+}
