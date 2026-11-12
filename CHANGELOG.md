@@ -7,6 +7,128 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 
 ## [Unreleased]
 
+0.2.0 en preparación: scheduler de colas nativo con ventanas horarias y `max_active` real,
+post-procesamiento argv seguro y ClamAV integrado con cuarentena, site logins Basic con GNOME
+Keyring (sin Digest), sin categorías automáticas, extensión de instalación manual asistida por
+la GUI, reconciliación de capturas al arrancar en frío, probe multiarchivo de torrents, ayuda CLI
+con `extension` y documentación alineada. Sin tag ni Release hasta el QA real en Ubuntu. Ver
+[`packaging/release-notes-0.2.0.md`](packaging/release-notes-0.2.0.md).
+
+## [0.1.2] - 2026-11-12
+
+Correcciones de estado real de la extensión, orden y foco de las tareas, panel de calidades
+acotado y captura de archivos con confirmación. El alcance no cambia: descargas directas
+HTTP/HTTPS, YouTube público y HLS/DASH públicos sin cifrar.
+
+### Added
+
+- `segmenta extension status|prepare|install-native|open`: prepara el ZIP en
+  `$XDG_DATA_HOME/segmenta/extensions/<familia>-<versión>`, valida `manifest.json`, `_locales` e
+  identificador, y abre `chrome://extensions`, `about:debugging` o la carpeta con argv fijo, sin
+  shell. Nunca se escriben perfiles ni se usa `--load-extension` en Chrome estable.
+- Ventana propia de confirmación para la captura: nombre, host y carpeta de destino, con
+  `capture_confirm` (por defecto `true`) para volver al flujo sin ventana.
+- Watchdog con `alarms` (permiso nuevo) que persiste cada captura pendiente antes de pausar y la
+  rehidrata al despertar el service worker o al arrancar el navegador.
+- Lista por defecto de extensiones capturadas ampliada con `deb`, `rpm`, `appimage`, `xz`, `whl`,
+  `jar`, `epub`, `vsix`, `xpi` y `msix`.
+- `download.add` y `torrent.add` devuelven `destination_dir` y `final_path`, y el evento
+  `task_added` los incluye, para que la ventana muestre la carpeta efectiva.
+
+### Changed
+
+- La GUI ya no dice «Listo» sólo porque exista un manifiesto nativo: distingue manifiesto
+  nativo listo, extensión no instalada, instalada y conectada, por navegador.
+- `media.probe` deduplica los formatos por altura y expone 4K (2160), 1080p, 720p, 360p y solo
+  audio, sólo los disponibles, con **720p** por defecto; el vídeo se selecciona por `height`,
+  nunca por un `format_id` crudo, también en HLS/DASH.
+- Los manifiestos por usuario respetan `XDG_CONFIG_HOME`, se escriben `0644`, validan el host y
+  no sobrescriben un archivo existente en silencio.
+- Una tarea nueva aparece al principio de la lista y recargar conserva el orden `created_at DESC`
+  del daemon; `system.open` trae la GUI al frente y enfoca la tarea (`segmenta-gui --show-task`).
+- Tras «Descargar», la tarjeta del panel pasa a «Enviado a Segmenta» con [Abrir Segmenta] y
+  [Ver progreso].
+
+### Fixed
+
+- Una descarga `.zip`, `.rar`, `.deb` y compañía ya no se cancela antes de confirmar: se pausa,
+  y aceptar crea la tarea en Segmenta antes de cancelar y borrar la copia del navegador.
+- Rechazar, el timeout (~120 s), cerrar la ventana, un fallo del host o una descarga que no se
+  puede pausar reanudan la descarga del navegador: no se pierde ningún archivo.
+- El identificador del add-on de Firefox es el publicado, `segmenta@wilkin.github.io`, y un test
+  lo ata al manifiesto real.
+
+### Notes
+
+- Una configuración escrita por 0.1.0 o 0.1.1 se carga igual: conserva los valores del usuario y
+  gana los defaults nuevos. Sin cambios de esquema que rompan tareas existentes.
+
+## [0.1.1] - 2026-11-11
+
+Release de integración con navegadores, captura de descargas y torrents.
+
+### Added
+
+- Extensión de navegador con detección de Chrome, Chromium, Brave, Edge, Vivaldi, Opera y
+  Firefox, y página **Navegadores** con estado del manifiesto nativo, instalación por usuario y
+  fallback local. Los siete manifiestos nativos se instalan con el `.deb`.
+- Captura de descargas con `downloads.onCreated` por extensión, denylist y cancelación de la
+  descarga nativa; lista por defecto de 54 extensiones, editable en Preferencias, con `r0*`/`r1*`
+  interpretados como prefijos.
+- `.torrent` derivado a `torrent.add`; enlaces `magnet:` en el menú contextual y mediante un
+  handler `.desktop`.
+- Motor de torrents embebido `librqbit 9.1` con una sesión compartida por proceso, schema v3 con
+  `torrents`/`torrent_files`, RPC y CLI `torrent probe|add|status`, progreso, cancelación y
+  seeding desactivado por defecto. Saneamiento de rutas internas (`..`, absolutas, escapes).
+
+### Changed
+
+- El hover sobre una tarea ya no abre el detalle; sólo un clic real lo abre. «Atrás» limpia la
+  selección y permite reabrir la tarea. Badge específico para torrents.
+
+### Notes
+
+- Limitaciones documentadas: cold-start del service worker, probe de `.torrent` multiarchivo y
+  registro automático del handler del sistema según escritorio.
+- Firefox snap y Flatpak no pueden ejecutar el host nativo.
+
+## [0.1.0] - 2026-11-11
+
+Primera release con descarga de medios y extensión de navegador. Mantiene el motor de descargas
+directas de 0.0.2 y agrega YouTube, HLS/DASH públicos y un panel flotante para elegir calidad,
+audio-only y playlists.
+
+### Added
+
+- Extensión de navegador: panel flotante en YouTube con título, miniatura, calidades de video,
+  **Solo audio** y límite de playlist (1–500); targets Chromium MV3 y WebExtension MV3 para
+  Firefox (`segmenta@wilkin.github.io`).
+- Host nativo `segmenta-host` (Native Messaging, framing de 4 bytes LE, límite 1 MiB, sin shell)
+  que reenvía `media.*` al daemon; el `.deb` instala los siete manifiestos nativos.
+- `segmenta media probe|add` en la CLI y en el panel: YouTube video, audio-only y playlists con
+  límite, y HLS/DASH públicos con `SegmentTemplate` descargados por segmentos y remuxeados con
+  `ffmpeg -c copy`.
+- Selector de video con fallback muxed/DASH
+  `b[height<=H]/18/bv*[height<=H]+ba/b[height<=H]/best` y validación de la versión mínima de
+  `yt-dlp` (`>= 2026.10.01`) antes de tocar la red.
+- Nombres únicos por tarea (`… (1).m4a`) y `--no-continue` para no reanudar archivos ajenos;
+  progreso persistido (bytes, total, velocidad, ETA) y tamaño final verificado.
+- Paquetes reproducibles con `_locales` (es/en/pt-BR) validados por `extension/tools/pack.mjs`.
+
+### Fixed
+
+- Callback + Promise de `chrome.runtime.sendNativeMessage`, locales de la extensión, CLI/GUI de
+  medios visible en `--help`, fallback de formatos de YouTube y errores 403/416, y probe de
+  playlist acotado con `--playlist-end` para no fallar por entradas ocultas.
+- Destino existente con `--continue`/`--no-part` que provocaba HTTP 416.
+
+### Notes
+
+- DASH con `SegmentList`/`SegmentBase` queda fuera de alcance (`1043`); DRM, AES-128 y streams
+  en vivo se rechazan explícitamente. Sin subtítulos ni multi-audio.
+- Requisitos: Ubuntu 26.04, `ffmpeg` y `yt-dlp >= 2026.10.01`. El `.deb` es el único formato de
+  instalación; el snap de Firefox no permite la conexión remota de `web-ext`.
+
 ## [0.0.2] - 2026-11-11
 
 Release de correcciones del primer QA remoto sobre Ubuntu 26.04.1 LTS. El alcance no cambia:
@@ -93,6 +215,9 @@ reanudación tras caída, empaquetado para Ubuntu 26.04 LTS.
 - Paquete `.deb` con los cuatro binarios, las unidades de usuario, `.desktop`, AppStream, icono
   y licencia.
 
-[Unreleased]: https://github.com/wilkin-barban/Segmenta/compare/v0.0.2...HEAD
+[Unreleased]: https://github.com/wilkin-barban/Segmenta/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/wilkin-barban/Segmenta/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/wilkin-barban/Segmenta/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/wilkin-barban/Segmenta/compare/v0.0.2...v0.1.0
 [0.0.2]: https://github.com/wilkin-barban/Segmenta/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/wilkin-barban/Segmenta/releases/tag/v0.0.1
