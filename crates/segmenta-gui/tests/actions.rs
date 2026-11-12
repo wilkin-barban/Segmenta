@@ -470,3 +470,25 @@ fn hovering_a_row_never_opens_the_detail() {
         );
     });
 }
+
+#[test]
+fn focusing_a_task_clears_the_filter_and_the_search() {
+    run_gui("focus_task", || {
+        let application = app("io.github.wilkin.Segmenta.Focus1");
+        let fake = DemoClient::with_downloads(vec![
+            row("a", "downloading", "ubuntu.iso"),
+            row("b", "completed", "debian.iso"),
+        ]);
+        let window = ready_window(&application, &fake, 2);
+
+        window.set_filter(segmenta_gui::model::Filter::Completed);
+        window.set_query("debian");
+        assert!(window.focus_task("a"), "task a must be focusable");
+        // The detail is open and the search no longer hides the focused row.
+        assert_eq!(
+            window.detail().map(|item| item.task_id),
+            Some("a".to_string())
+        );
+        assert!(window.rows().iter().any(|row| row.task_id == "a"));
+    });
+}
