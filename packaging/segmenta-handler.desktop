@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Segmenta Torrent Handler
+GenericName=Torrent URL Handler
+Comment=Open magnet and .torrent links with Segmenta
+Exec=segmenta torrent add %u
+Icon=io.github.wilkin.Segmenta
+Terminal=false
+Type=Application
+NoDisplay=true
+Categories=Network;FileTransfer;
+MimeType=x-scheme-handler/magnet;application/x-bittorrent;

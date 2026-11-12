@@ -219,6 +219,7 @@ impl DownloadItem {
         let message = match kind {
             "audio" => segmenta_i18n::Msg::MediaAudioBadge,
             "playlist" => segmenta_i18n::Msg::MediaPlaylistBadge,
+            "torrent" | "magnet" => segmenta_i18n::Msg::MediaTorrentBadge,
             _ => segmenta_i18n::Msg::MediaVideoBadge,
         };
         segmenta_i18n::tr(segmenta_i18n::current(), message).to_string()

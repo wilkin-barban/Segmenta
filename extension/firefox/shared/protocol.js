@@ -446,6 +446,7 @@
     buildDownloadAdd: buildDownloadAdd,
     buildTorrentAdd: buildTorrentAdd,
     buildStatus: buildStatus,
+    envelope: envelope,
     validateHostReply: validateHostReply,
     sanitizeText: sanitizeText,
     errorCodeName: errorCodeName,

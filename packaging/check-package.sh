@@ -23,7 +23,7 @@
 set -euo pipefail
 
 readonly EXPECTED_PACKAGE="segmenta"
-readonly EXPECTED_VERSION="${2:-${SEGMENTA_EXPECTED_VERSION:-0.1.0}}"
+readonly EXPECTED_VERSION="${2:-${SEGMENTA_EXPECTED_VERSION:-0.1.1}}"
 
 readonly REQUIRED_PATHS=(
     "usr/bin/segmenta"
@@ -41,6 +41,7 @@ readonly REQUIRED_PATHS=(
     "usr/lib/systemd/user/segmenta.service"
     "usr/lib/systemd/user/segmenta.socket"
     "usr/share/applications/io.github.wilkin.Segmenta.desktop"
+    "usr/share/applications/segmenta-handler.desktop"
     "usr/share/metainfo/io.github.wilkin.Segmenta.metainfo.xml"
     "usr/share/icons/hicolor/scalable/apps/io.github.wilkin.Segmenta.svg"
     "usr/share/doc/segmenta/copyright"

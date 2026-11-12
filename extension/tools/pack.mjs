@@ -16,8 +16,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 export const extensionDir = path.resolve(here, '..');
 export const localesDir = path.join(extensionDir, '_locales');
 export const targets = [
-  { name: 'chromium', zip: 'segmenta-extension-0.1.0.zip' },
-  { name: 'firefox', zip: 'segmenta-firefox-0.1.0.zip' },
+  { name: 'chromium', zip: 'segmenta-extension-0.1.1.zip' },
+  { name: 'firefox', zip: 'segmenta-firefox-0.1.1.zip' },
 ];
 export const languages = ['es', 'en', 'pt_BR'];
 

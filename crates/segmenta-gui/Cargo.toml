@@ -59,7 +59,8 @@ assets = [
     ["data/io.github.wilkin.Segmenta.desktop", "usr/share/applications/", "644"],
     ["data/io.github.wilkin.Segmenta.metainfo.xml", "usr/share/metainfo/", "644"],
     ["data/io.github.wilkin.Segmenta.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
-    ["../../dist/segmenta-extension-0.1.0.zip", "usr/share/segmenta/extensions/segmenta-chromium.zip", "644"],
-    ["../../dist/segmenta-firefox-0.1.0.zip", "usr/share/segmenta/extensions/segmenta-firefox.zip", "644"],
+    ["../../dist/segmenta-extension-0.1.1.zip", "usr/share/segmenta/extensions/segmenta-chromium.zip", "644"],
+    ["../../dist/segmenta-firefox-0.1.1.zip", "usr/share/segmenta/extensions/segmenta-firefox.zip", "644"],
     ["../../packaging/extensions/README", "usr/share/segmenta/extensions/", "644"],
+    ["../../packaging/segmenta-handler.desktop", "usr/share/applications/", "644"],
 ]

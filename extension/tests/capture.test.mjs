@@ -7,7 +7,7 @@ function setupFakeBrowser(settings, nativeReplies = {}) {
   const canceled = [];
   const erased = [];
   const nativeCalls = [];
-  const storageData = { segmenta_settings: settings };
+  const storageData = { segmenta_settings: settings, segmenta_settings_version: '0.1.1' };
 
   globalThis.chrome = {
     runtime: {
