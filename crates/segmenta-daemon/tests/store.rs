@@ -5,7 +5,8 @@ use std::collections::{BTreeMap, HashMap};
 
 use segmenta_daemon::secrets::{FileSecretStore, SecretStore};
 use segmenta_daemon::store::{
-    Checkpoint, DownloadRecord, DownloadStatus, SegmentRow, Settings, Store, SCHEMA_VERSION,
+    Checkpoint, DownloadRecord, DownloadStatus, SegmentRow, Settings, SiteLoginRow, Store,
+    SCHEMA_VERSION,
 };
 use serde_json::json;
 
@@ -441,7 +442,7 @@ fn migration_from_v2_to_v3_preserves_data_and_creates_torrent_tables() {
     }
     let store = Store::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 4);
+    assert_eq!(SCHEMA_VERSION, 5);
 
     let rows = store.list(None, 10, 0).unwrap();
     assert_eq!(rows.len(), 1);
@@ -866,4 +867,56 @@ fn the_capture_default_is_the_shared_core_list() {
         .map(|token| token.to_string())
         .collect();
     assert_eq!(Settings::default().capture_extensions, expected);
+}
+
+#[test]
+fn a_legacy_site_login_is_listed_but_never_used_for_injection() {
+    // A row written by 0.1.2 has no `origin`: the v5 migration keeps it and leaves the
+    // column empty. It must stay visible to the user and stay unused, because guessing a
+    // scheme would send the password to an origin nobody chose.
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("segmenta.db")).unwrap();
+    store
+        .upsert_site_login(&SiteLoginRow {
+            domain: "files.example".to_string(),
+            username: "ana".to_string(),
+            alias: "site/files.example".to_string(),
+            origin: String::new(),
+        })
+        .unwrap();
+
+    let listed = store.site_logins().unwrap();
+    assert_eq!(listed.len(), 1, "the legacy row stays visible");
+    assert_eq!(listed[0].origin, "");
+    assert!(
+        store
+            .site_login_for_origin("https://files.example")
+            .unwrap()
+            .is_none(),
+        "a legacy row is never matched for injection"
+    );
+
+    store
+        .upsert_site_login(&SiteLoginRow {
+            domain: "files.example".to_string(),
+            username: "ana".to_string(),
+            alias: "site/https://files.example".to_string(),
+            origin: "https://files.example".to_string(),
+        })
+        .unwrap();
+    let found = store
+        .site_login_for_origin("https://files.example")
+        .unwrap()
+        .expect("an exact origin is matched");
+    assert_eq!(found.username, "ana");
+    // Another port is a different origin.
+    assert!(
+        store
+            .site_login_for_origin("https://files.example:8443")
+            .unwrap()
+            .is_none(),
+        "a different port must not match"
+    );
+    assert!(store.remove_site_login("https://files.example").unwrap());
+    assert!(!store.remove_site_login("https://files.example").unwrap());
 }

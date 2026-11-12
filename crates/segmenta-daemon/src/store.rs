@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Current schema version, stored in `PRAGMA user_version`.
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
@@ -25,6 +25,18 @@ const SCHEMA_SQL: &str = include_str!("schema.sql");
 /// hook of OpenSpec 12 §4 and the scan of §5). They are applied one by one, after checking
 /// `pragma_table_info`, because `schema.sql` already carries them for a database created
 /// from scratch while the v2/v3 rebuilds drop anything they do not copy.
+/// Columns schema v5 adds to `site_logins`: the login is keyed by exact origin.
+/// One stored site login: the origin it belongs to, the user name and the keyring alias.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SiteLoginRow {
+    pub domain: String,
+    pub username: String,
+    pub alias: String,
+    pub origin: String,
+}
+
+pub const V5_SITE_LOGIN_COLUMNS: [(&str, &str); 1] = [("origin", "TEXT NOT NULL DEFAULT ''")];
+
 pub const V4_COLUMNS: [(&str, &str); 3] = [
     ("postprocess_exit", "INTEGER"),
     ("postprocess_message", "TEXT"),
@@ -936,6 +948,38 @@ impl Store {
                 }
             }
         }
+        if current < 5 {
+            // The login moves from "host" to "exact origin". Existing rows keep their
+            // `domain` and get an empty origin: they are listed but never used to inject
+            // until the user sets one, because guessing a scheme would send credentials
+            // to an origin nobody chose. A v2 fixture can reach this step without the
+            // table, so it is created with the current shape instead of being altered.
+            let has_table = tx
+                .query_row(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'site_logins'",
+                    [],
+                    |_| Ok(true),
+                )
+                .unwrap_or(false);
+            if has_table {
+                for (column, kind) in V5_SITE_LOGIN_COLUMNS {
+                    if !has_column(&tx, "site_logins", column)? {
+                        tx.execute_batch(&format!(
+                            "ALTER TABLE site_logins ADD COLUMN {column} {kind}"
+                        ))?;
+                    }
+                }
+            } else {
+                tx.execute_batch(
+                    "CREATE TABLE site_logins (
+                        domain TEXT PRIMARY KEY,
+                        username TEXT NOT NULL,
+                        keyring_secret_id TEXT NOT NULL,
+                        origin TEXT NOT NULL DEFAULT ''
+                    );",
+                )?;
+            }
+        }
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         Ok(SCHEMA_VERSION)
@@ -1468,6 +1512,71 @@ impl Store {
     }
 
     /// Secret alias of a task, if any.
+    /// Every stored site login, with its origin (empty for a legacy row).
+    pub fn site_logins(&self) -> Result<Vec<SiteLoginRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT domain, username, keyring_secret_id, origin FROM site_logins ORDER BY origin, domain",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(SiteLoginRow {
+                    domain: row.get(0)?,
+                    username: row.get(1)?,
+                    alias: row.get(2)?,
+                    origin: row.get(3)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// The login stored for one exact origin, if any.
+    ///
+    /// A legacy row (empty origin) is never returned: it is listed, but injecting it would
+    /// mean guessing the origin.
+    pub fn site_login_for_origin(&self, origin: &str) -> Result<Option<SiteLoginRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT domain, username, keyring_secret_id, origin FROM site_logins
+             WHERE origin = ?1 AND origin <> ''",
+        )?;
+        let mut rows = stmt.query_map([origin], |row| {
+            Ok(SiteLoginRow {
+                domain: row.get(0)?,
+                username: row.get(1)?,
+                alias: row.get(2)?,
+                origin: row.get(3)?,
+            })
+        })?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Insert or replace the login for one exact origin.
+    pub fn upsert_site_login(&self, login: &SiteLoginRow) -> Result<()> {
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO site_logins (domain, username, keyring_secret_id, origin)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(domain) DO UPDATE SET
+                username = excluded.username,
+                keyring_secret_id = excluded.keyring_secret_id,
+                origin = excluded.origin",
+            rusqlite::params![login.domain, login.username, login.alias, login.origin],
+        )?;
+        Ok(())
+    }
+
+    /// Remove the login of one exact origin. Returns whether a row was deleted.
+    pub fn remove_site_login(&self, origin: &str) -> Result<bool> {
+        let conn = self.lock();
+        let deleted = conn.execute("DELETE FROM site_logins WHERE origin = ?1", [origin])?;
+        Ok(deleted > 0)
+    }
+
     pub fn secret_alias(&self, id: &str) -> Result<Option<String>> {
         let conn = self.lock();
         Ok(conn
