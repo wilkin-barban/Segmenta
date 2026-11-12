@@ -12,7 +12,7 @@
   }
 
   const MAX_MESSAGE_BYTES = 65536;
-  const MESSAGE_TYPES = ['segmenta.probe', 'segmenta.add', 'segmenta.status', 'segmenta.capture', 'segmenta.torrent.add'];
+  const MESSAGE_TYPES = ['segmenta.probe', 'segmenta.add', 'segmenta.status', 'segmenta.open', 'segmenta.capture', 'segmenta.torrent.add'];
   const MESSAGE_MODES = ['video', 'audio', 'playlist'];
   const PROBE_KINDS = ['video', 'playlist', 'stream'];
   const FORMAT_ID_PATTERN = /^[A-Za-z0-9._+-]{1,64}$/;
@@ -124,6 +124,18 @@
     return ok({ type: 'segmenta.status', taskId: taskId });
   }
 
+  /**
+   * Focus an existing task. The id is validated with the same pattern every other
+   * task-scoped message uses, so the panel can only ever ask for one task.
+   */
+  function validateOpen(message) {
+    const taskId = typeof message.taskId === 'string' ? message.taskId.trim() : '';
+    if (!TASK_ID_PATTERN.test(taskId)) {
+      return fail('ERR_INVALID_PARAMS', 'task id is not acceptable');
+    }
+    return ok({ type: 'segmenta.open', taskId: taskId });
+  }
+
   function validateCapture(message) {
     const url = typeof message.url === 'string' ? message.url.trim() : '';
     const parsed = PROTOCOL.parseHttpUrl(url);
@@ -184,6 +196,8 @@
         return validateAdd(message, opts);
       case 'segmenta.status':
         return validateStatus(message);
+      case 'segmenta.open':
+        return validateOpen(message);
       case 'segmenta.capture':
         return validateCapture(message);
       case 'segmenta.torrent.add':

@@ -21,6 +21,7 @@ export default function suite({ test }) {
     assert.deepEqual([...V.MESSAGE_TYPES].sort(), [
       'segmenta.add',
       'segmenta.capture',
+      'segmenta.open',
       'segmenta.probe',
       'segmenta.status',
       'segmenta.torrent.add',
@@ -195,6 +196,29 @@ export default function suite({ test }) {
       'ERR_INVALID_PARAMS',
     );
     assert.equal(V.validateMessage({ type: 'segmenta.status' }, options).error.code, 'ERR_INVALID_PARAMS');
+  });
+
+  test('validateMessage accepts only well formed open requests', async () => {
+    const V = await loadShared('SegmentaValidate', 'validate.js');
+    const options = { extensionId: EXTENSION_ID };
+    const taskId = '123e4567-e89b-12d3-a456-426614174000';
+    assert.deepEqual(
+      V.validateMessage({ type: 'segmenta.open', taskId: taskId }, options).value,
+      { type: 'segmenta.open', taskId: taskId },
+    );
+    // Surrounding whitespace is trimmed before the pattern check.
+    assert.deepEqual(
+      V.validateMessage({ type: 'segmenta.open', taskId: '  task-123456  ' }, options).value,
+      { type: 'segmenta.open', taskId: 'task-123456' },
+    );
+    for (const bad of ['', '   ', 'short', 'a b', 'a;rm -rf /', '../etc/passwd', 'x'.repeat(65), null, 42]) {
+      assert.equal(
+        V.validateMessage({ type: 'segmenta.open', taskId: bad }, options).error.code,
+        'ERR_INVALID_PARAMS',
+        `should reject ${String(bad)}`,
+      );
+    }
+    assert.equal(V.validateMessage({ type: 'segmenta.open' }, options).error.code, 'ERR_INVALID_PARAMS');
   });
 
   test('validateInbound checks sender before payload', async () => {
