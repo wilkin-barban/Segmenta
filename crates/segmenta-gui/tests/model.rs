@@ -126,6 +126,27 @@ fn reload_replaces_rows_without_duplicates() {
 }
 
 #[test]
+fn a_new_task_lands_at_the_top_of_the_list() {
+    let mut store = DownloadStore::default();
+    store.reload(vec![row("old", "completed")]);
+    store.upsert(row("fresh", "downloading"));
+    let order: Vec<&str> = store
+        .items()
+        .iter()
+        .map(|item| item.task_id.as_str())
+        .collect();
+    assert_eq!(order, vec!["fresh", "old"]);
+    // An update in place must not move the row.
+    store.upsert(row("old", "paused"));
+    let order: Vec<&str> = store
+        .items()
+        .iter()
+        .map(|item| item.task_id.as_str())
+        .collect();
+    assert_eq!(order, vec!["fresh", "old"]);
+}
+
+#[test]
 fn task_progress_updates_bytes_speed_eta_and_segments() {
     let mut store = DownloadStore::default();
     store.reload(vec![row("a", "downloading")]);
