@@ -35,8 +35,8 @@ Ciclo: agente implementa → yo verifico y hago QA real → error exacto vuelve 
 | D0 | Documentación P0: README 0.1.2/0.2, CHANGELOG 0.1.0–0.1.2, QA 0.1.2, release notes 0.2.0 | `README.md`, `CHANGELOG.md`, `docs/qa/`, `packaging/release-notes-0.2.0.md` | hecho (`cfa702f`) |
 | D1 | OpenSpec 01/03/04/05/07/08/09/10/11 + nuevo 12 | `docs/openspec/` | en curso, partido en D1a1 (01/03), D1a2 (04/05), D1b1 (07/08), D1b2 (09/10/11/12) |
 | R1 | Cold-start de captura con reconciliación `downloads.search` | `extension/*/background.js`, tests | implementado (`dfb1b2f`); falta QA real de cold start y alinear 03 §5.4 |
-| R2 | Probe multiarchivo de torrents | `crates/segmenta-daemon/src/torrent.rs`, tests | pendiente |
-| R3 | `extension` visible en `--help` y docs CLI | `crates/segmenta-cli/src/cli.rs`, `render.rs` | pendiente |
+| R2 | Probe multiarchivo de torrents | `crates/segmenta-daemon/src/torrent.rs`, tests | hecho (`d7075a6`) |
+| R3 | `extension` visible en `--help` y docs CLI | `crates/segmenta-cli/src/cli.rs`, `render.rs` | hecho (`9024726`) |
 | S1 | Scheduler de colas nativo y ventanas horarias | nuevo `scheduler.rs`, `manager.rs`, `main.rs`, `store.rs` | pendiente |
 | S2 | `max_active` real por cola y liberación al terminar | `manager.rs`, tests | pendiente |
 | A1 | Hook argv seguro (`%file%`, `%folder%`, timeout) | nuevo `postprocess.rs`, `manager.rs`, `store.rs` | pendiente |
