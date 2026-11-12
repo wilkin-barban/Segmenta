@@ -242,6 +242,21 @@ impl SegmentaWindow {
     /// Selects the row of `task_id`, opening its detail page.
     /// Select a row the way a click does: the list takes focus, then the row is
     /// selected, and only then does the detail open. Pointer hover never focuses.
+    /// Bring Segmenta forward with one task focused: no filter, no search, detail open.
+    ///
+    /// This is the entry point the extension, the CLI and `--show-task` share, so a
+    /// download added from anywhere is visible instead of hidden behind a filter.
+    pub fn focus_task(&self, task_id: &str) -> bool {
+        self.set_filter(Filter::All);
+        self.set_query("");
+        if let Some(entry) = self.0.search_bar.child().and_downcast::<gtk::SearchEntry>() {
+            entry.set_text("");
+        }
+        let focused = self.click_task(task_id);
+        self.window().present();
+        focused
+    }
+
     pub fn click_task(&self, task_id: &str) -> bool {
         self.0.list_view.grab_focus();
         self.0.click_intent.set(true);
