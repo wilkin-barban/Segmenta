@@ -480,9 +480,9 @@ las capas de medios/extensión. `data.code` lleva siempre el nombre.
 | **`1052`** | `ERR_EXTENSION_OPEN` | No se pudo abrir el navegador. |
 | **`1053`** | `ERR_GUI_NOT_FOUND` | `system.open` sin GUI ejecutable. |
 
-**(0.2, en preparación)** `1046 ERR_ANTIVIRUS_FOUND` y el nombre
-`ERR_ANTIVIRUS_UNAVAILABLE` (código numérico aún no asignado) se documentan en 12 y **no**
-existen en el código actual.
+**(implementado en `main`, entra en 0.2.0)** `1046 ERR_ANTIVIRUS_FOUND` y
+`1047 ERR_ANTIVIRUS_UNAVAILABLE`, documentados en 12. El escaneo, la cuarentena y la migración
+v4 ya existen en el árbol; la release sigue sin publicarse.
 
 ---
 
@@ -737,7 +737,7 @@ Ninguno de estos puntos está implementado; el contrato completo está en el nue
 * `action_on_complete` se persiste y no se ejecuta.
 * `postprocess_command` se persiste y no se lanza; no hay hook argv, ni timeout, ni
   `postprocess_exit`/`postprocess_message`.
-* No hay antivirus, ni cuarentena, ni `ERR_ANTIVIRUS_FOUND` (1046 reservado para 0.2).
+* Ya hay antivirus, cuarentena y `ERR_ANTIVIRUS_FOUND` (1046) más `ERR_ANTIVIRUS_UNAVAILABLE` (1047) en `main`, sin publicar.
 * No hay `site_login.*`, ni inyección de `Authorization: Basic`, ni autenticación Digest (fuera
   de alcance por decisión).
 * `priority` se persiste y ningún componente lo consume.

@@ -180,7 +180,7 @@ El DDL normativo es el de `08-persistence-recovery.md`; aquí sólo se fija qué
 | Código | Nombre | Cuándo |
 | --- | --- | --- |
 | `1046` | `ERR_ANTIVIRUS_FOUND` | El escaneo detectó infección; el archivo quedó en cuarentena |
-| — | `ERR_ANTIVIRUS_UNAVAILABLE` | `antivirus_enabled=true` y no hay `clamdscan` ni `clamscan` utilizable |
+| `1047` | `ERR_ANTIVIRUS_UNAVAILABLE` | `antivirus_enabled=true` y no hay `clamdscan` ni `clamscan` utilizable |
 | `1031` | `ERR_KEYRING_UNAVAILABLE` | `site_login.set` sin keyring disponible |
 | — | `ERR_AUTH_REQUIRED` | El servidor pide credenciales y no hay login de sitio configurado |
 
