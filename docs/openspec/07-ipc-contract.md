@@ -188,7 +188,7 @@ Todos los mensajes siguen la especificación JSON-RPC 2.0 y declaran `"jsonrpc":
 | `autostart` | boolean | false | systemd --user |
 | `download_dir` | string | `$XDG_DOWNLOAD_DIR` | ruta absoluta existente |
 | `category_dirs` | object | vacío | categoría → ruta absoluta |
-| `capture_extensions` | array[string] | lista de 04 ampliada en 0.1.2 | sin punto inicial; incluye `deb`, `rpm`, `appimage`, `xz`, `whl`, `jar`, `epub`, `vsix`, `xpi`, `msix` |
+| `capture_extensions` | array[string] | lista de 04 ampliada en 0.1.2 | sin punto inicial; incluye `deb`, `rpm`, `appimage`, `xz`, `whl`, `jar`, `epub`, `vsix`, `xpi`, `msix`. Una fila escrita por 0.1.0/0.1.1 cuya lista sea byte a byte su default histórico se actualiza **por unión**: primero los defaults de 0.1.2 y luego los tokens que sólo tenía esa lista (`dmg`, `flac`, `tgz`, `webm` en 0.1.0), para no dejar de capturar formatos existentes; una lista personalizada no se toca y la actualización es idempotente |
 | `capture_confirm` | boolean | true | pausa la descarga del navegador y abre la ventana de confirmación con nombre, host y carpeta efectiva; `false` captura sin preguntar |
 | `domain_denylist` | array[string] | [] | host exacto o sufijo explícito |
 | `schedule_start` | string/null | null | `HH:MM`, zona `America/Sao_Paulo` |

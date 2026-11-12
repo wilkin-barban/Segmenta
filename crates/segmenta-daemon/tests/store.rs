@@ -625,6 +625,12 @@ fn two_downloads_can_share_engine_segment_ids() {
     assert_eq!(store.segments("second").unwrap().len(), 2);
 }
 
+/// The 24-extension default 0.1.0 stored as its own settings row.
+const ORIGINAL_DEFAULT_CAPTURE_EXTENSIONS: &[&str] = &[
+    "7z", "avi", "bin", "bz2", "deb", "dmg", "flac", "gz", "iso", "m4a", "mkv", "mp3", "mp4",
+    "mpeg", "msi", "ogg", "pdf", "rar", "tar", "tgz", "webm", "wav", "xz", "zip",
+];
+
 /// The extension list the previous release stored as its own default.
 const PREVIOUS_DEFAULT_CAPTURE_EXTENSIONS: &[&str] = &[
     "3gp", "7z", "aac", "ace", "aif", "apk", "arj", "asf", "avi", "bin", "bz2", "exe", "gz",
@@ -701,6 +707,135 @@ fn a_settings_row_written_before_the_new_keys_still_loads() {
         store.settings().unwrap().capture_extensions,
         vec!["zip".to_string(), "iso".to_string()]
     );
+}
+
+/// S11: upgrading the untouched 0.1.0 default must keep the formats that default had and
+/// 0.1.2 does not (`dmg`, `flac`, `tgz`, `webm`), so the upgrade is a union and never a
+/// replacement.
+#[test]
+fn an_untouched_default_capture_list_from_0_1_0_keeps_its_own_formats() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("segmenta.db");
+    {
+        let store = Store::open(&path).unwrap();
+        write_raw_setting(
+            &path,
+            "capture_extensions",
+            json!(ORIGINAL_DEFAULT_CAPTURE_EXTENSIONS),
+        );
+        drop(store);
+    }
+
+    let store = Store::open(&path).unwrap();
+    let upgraded = store.settings().unwrap().capture_extensions;
+    let mut expected = Settings::default().capture_extensions;
+    expected.extend(["dmg", "flac", "tgz", "webm"].map(str::to_string));
+    assert_eq!(
+        upgraded, expected,
+        "the new defaults come first, then the extra legacy tokens in their stored order"
+    );
+    for token in ["dmg", "flac", "tgz", "webm"] {
+        assert!(
+            upgraded.contains(&token.to_string()),
+            "the upgrade dropped the legacy format {token}"
+        );
+    }
+    for token in [
+        "deb", "rpm", "appimage", "xz", "whl", "jar", "epub", "vsix", "xpi", "msix",
+    ] {
+        assert!(
+            upgraded.contains(&token.to_string()),
+            "the upgrade did not add the new format {token}"
+        );
+    }
+}
+
+/// S11: the 0.1.1 default is a subset of the 0.1.2 one, so the union is exactly the new
+/// default: it gains every new token and loses nothing.
+#[test]
+fn an_untouched_default_capture_list_from_0_1_1_loses_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("segmenta.db");
+    {
+        let store = Store::open(&path).unwrap();
+        write_raw_setting(
+            &path,
+            "capture_extensions",
+            json!(PREVIOUS_DEFAULT_CAPTURE_EXTENSIONS),
+        );
+        drop(store);
+    }
+
+    let store = Store::open(&path).unwrap();
+    let upgraded = store.settings().unwrap().capture_extensions;
+    for token in PREVIOUS_DEFAULT_CAPTURE_EXTENSIONS {
+        assert!(
+            upgraded.contains(&token.to_string()),
+            "the upgrade dropped the 0.1.1 format {token}"
+        );
+    }
+    for token in [
+        "deb", "rpm", "appimage", "xz", "whl", "jar", "epub", "vsix", "xpi", "msix",
+    ] {
+        assert!(
+            upgraded.contains(&token.to_string()),
+            "the upgrade did not add the new format {token}"
+        );
+    }
+    assert_eq!(upgraded, Settings::default().capture_extensions);
+}
+
+/// S11: only a byte-for-byte historical default is upgraded. A list the user wrote, even
+/// when it is the old default with one token removed, is left exactly as stored.
+#[test]
+fn a_custom_capture_list_is_never_rewritten() {
+    let mut edited_legacy: Vec<&str> = ORIGINAL_DEFAULT_CAPTURE_EXTENSIONS.to_vec();
+    edited_legacy.retain(|token| *token != "dmg");
+    for list in [vec!["zip", "iso"], edited_legacy] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("segmenta.db");
+        {
+            let store = Store::open(&path).unwrap();
+            store
+                .update_settings(json!({ "capture_extensions": list }).as_object().unwrap())
+                .unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        let stored: Vec<String> = list.iter().map(|token| token.to_string()).collect();
+        assert_eq!(
+            store.settings().unwrap().capture_extensions,
+            stored,
+            "a customized list must not be upgraded"
+        );
+    }
+}
+
+/// S11: the upgrade is stable, including when the daemon or a client writes the upgraded
+/// list back: a second pass changes nothing.
+#[test]
+fn upgrading_a_legacy_capture_list_twice_changes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("segmenta.db");
+    {
+        let store = Store::open(&path).unwrap();
+        write_raw_setting(
+            &path,
+            "capture_extensions",
+            json!(ORIGINAL_DEFAULT_CAPTURE_EXTENSIONS),
+        );
+        drop(store);
+    }
+
+    let store = Store::open(&path).unwrap();
+    let once = store.settings().unwrap().capture_extensions;
+    assert_eq!(store.settings().unwrap().capture_extensions, once);
+    store
+        .update_settings(json!({ "capture_extensions": once }).as_object().unwrap())
+        .unwrap();
+    drop(store);
+
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.settings().unwrap().capture_extensions, once);
 }
 
 /// S11: the catalog defaults carry `capture_confirm` next to the other capture keys.
