@@ -33,7 +33,7 @@ Ciclo: agente implementa → yo verifico y hago QA real → error exacto vuelve 
 | ID | Entrega | Archivos principales | Estado |
 | --- | --- | --- | --- |
 | D0 | Documentación P0: README 0.1.2/0.2, CHANGELOG 0.1.0–0.1.2, QA 0.1.2, release notes 0.2.0 | `README.md`, `CHANGELOG.md`, `docs/qa/`, `packaging/release-notes-0.2.0.md` | hecho (`cfa702f`) |
-| D1 | OpenSpec 01/03/04/05/07/08/09/10/11 + nuevo 12 | `docs/openspec/` | D1a1 (`2a2e42a`, `95e045a`) y D1a2 (`ccf74c7`) hechos; D1b1 y D1b2 en curso |
+| D1 | OpenSpec 01/03/04/05/07/08/09/10/11 + nuevo 12 | `docs/openspec/` | hecho: `2a2e42a`, `95e045a`, `ccf74c7`, `95364f5`, `df5733b`, 07/08 reparados |
 | R1 | Cold-start de captura con reconciliación `downloads.search` | `extension/*/background.js`, tests | implementado (`dfb1b2f`); falta QA real de cold start y alinear 03 §5.4 |
 | R2 | Probe multiarchivo de torrents | `crates/segmenta-daemon/src/torrent.rs`, tests | hecho (`d7075a6`) |
 | R3 | `extension` visible en `--help` y docs CLI | `crates/segmenta-cli/src/cli.rs`, `render.rs` | hecho (`9024726`) |
@@ -98,4 +98,5 @@ Verificada contra el código durante D1a2; ninguna de estas contradicciones es u
 4. `model.rs::DownloadStatus` no conoce `retrying` ni `finalizing`: se pintan como «Desconocida» y sin acciones.
 5. `window.rs:1410-1458` deriva las colas de `download.list` en lugar de `queue.list`, y limita el snapshot a 500 tareas.
 - L3: D1a1 se entregó sin worker: el tercer intento volvió a inflarse (7.2 M en 8 min) y se canceló. Inspeccioné el borrador, lo contrasté con el código y con R1 §5.4, corregí la incoherencia real (el documento decía que la reconciliación de cold-start seguía «en preparación» cuando `dfb1b2f` ya la implementa con `MAX_RECONCILE_DOWNLOADS = 20` y `RECONCILE_THROTTLE_MS = 5 min`) y commiteé 01 y 03 por separado. Regla: por encima de ~2 M de contexto el worker de documentación se corta y la unidad se termina en línea.
+- L4: D1 completo. 07 quedó con el conjunto cerrado de 27 métodos despachados, `torrent.add` descrito como es tras R2 (`files_count = 1`, una fila `torrent_files`), `batch_id` en `media.add`, el mapeo real de `queue.remove` a 1001 y la allowlist como array literal. 08 cita `schema.sql` byte a byte, separa los deltas v2/v3 en §4.2.1 y las columnas v4 en §4.2.2, y corrige la fila v1 y el `old_state` de `recover_crashed`. Hallazgos de código anotados, no maquillados: el comentario de `proxy.rs` nombraba cuatro prefijos y el array tiene cinco (corregido en `ced0664`), y `torrent.add` sigue ignorando `files[]` del probe R2 → nueva tarea R2b, a ejecutar cuando S1/S2 liberen `manager.rs`.
 
