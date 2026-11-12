@@ -199,5 +199,69 @@
   },
   "viewProgress": {
     "message": "View progress"
+  },
+  "confirmTitle": {
+    "message": "Save with Segmenta",
+    "description": "Title of the capture confirmation window."
+  },
+  "confirmIntro": {
+    "message": "The browser paused this download. Choose who finishes it.",
+    "description": "Introduction of the confirmation window."
+  },
+  "confirmNameLabel": {
+    "message": "File",
+    "description": "Label for the file name."
+  },
+  "confirmHostLabel": {
+    "message": "Source",
+    "description": "Label for the source site."
+  },
+  "confirmFolderLabel": {
+    "message": "Destination folder",
+    "description": "Label for the destination folder."
+  },
+  "confirmUnknownName": {
+    "message": "Unknown name",
+    "description": "Shown when the download reports no file name."
+  },
+  "confirmUnknownHost": {
+    "message": "Unknown site",
+    "description": "Shown when the download reports no host."
+  },
+  "confirmHostMagnet": {
+    "message": "Magnet link",
+    "description": "Source shown for a magnet link, which has no http host."
+  },
+  "confirmFolderPending": {
+    "message": "Pending: the daemon reports it when the task is created",
+    "description": "Folder shown when the daemon has not reported it yet."
+  },
+  "confirmAccept": {
+    "message": "Download with Segmenta",
+    "description": "Button that confirms the capture."
+  },
+  "confirmReject": {
+    "message": "Keep in the browser",
+    "description": "Button that rejects the capture."
+  },
+  "confirmAccepted": {
+    "message": "Sent to Segmenta. Folder: $1",
+    "description": "Confirmation with the destination folder."
+  },
+  "confirmAcceptedGeneric": {
+    "message": "Sent to Segmenta.",
+    "description": "Confirmation without a reported folder."
+  },
+  "confirmRejected": {
+    "message": "The download continues in the browser.",
+    "description": "Message shown after rejecting the capture."
+  },
+  "confirmFailed": {
+    "message": "Could not add it to Segmenta. The download continues in the browser.",
+    "description": "Shown when the host rejects the task."
+  },
+  "confirmInvalid": {
+    "message": "This confirmation is no longer valid. Close this window.",
+    "description": "Shown when the window has no pending download."
   }
 }

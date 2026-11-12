@@ -199,5 +199,69 @@
   },
   "viewProgress": {
     "message": "Ver progresso"
+  },
+  "confirmTitle": {
+    "message": "Salvar com o Segmenta",
+    "description": "Título da janela de confirmação de captura."
+  },
+  "confirmIntro": {
+    "message": "O navegador pausou este download. Escolha quem o conclui.",
+    "description": "Introdução da janela de confirmação."
+  },
+  "confirmNameLabel": {
+    "message": "Arquivo",
+    "description": "Rótulo do nome do arquivo."
+  },
+  "confirmHostLabel": {
+    "message": "Origem",
+    "description": "Rótulo do site de origem."
+  },
+  "confirmFolderLabel": {
+    "message": "Pasta de destino",
+    "description": "Rótulo da pasta de destino."
+  },
+  "confirmUnknownName": {
+    "message": "Nome desconhecido",
+    "description": "Exibido quando o download não informa o arquivo."
+  },
+  "confirmUnknownHost": {
+    "message": "Site desconhecido",
+    "description": "Exibido quando o download não informa o host."
+  },
+  "confirmHostMagnet": {
+    "message": "Link magnet",
+    "description": "Origem exibida para um link magnet, que não tem host http."
+  },
+  "confirmFolderPending": {
+    "message": "Pendente: o daemon informa ao criar a tarefa",
+    "description": "Pasta exibida quando o daemon ainda não a informou."
+  },
+  "confirmAccept": {
+    "message": "Baixar com o Segmenta",
+    "description": "Botão que confirma a captura."
+  },
+  "confirmReject": {
+    "message": "Deixar no navegador",
+    "description": "Botão que recusa a captura."
+  },
+  "confirmAccepted": {
+    "message": "Enviado ao Segmenta. Pasta: $1",
+    "description": "Confirmação com a pasta de destino."
+  },
+  "confirmAcceptedGeneric": {
+    "message": "Enviado ao Segmenta.",
+    "description": "Confirmação sem pasta informada."
+  },
+  "confirmRejected": {
+    "message": "O download continua no navegador.",
+    "description": "Aviso exibido após recusar a captura."
+  },
+  "confirmFailed": {
+    "message": "Não foi possível adicionar ao Segmenta. O download continua no navegador.",
+    "description": "Exibido quando o host recusa a tarefa."
+  },
+  "confirmInvalid": {
+    "message": "Esta confirmação não é mais válida. Feche esta janela.",
+    "description": "Exibido quando a janela não tem download pendente."
   }
 }

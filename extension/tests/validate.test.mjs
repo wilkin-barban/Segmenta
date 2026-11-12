@@ -21,6 +21,7 @@ export default function suite({ test }) {
     assert.deepEqual([...V.MESSAGE_TYPES].sort(), [
       'segmenta.add',
       'segmenta.capture',
+      'segmenta.capture.decide',
       'segmenta.open',
       'segmenta.probe',
       'segmenta.status',

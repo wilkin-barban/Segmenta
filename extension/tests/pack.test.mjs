@@ -2,7 +2,16 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { extensionDir, languages, syncLocales, targets, validateLocales, walk } from '../tools/pack.mjs';
+import {
+  extensionDir,
+  languages,
+  missingFiles,
+  requiredFiles,
+  syncLocales,
+  targets,
+  validateLocales,
+  walk,
+} from '../tools/pack.mjs';
 
 export default function suite({ test }) {
   for (const target of targets) {
@@ -30,6 +39,39 @@ export default function suite({ test }) {
       for (const language of languages) {
         assert.ok(existsSync(path.join(root, '_locales', language, 'messages.json')));
       }
+    });
+
+    test(`${target.name}: the payload ships the capture confirmation window`, () => {
+      const root = path.join(extensionDir, target.name);
+      const files = walk(root);
+      assert.deepEqual(missingFiles(target.name, files), [], 'required files are missing');
+      // The confirmation page and its script must be in the file list the packer
+      // zips, not only present on disk.
+      const shipped = files.map((file) => file.split(path.sep).join('/'));
+      assert.equal(shipped.includes('confirm.html'), true);
+      assert.equal(shipped.includes('confirm.js'), true);
+      assert.equal(requiredFiles[target.name].includes('confirm.html'), true);
+      assert.equal(requiredFiles[target.name].includes('confirm.js'), true);
+    });
+
+    test(`${target.name}: the confirmation window stays private to the extension`, () => {
+      const root = path.join(extensionDir, target.name);
+      const manifest = JSON.parse(readFileSync(path.join(root, 'manifest.json'), 'utf8'));
+      const entries = Array.isArray(manifest.web_accessible_resources) ? manifest.web_accessible_resources : [];
+      // The popup is opened by the background through windows.create, so no page
+      // outside the extension may address it: publishing it would widen the surface
+      // for nothing.
+      const exposed = entries.some((entry) => Array.isArray(entry.resources) && entry.resources.includes('confirm.html'));
+      assert.equal(exposed, false, `${target.name}/manifest.json must not expose confirm.html`);
+      assert.deepEqual(manifest.permissions.slice().sort(), [
+        'activeTab',
+        'contextMenus',
+        'downloads',
+        'nativeMessaging',
+        'notifications',
+        'scripting',
+        'storage',
+      ]);
     });
   }
 }

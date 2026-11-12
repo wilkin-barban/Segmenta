@@ -199,5 +199,69 @@
   },
   "viewProgress": {
     "message": "Ver progreso"
+  },
+  "confirmTitle": {
+    "message": "Guardar con Segmenta",
+    "description": "Título de la ventana de confirmación de captura."
+  },
+  "confirmIntro": {
+    "message": "El navegador pausó esta descarga. Elegí quién la termina.",
+    "description": "Introducción de la ventana de confirmación."
+  },
+  "confirmNameLabel": {
+    "message": "Archivo",
+    "description": "Etiqueta del nombre del archivo."
+  },
+  "confirmHostLabel": {
+    "message": "Origen",
+    "description": "Etiqueta del sitio de origen."
+  },
+  "confirmFolderLabel": {
+    "message": "Carpeta destino",
+    "description": "Etiqueta de la carpeta donde se guardará."
+  },
+  "confirmUnknownName": {
+    "message": "Nombre desconocido",
+    "description": "Nombre cuando la descarga no informa el archivo."
+  },
+  "confirmUnknownHost": {
+    "message": "Sitio desconocido",
+    "description": "Origen cuando la descarga no informa el host."
+  },
+  "confirmHostMagnet": {
+    "message": "Enlace magnet",
+    "description": "Origen para un enlace magnet, que no tiene host http."
+  },
+  "confirmFolderPending": {
+    "message": "Pendiente: lo informa el daemon al crear la tarea",
+    "description": "Carpeta cuando el daemon todavía no la informó."
+  },
+  "confirmAccept": {
+    "message": "Descargar con Segmenta",
+    "description": "Botón que confirma la captura."
+  },
+  "confirmReject": {
+    "message": "Dejar en el navegador",
+    "description": "Botón que rechaza la captura."
+  },
+  "confirmAccepted": {
+    "message": "Enviado a Segmenta. Carpeta: $1",
+    "description": "Confirmación con la carpeta destino."
+  },
+  "confirmAcceptedGeneric": {
+    "message": "Enviado a Segmenta.",
+    "description": "Confirmación sin carpeta informada."
+  },
+  "confirmRejected": {
+    "message": "La descarga continúa en el navegador.",
+    "description": "Aviso después de rechazar la captura."
+  },
+  "confirmFailed": {
+    "message": "No se pudo añadir a Segmenta. La descarga continúa en el navegador.",
+    "description": "Error cuando el host rechaza la tarea."
+  },
+  "confirmInvalid": {
+    "message": "Esta confirmación ya no es válida. Cerrá esta ventana.",
+    "description": "Aviso cuando la ventana no tiene una descarga pendiente."
   }
 }

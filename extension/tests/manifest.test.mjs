@@ -151,7 +151,7 @@ export default function suite({ test }) {
         `firefox/shared/${file} is stale`,
       );
     }
-    for (const file of ['background.js', 'content.js', 'document.js']) {
+    for (const file of ['background.js', 'content.js', 'document.js', 'confirm.html', 'confirm.js']) {
       assert.equal(
         readFileSync(extFile('firefox', file)).equals(readFileSync(extFile('chromium', file))),
         true,
@@ -200,6 +200,7 @@ export default function suite({ test }) {
       ['chromium', 'content.js'],
       ['chromium', 'document.js'],
       ['chromium', 'popup.js'],
+      ['chromium', 'confirm.js'],
     ];
     const forbidden = [
       ['innerHTML', /\binnerHTML\b/],
@@ -225,5 +226,24 @@ export default function suite({ test }) {
     assert.equal(/src\s*=\s*["']https?:/i.test(html), false, 'popup.html loads remote scripts');
     assert.equal(html.includes('popup.js'), true);
     assert.equal(html.includes('shared/browser-api.js'), true);
+  });
+
+  test('the confirmation window is a plain page that only loads its own script', async () => {
+    for (const target of ['chromium', 'firefox']) {
+      const html = readExt(target, 'confirm.html');
+      assert.equal(/\son[a-z]+\s*=/i.test(html), false, `${target}/confirm.html uses inline handlers`);
+      assert.equal(/src\s*=\s*["']https?:/i.test(html), false, `${target}/confirm.html loads remote scripts`);
+      assert.equal(/\.innerHTML\s*=/.test(html), false, `${target}/confirm.html writes html`);
+      assert.equal(html.includes('confirm.js'), true, `${target}/confirm.html must load confirm.js`);
+      assert.equal(
+        html.includes('shared/browser-api.js'),
+        true,
+        `${target}/confirm.html must load the api adapter`,
+      );
+      // Both actions exist and start disabled: nothing can be decided before the
+      // script validated the pending download.
+      assert.equal(/id="accept"[^>]*disabled/.test(html), true, `${target}/confirm.html accept button`);
+      assert.equal(/id="reject"[^>]*disabled/.test(html), true, `${target}/confirm.html reject button`);
+    }
   });
 }

@@ -19,11 +19,26 @@ if (typeof importScripts === 'function') {
 
   const HOST_NAME = 'io.github.wilkin.segmenta';
   const NATIVE_TIMEOUT_MS = 10000;
+  // Bumped whenever the settings contract gains keys the extension reads, so an
+  // older cache can never silently answer with the previous defaults (S11).
+  const SETTINGS_CACHE_VERSION = '0.1.2';
   // HLS/DASH sites are opt-in for the future optional host permission; until the
   // user grants a site, only the fixed allowlist below is accepted.
   const STREAM_ALLOWLIST = [];
 
   const handledDownloadIds = new Set();
+
+  // ---- Capture confirmation state (S10) --------------------------------------
+  const CONFIRM_PAGE = 'confirm.html';
+  const CAPTURE_CONFIRM_TIMEOUT_MS = 120000;
+  const MAX_PENDING_CONFIRMS = 20;
+  // downloadId -> { windowId, timer }. The browser download stays paused while the
+  // entry exists; every exit path resumes it.
+  const pendingConfirms = new Map();
+  // Download ids whose confirmation was already resolved (accept/reject/timeout).
+  const decidedDownloads = new Set();
+  // Overridable for the Node tests only; production always uses the constant.
+  let confirmTimeoutMs = CAPTURE_CONFIRM_TIMEOUT_MS;
 
   function trackHandledId(id) {
     if (handledDownloadIds.size >= 100) {
@@ -31,6 +46,14 @@ if (typeof importScripts === 'function') {
       handledDownloadIds.delete(first);
     }
     handledDownloadIds.add(id);
+  }
+
+  function trackDecidedId(id) {
+    if (decidedDownloads.size >= 100) {
+      const first = decidedDownloads.values().next().value;
+      decidedDownloads.delete(first);
+    }
+    decidedDownloads.add(id);
   }
 
   function extensionId() {
@@ -243,7 +266,7 @@ if (typeof importScripts === 'function') {
   }
 
   async function getCachedSettings() {
-    const cacheVersion = '0.1.1';
+    const cacheVersion = SETTINGS_CACHE_VERSION;
     try {
       if (API.storage && typeof API.storage.get === 'function') {
         const stored = await API.storage.get(['segmenta_settings', 'segmenta_settings_version']);
@@ -321,6 +344,235 @@ if (typeof importScripts === 'function') {
     return false;
   }
 
+  // ---- Capture with confirmation (S10) ---------------------------------------
+  // A browser download is never cancelled before Segmenta owns it: it is paused,
+  // the user answers in our own window, and only a successful add discards the
+  // browser copy. Every other outcome (reject, timeout, closed window, host
+  // failure) resumes the browser download, so the file is never lost.
+
+  /** `capture_confirm` defaults to true when the daemon does not report it. */
+  function captureConfirmEnabled(settings) {
+    return !(settings && settings.capture_confirm === false);
+  }
+
+  /**
+   * Effective destination folder reported by the daemon. The extension never
+   * invents a path: when the settings carry none the window shows it as pending.
+   */
+  function captureFolder(settings) {
+    if (!settings || typeof settings !== 'object') {
+      return '';
+    }
+    for (const key of ['destination_dir', 'download_dir']) {
+      const value = typeof settings[key] === 'string' ? settings[key].trim() : '';
+      if (value) {
+        return value;
+      }
+    }
+    return '';
+  }
+
+  function buildConfirmUrl(baseUrl, entry) {
+    const params = new URLSearchParams();
+    params.set('download', String(entry.downloadId));
+    params.set('url', entry.url);
+    if (entry.filename) {
+      params.set('filename', entry.filename);
+    }
+    if (entry.referrer) {
+      params.set('referrer', entry.referrer);
+    }
+    if (entry.folder) {
+      params.set('folder', entry.folder);
+    }
+    return baseUrl + '?' + params.toString();
+  }
+
+  function confirmPageUrl() {
+    const api = API && typeof API.resolveRuntime === 'function' ? API.resolveRuntime() : null;
+    const runtime = api && api.runtime ? api.runtime : null;
+    if (runtime && typeof runtime.getURL === 'function') {
+      return runtime.getURL(CONFIRM_PAGE);
+    }
+    return CONFIRM_PAGE;
+  }
+
+  async function pauseDownload(downloadId) {
+    if (!API.downloads || typeof API.downloads.pause !== 'function') {
+      return false;
+    }
+    try {
+      await API.downloads.pause(downloadId);
+      return true;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  async function resumeDownload(downloadId) {
+    if (!API.downloads || typeof API.downloads.resume !== 'function') {
+      return false;
+    }
+    try {
+      await API.downloads.resume(downloadId);
+      return true;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  /** Cancels and erases the browser copy. Only ever called after a successful add. */
+  async function discardDownload(downloadId) {
+    try {
+      if (API.downloads && typeof API.downloads.cancel === 'function') {
+        await API.downloads.cancel(downloadId);
+      }
+    } catch (err) {}
+    try {
+      if (API.downloads && typeof API.downloads.erase === 'function') {
+        await API.downloads.erase({ id: downloadId });
+      }
+    } catch (err) {}
+  }
+
+  function addCapturedDownload(entry) {
+    if (PROTOCOL.parseTorrentUrl(entry.url)) {
+      return callHost(() => PROTOCOL.buildTorrentAdd({ url: entry.url }));
+    }
+    return callHost(() =>
+      PROTOCOL.buildDownloadAdd({
+        url: entry.url,
+        filename: entry.filename,
+        referrer: entry.referrer,
+      }),
+    );
+  }
+
+  /**
+   * Safe capture order: add, then cancel+erase, then announce. A failed add resumes
+   * the browser download, which still owns the file.
+   */
+  async function completeCapture(entry) {
+    const reply = await addCapturedDownload(entry);
+    if (!reply.ok) {
+      await resumeDownload(entry.downloadId);
+      return reply;
+    }
+    await discardDownload(entry.downloadId);
+    await announceAddedTask(reply.data);
+    return reply;
+  }
+
+  function forgetConfirm(downloadId) {
+    const pending = pendingConfirms.get(downloadId);
+    if (!pending) {
+      return null;
+    }
+    pendingConfirms.delete(downloadId);
+    if (pending.timer) {
+      clearTimeout(pending.timer);
+    }
+    return pending;
+  }
+
+  async function closeConfirmWindow(windowId) {
+    if (windowId === null || !API.windows || typeof API.windows.remove !== 'function') {
+      return false;
+    }
+    try {
+      await API.windows.remove(windowId);
+      return true;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  /** Timeout, closed window or an abandoned capture: keep the file. */
+  async function abandonConfirm(downloadId) {
+    const pending = forgetConfirm(downloadId);
+    if (!pending) {
+      return false;
+    }
+    trackDecidedId(downloadId);
+    await closeConfirmWindow(pending.windowId);
+    await resumeDownload(downloadId);
+    return true;
+  }
+
+  async function openConfirmWindow(entry) {
+    const windows = API && API.windows ? API.windows : null;
+    if (!windows || typeof windows.create !== 'function') {
+      await resumeDownload(entry.downloadId);
+      return false;
+    }
+    if (pendingConfirms.size >= MAX_PENDING_CONFIRMS) {
+      await abandonConfirm(pendingConfirms.keys().next().value);
+    }
+    let created = null;
+    try {
+      created = await windows.create({
+        url: buildConfirmUrl(confirmPageUrl(), entry),
+        type: 'popup',
+        width: 460,
+        height: 380,
+      });
+    } catch (err) {
+      await resumeDownload(entry.downloadId);
+      return false;
+    }
+    const windowId = created && typeof created.id === 'number' ? created.id : null;
+    const timer = setTimeout(() => {
+      abandonConfirm(entry.downloadId);
+    }, confirmTimeoutMs);
+    pendingConfirms.set(entry.downloadId, { windowId: windowId, timer: timer });
+    return true;
+  }
+
+  function onWindowRemoved(windowId) {
+    for (const [downloadId, pending] of pendingConfirms) {
+      if (pending.windowId === windowId) {
+        abandonConfirm(downloadId);
+        return;
+      }
+    }
+  }
+
+  /** Handles the answer coming back from confirm.html. */
+  async function decideCapture(value) {
+    const downloadId = value.downloadId;
+    if (decidedDownloads.has(downloadId)) {
+      return failure('ERR_CAPTURE_DECIDED', 'this download was already decided');
+    }
+    trackDecidedId(downloadId);
+    forgetConfirm(downloadId);
+
+    if (value.decision !== 'accept') {
+      await resumeDownload(downloadId);
+      return { ok: true, data: { accepted: false, download_id: downloadId } };
+    }
+
+    const entry = {
+      downloadId: downloadId,
+      url: value.url,
+      filename: value.filename || '',
+      referrer: value.referrer || '',
+      folder: '',
+    };
+    const reply = await completeCapture(entry);
+    if (!reply.ok) {
+      return reply;
+    }
+    return { ok: true, data: Object.assign({ accepted: true, download_id: downloadId }, reply.data) };
+  }
+
+  function setConfirmTimeoutMs(ms) {
+    const numeric = Number(ms);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      confirmTimeoutMs = numeric;
+    }
+    return confirmTimeoutMs;
+  }
+
   async function onDownloadCreated(downloadItem) {
     if (!downloadItem || !downloadItem.id || !downloadItem.url) {
       return;
@@ -377,30 +629,35 @@ if (typeof importScripts === 'function') {
       }
     }
 
-    try {
-      if (API.downloads && typeof API.downloads.cancel === 'function') {
-        await API.downloads.cancel(downloadItem.id);
-      }
-      if (API.downloads && typeof API.downloads.erase === 'function') {
-        await API.downloads.erase({ id: downloadItem.id });
-      }
-    } catch (err) {}
-
-    if (isTorrentFile || isMagnet) {
-      await callHostAndAnnounce(() => PROTOCOL.buildTorrentAdd({ url: url }));
-    } else {
-      await callHostAndAnnounce(() =>
-        PROTOCOL.buildDownloadAdd({
-          url: url,
-          filename: downloadItem.filename,
-          referrer: downloadItem.referrer,
-        }),
-      );
+    // Pause first: an erased download cannot be resumed, so the browser copy must
+    // survive until the daemon owns the task.
+    const paused = await pauseDownload(downloadItem.id);
+    if (!paused) {
+      return;
     }
+
+    const entry = {
+      downloadId: downloadItem.id,
+      url: url,
+      filename: typeof downloadItem.filename === 'string' ? downloadItem.filename : '',
+      referrer: typeof downloadItem.referrer === 'string' ? downloadItem.referrer : '',
+      folder: captureFolder(settings),
+    };
+
+    if (!captureConfirmEnabled(settings)) {
+      await completeCapture(entry);
+      return;
+    }
+
+    await openConfirmWindow(entry);
   }
 
   if (API && API.downloads && API.downloads.onCreated && typeof API.downloads.onCreated.addListener === 'function') {
     API.downloads.onCreated.addListener(onDownloadCreated);
+  }
+
+  if (API && API.windows && API.windows.onRemoved && typeof API.windows.onRemoved.addListener === 'function') {
+    API.windows.onRemoved.addListener(onWindowRemoved);
   }
 
   function setupContextMenus() {
@@ -475,6 +732,10 @@ if (typeof importScripts === 'function') {
         );
       case 'segmenta.torrent.add':
         return callHostAndAnnounce(() => PROTOCOL.buildTorrentAdd({ url: value.url }));
+      // Answer from confirm.html (S10): the window carries the paused download, so
+      // the decision never depends on state a worker restart could have dropped.
+      case 'segmenta.capture.decide':
+        return decideCapture(value);
       default:
         return Promise.resolve(failure('ERR_INVALID_TYPE', 'message type is not allowed'));
     }
@@ -505,6 +766,9 @@ if (typeof importScripts === 'function') {
     HOST_NAME: HOST_NAME,
     NATIVE_TIMEOUT_MS: NATIVE_TIMEOUT_MS,
     NOTIFICATION_ID: NOTIFICATION_ID,
+    SETTINGS_CACHE_VERSION: SETTINGS_CACHE_VERSION,
+    CONFIRM_PAGE: CONFIRM_PAGE,
+    CAPTURE_CONFIRM_TIMEOUT_MS: CAPTURE_CONFIRM_TIMEOUT_MS,
     handle: handle,
     hostFailure: hostFailure,
     onDownloadCreated: onDownloadCreated,
@@ -517,5 +781,13 @@ if (typeof importScripts === 'function') {
     showTaskNotification: showTaskNotification,
     announceAddedTask: announceAddedTask,
     callHostAndAnnounce: callHostAndAnnounce,
+    captureFolder: captureFolder,
+    captureConfirmEnabled: captureConfirmEnabled,
+    buildConfirmUrl: buildConfirmUrl,
+    openConfirmWindow: openConfirmWindow,
+    completeCapture: completeCapture,
+    decideCapture: decideCapture,
+    onWindowRemoved: onWindowRemoved,
+    setConfirmTimeoutMs: setConfirmTimeoutMs,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

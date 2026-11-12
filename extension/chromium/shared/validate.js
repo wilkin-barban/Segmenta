@@ -12,7 +12,8 @@
   }
 
   const MAX_MESSAGE_BYTES = 65536;
-  const MESSAGE_TYPES = ['segmenta.probe', 'segmenta.add', 'segmenta.status', 'segmenta.open', 'segmenta.capture', 'segmenta.torrent.add'];
+  const MESSAGE_TYPES = ['segmenta.probe', 'segmenta.add', 'segmenta.status', 'segmenta.open', 'segmenta.capture', 'segmenta.torrent.add', 'segmenta.capture.decide'];
+  const CAPTURE_DECISIONS = ['accept', 'reject'];
   const MESSAGE_MODES = ['video', 'audio', 'playlist'];
   const PROBE_KINDS = ['video', 'playlist', 'stream'];
   const FORMAT_ID_PATTERN = /^[A-Za-z0-9._+-]{1,64}$/;
@@ -160,6 +161,48 @@
     return ok(value);
   }
 
+  /**
+   * Decision coming back from the confirmation window (S10). The window carries the
+   * paused download it is asking about, so the background never depends on memory
+   * that a service-worker restart could have dropped.
+   */
+  function validateCaptureDecide(message) {
+    const downloadId = message.downloadId;
+    if (typeof downloadId !== 'number' || !Number.isInteger(downloadId) || downloadId < 0) {
+      return fail('ERR_INVALID_PARAMS', 'download id is not acceptable');
+    }
+    if (CAPTURE_DECISIONS.indexOf(message.decision) === -1) {
+      return fail('ERR_INVALID_PARAMS', 'capture decision is not supported');
+    }
+    const value = { type: 'segmenta.capture.decide', downloadId: downloadId, decision: message.decision };
+    const url = typeof message.url === 'string' ? message.url.trim() : '';
+    if (message.decision === 'accept') {
+      const torrent = PROTOCOL.parseTorrentUrl(url);
+      const parsed = torrent ? null : PROTOCOL.parseHttpUrl(url);
+      if (!torrent && !parsed) {
+        return fail('ERR_INVALID_URL', 'capture url is not valid');
+      }
+      value.url = torrent || parsed.href;
+    } else if (url && !PROTOCOL.parseTorrentUrl(url) && !PROTOCOL.parseHttpUrl(url)) {
+      return fail('ERR_INVALID_URL', 'capture url is not valid');
+    }
+    if (message.filename !== undefined && message.filename !== null && message.filename !== '') {
+      const filename = String(message.filename).trim();
+      if (filename.length > 255) {
+        return fail('ERR_INVALID_PARAMS', 'filename is too long');
+      }
+      value.filename = filename;
+    }
+    if (message.referrer !== undefined && message.referrer !== null && message.referrer !== '') {
+      const refParsed = PROTOCOL.parseHttpUrl(message.referrer);
+      if (!refParsed) {
+        return fail('ERR_INVALID_URL', 'referrer url is not valid');
+      }
+      value.referrer = refParsed.href;
+    }
+    return ok(value);
+  }
+
   function validateTorrentAdd(message) {
     const url = typeof message.url === 'string' ? message.url.trim() : '';
     const torrent = PROTOCOL.parseTorrentUrl(url);
@@ -202,6 +245,8 @@
         return validateCapture(message);
       case 'segmenta.torrent.add':
         return validateTorrentAdd(message);
+      case 'segmenta.capture.decide':
+        return validateCaptureDecide(message);
       default:
         return fail('ERR_INVALID_TYPE', 'message type is not allowed');
     }
