@@ -25,8 +25,7 @@ Plan: `/home/wilkin/.commandcode/plans/segmenta-0.1.1.md`. Release `v0.1.1`.
 ## Hallazgos abiertos
 
 - El primer download inmediatamente al arrancar Chrome puede ocurrir antes de que el service worker registre el listener; los downloads posteriores se capturan. Documentado como limitación de arranque en frío.
-- `torrent.probe` de `.torrent` multiarchivo aún devuelve `total_bytes=0` y un solo `files` de longitud 0; el motor real sí reporta el total durante la descarga. Mejora para 0.1.2.
-- El motor marca `supports_ranges=true` en la vista de torrent; no afecta la descarga, pero debería ser `false`.
+- El motor reporta el total durante la descarga; el probe de `.torrent` multiarchivo aún devuelve `total_bytes=0` y un solo archivo de longitud 0.
 - Firefox snap sigue sin poder ejecutar el host nativo; Firefox oficial funciona.
 - El handler `magnet:` se instala como `.desktop`, pero el usuario debe registrarlo con `xdg-mime default segmenta-handler.desktop x-scheme-handler/magnet` si su escritorio no lo hace solo.
 
