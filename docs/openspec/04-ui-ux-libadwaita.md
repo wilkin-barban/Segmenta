@@ -1,21 +1,38 @@
 # OpenSpec 04: Especificación de Interfaz de Usuario (GTK4 / Libadwaita)
 
 > **Especificación:** OPENSPEC-SEGMENTA-004  
-> **Versión:** 1.0.0  
+> **Versión:** 1.2.0  
 > **Entorno Objetivo:** Ubuntu 26.04 LTS / GNOME 50+ / Wayland  
 > **Toolkit:** GTK4 (>= 4.14) + Libadwaita (>= 1.5)
 
 > **Normativo:** el contrato IPC y el ciclo de vida están en 07; el empaquetado, los execution
-> budgets y las pruebas están en 10. La UI consume el daemon, no abre sockets ni descarga por su cuenta.
+> budgets y las pruebas están en 10. La UI consume el daemon, no abre sockets ni descarga por su
+> cuenta.
+
+> **Alcance de esta revisión:** la GUI en el árbol es **0.1.2** (`crates/segmenta-gui`, versión del
+> workspace `0.1.2`). Todo lo que aquí se describe **sin etiqueta existe hoy** en ese código; lo que
+> pertenece a **0.2.0** se marca con **«(0.2, en preparación)»** y **no se puede leer como
+> entregado**.
+
+> **Cambio de contrato: no hay categorías en la UI.** El panel lateral no ofrece filtros por
+> categoría y las Preferencias no ofrecen mapeo por categoría, subcarpetas automáticas ni
+> clasificación de ningún tipo. El ajuste legacy `category_dirs` **se sigue leyendo** para no romper
+> bases de datos antiguas, y nada en la UI lo edita ni lo usa para elegir destino. La fila de sólo
+> lectura que la GUI 0.1.2 todavía pinta con ese mapeo es residuo, no contrato: se retira en U1
+> (§8).
 
 ---
 
 ## 1. Filosofía de Diseño y Experiencia de Usuario
 
-Segmenta abandona el diseño tosco de ventanas legacy Win32 de los años 90 y abraza las directrices modernas de **GNOME Human Interface Guidelines (HIG)**:
-* **Integración con Ubuntu Yaru:** Adaptación automática al color de acento del sistema (naranja de Ubuntu u opciones personalizadas).
-* **Soporte Nativo de Wayland:** Cero renderizado XWayland, soporte para escalado fraccionario (125%, 150%) sin artefactos borrosos.
-* **Transición Dinámica Claro/Oscuro:** Integración con `AdwStyleManager` para responder inmediatamente a los cambios de tema del escritorio.
+Segmenta sigue las **GNOME Human Interface Guidelines (HIG)** sobre GTK4 + Libadwaita:
+* **Color de acento del sistema:** el widget de segmentos pide `WidgetExt::color()` a un widget con
+  la clase CSS `.accent` (acento de Libadwaita) y sólo cae a un color propio si el tema todavía no
+  lo define.
+* **Soporte nativo de Wayland:** cero renderizado XWayland y escalado fraccionario sin artefactos.
+* **Transición claro/oscuro:** la app sigue a `AdwStyleManager`; no impone un tema propio.
+* **Guardado inmediato:** en Preferencias cada control guarda con `settings.update` (sin botón
+  «Guardar») y muestra el rechazo del daemon como `AdwToast`.
 
 ---
 
@@ -23,190 +40,246 @@ Segmenta abandona el diseño tosco de ventanas legacy Win32 de los años 90 y ab
 
 ```
 +-------------------------------------------------------------------------+
-| [ + ] [ ▶ Todos ] [ ⏸ Pausar ]    Segmenta       [ 🔍 Buscar ] [ ⚙ ] [ X ]|
+| [ + Añadir URL ]                              [ 🔍 ] [ ⚙ ] [ ☰ ] [ X ] |
 +-------------------------------------------------------------------------+
-|      Panel Lateral      |                Lista de Descargas             |
-| ─────────────────────── | ───────────────────────────────────────────── |
-| 📥 Todas (14)           | 📦 ubuntu-26.04-desktop.iso                   |
-| ⚡ Activas (2)           |    45.2 MB/s ─ 1.2 GB de 4.0 GB ─ Quedan 1 min|
-| ⏸ Pausadas (1)          |    [▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░░░░░░░░░░] |
-| ✅ Completadas (11)      |    [ ⏸ ] [ ✕ ]                                |
-|                         | ───────────────────────────────────────────── |
-| Categorías:             | 🎬 documental_naturaleza_4k.mp4               |
-| 📁 Documentos           |    12.8 MB/s ─ 850 MB de 1.8 GB ─ Quedan 2 min|
-| 🎬 Vídeos               |    [▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░] |
-| 🎵 Música               |    [ ⏸ ] [ ✕ ]                                |
-| 📦 Comprimidos          |                                               |
-+-------------------------+-----------------------------------------------+
+|      Panel Lateral            |           Lista de Descargas            |
+| ───────────────────────────── | ─────────────────────────────────────── |
+| 📥 Todas (14)                 | 📦 ubuntu-26.04-desktop.iso             |
+| ⚡ Activas (2)                 |    45.2 MB/s ─ 1.2 GB de 4.0 GB ─ 1 min |
+| ⏸ Pausadas (1)                |    [▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░░░░░░]   |
+| ✅ Completadas (11)            |    [ ⏸ ] [ ✕ ]                          |
+| ⚠ Fallidas (0)                | ─────────────────────────────────────── |
+|                               | 🎬 documental_naturaleza_4k.mp4         |
+| Colas                         |    12.8 MB/s ─ 850 MB de 1.8 GB ─ 2 min |
+|   main                        |    [▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░░░░░░]   |
++-------------------------------+-----------------------------------------+
 ```
 
 ### Componentes Estructurales
-1. **`AdwHeaderBar`**:
-   * Botón de acción principal: `+ Añadir URL` (sugiere automáticamente URLs válidas copiadas en el portapapeles).
-   * Controles globales: Reanudar todas / Pausar todas.
-   * Menú de hamburguesa: Opciones, Límite de velocidad global, Acerca de.
-2. **`AdwNavigationSplitView`**:
-   * Panel lateral colapsable automáticamente en pantallas pequeñas o modo mosaico en Ubuntu.
-   * Filtros por estado y categorías inteligentes según el tipo MIME del archivo.
-3. **Lista de Tareas (`GtkListView` con reciclaje de celdas)**:
-   * Capaz de manejar miles de descargas históricas sin degradar los 60 FPS de la interfaz.
+1. **`AdwHeaderBar`** (`build_layout`, `window.rs`):
+   * `+ Añadir URL` como acción principal sugerida (`suggested-action`), atajo `Ctrl+N`.
+   * `GtkToggleButton` de búsqueda (`system-search-symbolic`, atajo `Ctrl+F`) enlazado en dos
+     sentidos con el `GtkSearchBar` inferior.
+   * Botón de Preferencias (`emblem-system-symbolic`, atajo `Ctrl+,`).
+   * `GtkMenuButton` (`open-menu-symbolic`) con el menú: Añadir URL, Recargar, Buscar,
+     Preferencias, Acerca de, Salir (`Ctrl+Q`); «Acerca de» abre un `AdwAboutDialog` aparte.
+   * **No hay** botones globales de «Reanudar todas» ni «Pausar todas».
+2. **`AdwNavigationSplitView`**: panel lateral colapsable, ancho mínimo 210 px, fracción 0,24,
+   máximo 320 px.
+   * **Filtros** (`Filter::ALL`): Todas, Activas, Pausadas, Completadas, Fallidas, cada uno con
+     icono, etiqueta localizada y contador; el contador y el filtro se calculan sobre el snapshot
+     cargado, no en el daemon.
+   * **Colas**: una fila por `queue_name` **presente en el snapshot de `download.list`**, con su
+     número de tareas; seleccionar una filtra la lista. El grupo se oculta si el snapshot no tiene
+     ninguna cola. La GUI no llama a `queue.list` ni permite crear, borrar o programar colas: eso
+     hoy es CLI (`queue.create`, `queue.remove`, `queue.schedule`).
+   * **Sin categorías**: el panel no tiene sección ni filtro de categorías.
+3. **Pila de contenido (`GtkStack`)**: cuatro páginas distintas — `loading`, `list`, `empty`,
+   `error` — para que «daemon inalcanzable» nunca se confunda con «no hay descargas». La página
+   `loading` se desprende de la pila al llegar el primer estado listo para que el spinner detenido
+   no quede pintado detrás de la lista.
+4. **Lista de tareas (`GtkListView` con reciclaje de celdas)**: una sola petición
+   `download.list {"filter":"all","limit":500,"offset":0}` por refresco; el filtro de la barra
+   lateral y la búsqueda se aplican en cliente (`set_single_click_activate(false)`, la activación
+   es explícita). Tope real: 500 tareas, sin paginación todavía.
+5. **Página de detalle** (`AdwNavigationPage` con `tag = "detail"`): nombre, ruta final, estado en
+   píldora, barra de progreso con porcentaje, velocidad, ETA, tamaño, mensaje de error, widget de
+   segmentos con etiqueta accesible y acciones **Pausar**, **Reanudar**, **Cancelar** (con
+   confirmación), **Eliminar** (con confirmación) y **Abrir carpeta**. Cada botón se muestra sólo
+   si el estado lo admite: `pause` en `probing|downloading`; `resume` en `paused|failed`; `cancel`
+   en `pending|probing|downloading|paused`; `delete` en `completed|cancelled|failed`;
+   `open_folder` cuando hay ruta final.
 
 ---
 
 ## 3. El Widget Clave: Visualizador de Segmentos en Vivo (`SegmentaSegmentView`)
 
-Una de las características visuales más apreciadas por los usuarios es la barra gráfica que muestra cómo cada conexión avanza de forma independiente y cómo los bloques se dividen en caliente.
-
 ### 3.1. Arquitectura del Widget Personalizado
-* Hereda directamente de `GtkWidget`.
-* Dibuja los segmentos utilizando nodos de renderizado de GTK4 (`GskRenderNode` / `gtk_snapshot_append_color`).
+* Subclase de `gtk::Widget` (`segment_view.rs`) con `measure` y `snapshot`.
+* La geometría vive en una función pura y testeable sin display, `layout_segments(segments, total_bytes)`.
+* Pintado con `gtk::Snapshot::append_color` sobre `graphene::Rect`.
 
 ### 3.2. Geometría de Renderizado
 Para un ancho total del widget $W$ y un tamaño total de archivo $S$:
 
-1. Cada segmento $i$ tiene un ancho proporcional en píxeles:
-   $$\text{ancho}_i = W \times \frac{\text{end\_offset}_i - \text{start\_offset}_i}{S}$$
-2. La porción descargada de dicho segmento ocupa:
-   $$\text{descargado}_i = \text{ancho}_i \times \frac{\text{current\_offset}_i - \text{start\_offset}_i}{\text{end\_offset}_i - \text{start\_offset}_i}$$
-3. Cada segmento se dibuja con un color diferenciado en tonos armónicos de la paleta de GNOME:
-   * Segmento completado: Color de acento sólido.
-   * Segmento en transferencia activa: Gradiente con animación sutil de pulso.
-   * Porción no descargada: Fondo neutro atenuado (`@view_selected_hover_color`).
+1. Cada bloque $i$ ocupa en fracciones del ancho según su rango
+   $[\text{start\_offset}_i, \text{end\_offset}_i]$; la suma de los rangos se usa como denominador
+   cuando $S$ todavía es desconocido (división segura, sin NaN).
+2. La porción descargada de dicho bloque es la fracción
+   $(\text{next\_offset}_i - \text{start\_offset}_i)/(\text{end\_offset}_i - \text{start\_offset}_i)$.
+3. Renderizado real: una pista (`track`) con el acento al 18 % de alfa y la parte descargada con el
+   acento sólido. La separación entre bloques es el 6 % del ancho de bloque, acotada a 0,5–3 px, y
+   sólo existe cuando hay más de un bloque.
+   * **No** hay gradientes ni animación de pulso: la barra es estática y se repinta con cada evento.
 
 ---
 
 ## 4. Diálogos Especializados
 
-### 4.1. Diálogo de Nueva Descarga (`SegmentaAddDownloadDialog`)
-* Basado en `AdwDialog` / `AdwPreferencesGroup`.
-* **Detección Automática de Portapapeles:** Al abrirse el diálogo, si el portapapeles contiene un enlace `http://` o `https://`, se auto-rellena inmediatamente.
-* **Campos:**
-  * URL de origen (con botón de limpiar).
-  * Selector de carpeta destino (con integración nativa con el portal XDG FileChooser).
-  * Nombre de archivo (extraído del servidor o personalizable por el usuario).
-  * Deslizador de conexiones concurrentes (de 1 a 32).
-  * Interruptor (*switch*): "Comenzar descarga inmediatamente".
+### 4.1. Diálogo de Nueva Descarga (`add_dialog.rs`)
+* `AdwDialog` con `AdwHeaderBar` (Cancelar / Iniciar) y un `AdwPreferencesGroup`.
+* **Campos reales:**
+  * URL de origen (`AdwEntryRow`).
+  * Nombre de archivo (`AdwEntryRow`); se autocompleta con el basename de la URL hasta que el
+    usuario escribe el suyo.
+  * Carpeta destino (`AdwActionRow` que abre `GtkFileDialog` del portal); arranca con el
+    `download_dir` del snapshot de ajustes.
+  * Conexiones concurrentes (`AdwSpinRow`, 1–32; arranca con `max_connections` del snapshot y su
+    respaldo es 16).
+  * Interruptor «Comenzar ahora» (activo por defecto).
+  * Etiqueta de error en línea, con `Enter` sobre la URL como atajo de envío.
+* **Envío**: `download.add` con `queue_name: "main"` y `priority: 0` fijos; el botón se desactiva
+  mientras se espera y, si el daemon no contesta en 60 s, el error se pinta en línea y el botón se
+  reactiva.
+* **Portapapeles:** si contiene una URL http(s) **y el campo URL está vacío**, se usa para
+  prellenar el diálogo. Hoy no consulta `clip_monitor_enabled` (§8, deuda de U1).
+* **Sin categorías ni subcarpetas**: el destino es una carpeta única.
 
-### 4.2. Diálogo Selector de Calidad de Video (Sniffer)
-Cuando el sniffer del navegador detecta un video de YouTube, Vimeo u otra fuente con múltiples calidades:
-* Muestra la miniatura del video, título y duración.
-* Lista de variantes extraídas del manifiesto M3U8 o MPD:
-  * `[ ○ ] 2160p (4K UHD) - 60 FPS - ~2.1 GB`
-  * `[ ● ] 1080p (Full HD) - 60 FPS - ~450 MB (Recomendada)`
-  * `[ ○ ] 720p (HD) - ~180 MB`
-  * `[ ○ ] Solo Audio (M4A / 256 kbps) - ~25 MB`
-* Botón: `Descargar Selección` o `Añadir a la Cola`.
+### 4.2. Selección de calidad de medios
+* La selección de calidad **no ocurre en la GUI**: vive en el panel flotante de la extensión
+  (`extension/shared/panel.js`), con la escalera 4K/1080p/720p/360p + «Solo audio» y default 720p
+  (03 §3.3).
+* La GUI sólo consume el resultado: la tarea aparece en la lista y el detalle muestra su progreso,
+  igual que cualquier otra descarga.
+* **(0.2, en preparación)** no hay ningún diálogo GTK de calidades en el plan; si se añadiera, debe
+  reutilizar la misma escalera y no inventar opciones.
+
+### 4.3. Confirmaciones destructivas
+* Cancelar y Eliminar usan un `AdwAlertDialog` con título y cuerpo localizados
+  (`ConfirmCancelTitle`/`ConfirmCancelBodyLong`, `ConfirmDeleteTitle`/`ConfirmDeleteBodyLong`), la
+  respuesta «Volver» como predeterminada y de cierre, y una sola respuesta destructiva.
+* `download.cancel` y `download.delete` se envían con `delete_file: false` desde la UI: ningún
+  botón borra el archivo del disco.
 
 ---
 
 ## 5. Integración con el Sistema Operativo Ubuntu
 
-* **Portal de Segundo Plano (`org.freedesktop.portal.Background`)**:
-  * Permite que las descargas continúen activas aunque el usuario cierre la ventana principal.
-  * La bandeja es opcional: GNOME 50 no garantiza AppIndicator sin la extensión correspondiente. Si no hay bandeja, la app debe seguir funcionando desde el daemon y avisar por notificaciones; `libayatana-appindicator3` no se asume instalado.
-* **Notificaciones de Escritorio (`org.freedesktop.Notifications`)**:
-  * Al completarse una descarga, se emite una notificación nativa con dos botones de acción rápida:
-    * `[ Abrir Archivo ]` -> Invoca a `xdg-open` sobre el archivo final.
-    * `[ Mostrar en Carpeta ]` -> Abre el gestor de archivos de Ubuntu (Nautilus) con el archivo seleccionado.
+* **Continuidad en segundo plano:** no depende de un portal. El daemon es un servicio de usuario
+  independiente, así que cerrar la ventana de la GUI no interrumpe ninguna descarga; al reabrir, la
+  GUI se reconecta al socket y recarga con `download.list`.
+* **Notificaciones de escritorio (`gio::Notification`):** al completarse o fallar una tarea se envía
+  una notificación con el icono de la app y el nombre del archivo como cuerpo. Los títulos están
+  **incrustados en español** («Descarga completada», «Descarga fallida», `window.rs`) aunque el
+  catálogo ya tiene `Msg::CompletedNotification` y `Msg::FailedNotification` sin usar: es deuda de
+  i18n, no contrato.
+  * **No hay botones de acción** en la notificación («Abrir archivo» / «Mostrar en carpeta» no
+    existen); abrir la carpeta es una acción del detalle.
+* **Bandeja del sistema:** no implementada. GNOME no garantiza AppIndicator sin extensión, así que la
+  app no asume `libayatana-appindicator3` ni promete un icono de bandeja.
+* **Portal `org.freedesktop.portal.Background`:** no se usa. La instalación como servicio de usuario
+  (`systemd --user`) es la que sostiene el daemon; el `.desktop` sólo lanza la GUI.
+* **Modos de QA del binario** (`main.rs`): `--smoke` construye la ventana con una descarga sintética
+  y sale al reflejarla, `--show-task ID` abre el detalle de una tarea y `--screenshots DIR` escribe
+  las capturas claro/oscuro de 1440×900.
 
 ---
 
-## 6. Ventana de Preferencias y Opciones (`AdwPreferencesWindow`)
+## 6. Ventana de Preferencias (`AdwPreferencesDialog`)
 
-Para ofrecer una experiencia de configuración exhaustiva sin saturar visualmente al usuario, las opciones se estructuran en una ventana nativa de preferencias con pestañas laterales (`AdwPreferencesPage` y `AdwPreferencesGroup`):
+Se abre como `AdwPreferencesDialog` (640×720, búsqueda habilitada). Las páginas se añaden en este
+orden y **estas son las que existen hoy** en `crates/segmenta-gui/src/prefs.rs`:
 
-### 6.1. Pestaña «General» (Integración y Teclas Modificadoras)
-* **Inicio del Sistema:**
-  * Interruptor (*switch*): `Iniciar Segmenta con la sesión de Ubuntu`. La fuente de verdad es la unidad `systemd --user` de 07/10; el `.desktop` sólo lanza la GUI, no el daemon.
-* **Monitoreo del Portapapeles:**
-  * Interruptor: `Monitorear el portapapeles en busca de URLs de descarga válidas`.
-* **Teclas de Anulación de Captura:**
-  * Opción: `Tecla para omitir captura de Segmenta` (Predeterminado: Mantener pulsada la tecla `Alt` al hacer clic en un enlace permite que el navegador use su propio gestor nativo).
-  * Opción: `Tecla para forzar captura inmediata` (Predeterminado: Mantener pulsada la tecla `Ctrl` fuerza la descarga con Segmenta aunque la extensión esté deshabilitada).
-* **Integración del Sniffer de Navegador:**
-  * Interruptor: `Mostrar panel flotante de descarga sobre videos web`.
-  * Umbral de tamaño mínimo de video para mostrar el panel (ej. `Ignorar videos menores a 2 MB`).
+| Página (clave i18n) | Grupos | Controles reales |
+| --- | --- | --- |
+| **General** (`PrefsGeneral`) | **Carpetas** (`PrefsFolders`) y **Sesión** (título literal «Sesión», `prefs.rs:80`) | Fila «Carpeta de descargas» activable que abre el selector de carpeta del portal y guarda `download_dir`; interruptor «Iniciar con la sesión» (`autostart`). La fila de sólo lectura con el mapeo legacy de categorías que 0.1.2 todavía pinta no forma parte de este contrato: se retira en U1 (§8). |
+| **Conexiones y límites** (`PrefsConnectionsSection`) | **Transferencia** (`PrefsTransfer`, descripción `RetriesHint`) y **Proxy** | `AdwSpinRow` de conexiones por descarga (1–32); límite global de velocidad en KiB/s (0–1 000 000, paso 128, `0` = sin límite); reintentos por tarea (0–50); filas **informativas** de modo (`system`/`none`/`manual`) y servidor (`—` si no hay); interruptor «Permitir direcciones locales» (`allow_local_downloads`). `proxy_mode`/`proxy_url` no se editan aquí. |
+| **Descargas web** (`PrefsCapture`) | **Descargas web**, descripción `CaptureEnabledHint` | Interruptores «Capturar descargas del navegador» (`capture_enabled`), «Capturar archivos .torrent» (`capture_torrents`) y «Capturar enlaces magnet» (`capture_magnet`); fila «Extensiones capturadas» (recuento) con botón **Editar** que abre un editor de texto y guarda `capture_extensions`; fila «Nunca capturar desde» con el mismo editor para `domain_denylist`. |
+| **Navegadores** (`PrefsBrowsers`) | **Navegadores** (descripción `BrowserInstallHint`) y **Alternativa local** (`ExtensionLocalTitle`) | Fila «Instalar manifiesto nativo» con botón → `extension.install-native` (toast con instalados/errores y refresco de estados). Una fila por navegador **instalado** según `extension.status` (se omiten los que no traen `command`): nombre, estado real — `native-ready` («Manifiesto nativo listo · Extensión no instalada»), `extension-installed`, `native-missing`, `unsupported` —, versión en sufijo atenuado, botón **Preparar extensión** (`extension.prepare` con `family`), botón **Abrir página de extensiones** (`extension.open` con `browser_id`) y **Copiar ruta** sólo cuando el navegador trae `prepared_path`. Segunda fila informativa con la ruta de las extensiones locales (`/usr/share/segmenta/extensions`). |
+| **Acerca de** (`About`) | Grupo sin título | Fila «Segmenta» con `Versión <CARGO_PKG_VERSION>`; «Licencia» `GPL-3.0-or-later`; «Sitio web» activable que abre el repositorio; «Protocolo» (`ProtocolValue`); «Daemon», que se rellena con `system.status` como `versión · N s activo · M conexiones · secretos: <backend>` sin bloquear el diálogo. |
 
-### 6.2. Pestaña «Tipos de Archivos» (File Types & Exclusiones)
-* **Extensiones a Capturar Automáticamente:**
-  * Campo de texto con tokens editables:  
-    `3GP 7Z AAC APK ARJ AVI BZ2 DEB DOC DOCX EXE FLAC GZ ISO M4A M4V MKV MOV MP3 MP4 OGG PDF RAR RPM TAR TGZ TORRENT WAV WEBM WMA WMV ZIP`
-* **Lista Negra de Dominios (Exclusiones):**
-  * Lista dinámica para añadir sitios web donde Segmenta **nunca** debe interceptar descargas (útil para intranets corporativas, portales bancarios o servicios web conflictivos).
+Páginas que **no existen todavía** y se documentan sólo como objetivo:
 
-### 6.3. Pestaña «Carpetas y Categorías» (Save To)
-* **Mapeo de Rutas por Categoría:**
-  * Cada categoría tiene asignada una carpeta de destino predeterminada con botón de exploración (`GtkFileDialog`):
-    * 📁 **General:** `~/Descargas`
-    * 📦 **Comprimidos:** `~/Descargas/Comprimidos`
-    * 📄 **Documentos:** `~/Descargas/Documentos`
-    * 🎵 **Música:** `~/Música/Segmenta` o `~/Descargas/Música`
-    * 🎬 **Vídeos:** `~/Vídeos/Segmenta` o `~/Descargas/Vídeos`
-    * ⚙️ **Programas:** `~/Descargas/Programas`
-* **Comportamiento:**
-  * Interruptor: `Recordar la última carpeta de guardado para cada categoría`.
-  * Interruptor: `Crear subcarpetas mensuales automáticamente (ej. Descargas/2026-11/)`.
+* **Contraseñas de sitios** — **(0.2, en preparación)**: página con añadir/editar/borrar por dominio,
+  contraseña en diálogo aparte, usuario en SQLite y secreto en GNOME Keyring. Sólo HTTP Basic; sin
+  Digest. La contraseña nunca se muestra ni se devuelve por `settings.get`. Contrato: 07 y 12;
+  tarea L1 + U1.
+* **Antivirus / post-proceso** — **(0.2, en preparación)**: interruptor de escaneo, motor detectado
+  (`clamdscan`/`clamscan`), timeout, carpeta de cuarentena y el resultado por tarea
+  (`quarantine_path`, códigos `ERR_ANTIVIRUS_*`). Hoy `postprocess_command` se **persiste pero el
+  daemon no lo ejecuta** y no hay ningún control de antivirus en la UI. Contrato: 07, 08 y 12;
+  tareas A1, A2 y U1.
 
-### 6.4. Pestaña «Conexión y Límites de Red»
-* **Límites de Conexión:**
-  * Desplegable: `Número máximo de conexiones por descarga` (Opciones: `1`, `2`, `4`, `8`, `16`, `24`, `32`). Predeterminado: `16`.
-* **Límite Global de Velocidad (*Speed Limiter*):**
-  * Interruptor: `Habilitar limitador de velocidad`.
-  * Campo numérico con selector de unidad: `Velocidad máxima total` (ej. `5.0 MB/s` o `5120 KB/s`).
-* **Excepciones de Conexión por Servidor:**
-  * Tabla de reglas por dominio: Permite forzar a que servidores con protección anti-flood estricta (como Rapidgator o servidores universitarios) usen únicamente `1` o `2` conexiones concurrentes.
+Ajustes del daemon sin control en la UI (comportamiento actual, no contrato aspiracional):
 
-### 6.5. Pestaña «Programador y Colas» (Scheduler)
-* **Gestión de Colas:**
-  * Cola Principal (*Main Download Queue*) y opción de crear Colas Secundarias personalizadas.
-  * Selector numérico: `Descargas activas simultáneas en la cola` (ej. `1` a la vez para máxima velocidad por archivo, o `3` en paralelo).
-* **Programación Horaria:**
-  * Interruptor: `Iniciar descarga de la cola automáticamente a las [ HH:MM ]`.
-  * Interruptor: `Detener descarga de la cola a las [ HH:MM ]`.
-* **Acciones al Completar la Cola:**
-  * Menú desplegable:
-    * `No hacer nada`
-    * `Suspender el equipo`
-    * `Apagar el equipo` (mediante `org.freedesktop.login1.Manager.PowerOff`)
-    * `Cerrar Segmenta`
-
-### 6.6. Pestaña «Contraseñas de Sitios y Proxy»
-* **Contraseñas de Sitios (Site Logins):**
-  * Gestor seguro de credenciales para sitios con autenticación previa (HTTP Basic, Digest, o FTP):
-    * Servidor / Dominio (ej. `files.empresa.com`)
-    * Usuario y Contraseña cifrados localmente en el gestor de claves del sistema (GNOME Keyring / `libsecret`).
-* **Configuración de Proxy:**
-  * Selector de modo:
-    * `Usar configuración de proxy del sistema (GNOME)`
-    * `Sin proxy (Conexión directa)`
-    * `Configuración manual de proxy`:
-      * Protocolo: `HTTP`, `HTTPS`, `SOCKS4`, `SOCKS5`
-      * Host y Puerto
-      * Autenticación (Usuario / Contraseña de proxy opcional)
-
-### 6.7. Pestaña «Post-procesamiento y Antivirus»
-* **Escaneo Automático de Seguridad:**
-  * Interruptor: `Escanear archivos descargados al completarse`.
-  * Campo de comando ejecutable: (ej. `/usr/bin/clamscan --bell -i %file%`).
-
+* `capture_confirm` (default `true`): decide si la extensión abre la ventana de confirmación de
+  captura. La GUI no lo expone; se cambia por CLI.
+* `clip_monitor_enabled`: existe en el daemon y en el modelo de la GUI, pero el diálogo de añadir
+  prellena el portapapeles sin consultarlo. Unificar semántica o retirar el ajuste es la tarea U1
+  **(0.2, en preparación)**.
+* `proxy_mode`/`proxy_url`: sólo lectura; se editan con `segmenta settings set`.
+* `schedule_start`/`schedule_stop`, `action_on_complete`: sin control en la GUI; el tema es del
+  scheduler (`queue.schedule`, 07 y 12), no de la UI (§8).
+* `postprocess_command`: sin editor; la UI no muestra ni ejecuta el comando.
 
 ---
 
 ## 7. Estados, accesibilidad y límites de la UI
 
-Cada lista y cada diálogo debe definir, como mínimo, estos estados antes de implementarse:
+Cada lista y cada diálogo define, como mínimo, estos estados:
 
-- **Vacío:** texto que explica cómo añadir la primera descarga, sin una tabla vacía sin contexto.
-- **Cargando:** skeletons o spinner con nombre accesible; no bloquear el hilo de GTK.
-- **Error:** código del daemon traducido, acción de reintento y detalle copiable para soporte.
-- **Pausado/cancelado:** distinción visible entre pausa reanudable y cancelación.
-- **Sin conexión / ERP inalcanzable:** mensaje que diga qué revisar sin prometer una comprobación que la app no hace.
+- **Vacío:** `AdwStatusPage` con texto que explica cómo añadir la primera descarga y el botón de
+  añadir; nunca una tabla vacía sin contexto.
+- **Cargando:** página propia con spinner y etiqueta localizada; el hilo de GTK no se bloquea (el
+  cliente IPC vive en un hilo trabajador y el resultado se aplica en un tick de 150 ms).
+- **Error:** página propia con el mensaje del daemon (o el del cliente IPC), acción de reintento que
+  descarta la conexión anterior y detalle seleccionable para copiar. La app no promete una
+  comprobación de red que no hace: el texto pide revisar la unidad `systemd --user`.
+- **Pausado/cancelado:** estados distintos con etiqueta propia; la pausa (y la tarea fallida) es
+  reanudable y la cancelación no.
+- **Daemon inalcanzable:** es el mismo estado de error; no hay una página aparte de «sin conexión».
 
-Requisitos transversales:
+### 7.1. Estados de captura (visibles en la extensión, no en la GUI)
+| Estado | Dónde se ve | Significado |
+| --- | --- | --- |
+| Esperando confirmación | Ventana `confirm.html` | Descarga del navegador **pausada**; el usuario decide. |
+| Aceptada | Panel/notificación de la extensión | La tarea existe en el daemon; la copia del navegador se cancela y borra **sólo** tras verificar bytes. |
+| Rechazada | Ventana que se cierra | La descarga del navegador se reanuda; nada se envía. |
+| Timeout (120 s) / ventana cerrada | Sin UI propia | El watchdog reanuda la descarga del navegador. |
+| Copia conservada | Notificación de la extensión (`captureKeptTitle`/`captureKeptBody`) | La tarea nunca recibió datos: se reanuda el navegador, se descarta la tarea huérfana y el código interno es `ERR_CAPTURE_NOT_OWNED`. |
+| En cuarentena | **(0.2, en preparación)** detalle de la tarea y Preferencias → Antivirus | Archivo movido fuera de Descargas, tarea `failed` con `ERR_ANTIVIRUS_FOUND` (A2, contrato 08/12). |
 
+### 7.2. Estados de tarea mostrados por la GUI
+La GUI conoce `pending`, `probing`, `downloading`, `paused`, `verifying`, `completed`, `failed`,
+`cancelled` y `unknown`. Los estados que el daemon añada sin variante propia se pintan como
+`unknown` sin romper la lista.
+
+Consecuencia real de ese mapeo: `retrying` y `finalizing` existen en el daemon y en el esquema
+(`store.rs`) pero la GUI los muestra como «Desconocida» y, como las acciones dependen del estado
+conocido, una tarea en `retrying` no ofrece Pausar ni Cancelar desde la GUI. Es deuda declarada, no
+un contrato: U1 debe darles etiqueta y acciones propias.
+
+### 7.3. Estados de virus y cuarentena — **(0.2, en preparación)**
+Nada de esto se renderiza hoy:
+
+* `verifying` gana un subestado visible «Analizando» mientras corre el motor.
+* Infección: la tarea pasa a `failed`, el detalle muestra «En cuarentena» con `quarantine_path` y el
+  código `ERR_ANTIVIRUS_FOUND`; nunca queda el archivo en Descargas.
+* Motor ausente con `antivirus_enabled`: tarea `failed` con `ERR_ANTIVIRUS_UNAVAILABLE`, sin
+  publicar `completed`.
+* Un fallo del hook o del motor no borra el archivo; se registra `postprocess_exit`/
+  `postprocess_message` y la UI lo muestra como advertencia del detalle.
+
+### 7.4. Requisitos transversales
 - navegación completa por teclado y foco visible;
-- etiquetas accesibles en iconos, barras de progreso y el widget de segmentos;
+- etiquetas accesibles en iconos, barras de progreso y el widget de segmentos (la barra publica
+  «Progreso: N %» y el visualizador publica su resumen de segmentos);
 - contraste AA y respeto de `prefers-reduced-motion`;
-- textos en `es` y `pt-BR` desde el catálogo, sin cadenas incrustadas;
-- nombres de archivo largos con elipsis y tooltip, sin romper el layout a 125%/150%;
-- una sola acción destructiva por diálogo y confirmación explícita para borrar archivos.
+- textos visibles desde el catálogo (`segmenta-i18n`: es, en, pt-BR).
+
+---
+
+## 8. Deuda declarada de la GUI 0.1.2 (insumo de U1)
+
+Nada de esta lista es contrato: es lo que hay que corregir para que la UI cumpla el resto del
+documento. Todas las tareas son **(0.2, en preparación)**.
+
+| Deuda | Evidencia | Cierre |
+| --- | --- | --- |
+| Categorías visibles | `prefs.rs:58-77` pinta un `AdwExpanderRow` de sólo lectura con `category_dirs` | U1: retirar la fila; el setting se sigue leyendo para bases antiguas, sin UI y sin clasificar nada. |
+| Cadenas incrustadas | Títulos de notificación (`window.rs:1188`, `window.rs:1215`), grupo «Sesión» (`prefs.rs:80`), filas «Modo»/«Servidor» (`prefs.rs:119`, `prefs.rs:124`), prefijo «Versión» (`prefs.rs:240`), tooltips `Buscar (Ctrl+F)`/`Preferencias (Ctrl+,)`, placeholder de búsqueda, textos de las páginas vacía/error, línea de `system.status` y botones del detalle (`Pausar`, `Reanudar`, `Cancelar`, `Eliminar`, `Abrir carpeta`) | U1: mover a `segmenta-i18n` (las claves `SessionSection`, `ProxyMode`, `ProxyServer`, `CompletedNotification` y `FailedNotification` ya existen) y añadir el gate que impida literales nuevos. |
+| `clip_monitor_enabled` sin efecto | `add_dialog.rs` prellena sin consultar el ajuste | U1: una sola semántica, documentada, o retirar el ajuste de la UI. |
+| Colas sin gestión | El panel deriva nombres de `download.list`; crear/borrar/programar es sólo CLI | U1: decidir si la UI expone `queue.*` o si el documento declara que la gestión de colas es CLI. |
+| Tope de 500 tareas | `LIST_LIMIT` en `window.rs` | U1: paginación o límite documentado en 07. |
+| `retrying`/`finalizing` desconocidos | `model.rs::DownloadStatus` sin esas variantes | U1: etiqueta y acciones propias (§7.2). |
+| Site logins y antivirus ausentes | Sin RPC ni página | L1 + A2 + U1 (§6). |
