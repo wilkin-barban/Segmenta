@@ -145,6 +145,9 @@ fn record(id: &str, queue: &str, url: &str, dir: &Path) -> DownloadRecord {
         playlist_title: None,
         playlist_count: None,
         batch_id: None,
+        quarantine_path: None,
+        postprocess_exit: None,
+        postprocess_message: None,
     }
 }
 

@@ -473,6 +473,9 @@ impl Manager {
             playlist_title: None,
             playlist_count: None,
             batch_id: None,
+            quarantine_path: None,
+            postprocess_exit: None,
+            postprocess_message: None,
         };
         // Write the secret first: if there is no keyring the caller gets 1031 and no
         // task is created, so the sensitive header is never silently dropped.
@@ -1697,6 +1700,9 @@ impl Manager {
             playlist_title: is_playlist.then(|| probe.title.clone()),
             playlist_count: is_playlist.then_some(limit.min(probe.playlist.count.max(1)) as u32),
             batch_id: batch_id.clone(),
+            quarantine_path: None,
+            postprocess_exit: None,
+            postprocess_message: None,
         };
         self.store.insert_download(&record).map_err(store_error)?;
         self.bus.publish(
@@ -1786,6 +1792,9 @@ impl Manager {
             playlist_title: None,
             playlist_count: None,
             batch_id: None,
+            quarantine_path: None,
+            postprocess_exit: None,
+            postprocess_message: None,
         };
         self.store.insert_download(&record).map_err(store_error)?;
         self.bus.publish(
@@ -2048,6 +2057,9 @@ impl Manager {
             playlist_title: None,
             playlist_count: None,
             batch_id: None,
+            quarantine_path: None,
+            postprocess_exit: None,
+            postprocess_message: None,
         };
 
         self.store.insert_download(&record).map_err(store_error)?;

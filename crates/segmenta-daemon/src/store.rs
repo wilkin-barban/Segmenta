@@ -14,9 +14,22 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Current schema version, stored in `PRAGMA user_version`.
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 const SCHEMA_SQL: &str = include_str!("schema.sql");
+
+/// Columns schema v4 adds to `downloads` (OpenSpec 08 §4.2.2).
+///
+/// `quarantine_path` is where the antivirus left an infected file, and
+/// `postprocess_exit` / `postprocess_message` are the record of the finalizing phase (the
+/// hook of OpenSpec 12 §4 and the scan of §5). They are applied one by one, after checking
+/// `pragma_table_info`, because `schema.sql` already carries them for a database created
+/// from scratch while the v2/v3 rebuilds drop anything they do not copy.
+pub const V4_COLUMNS: [(&str, &str); 3] = [
+    ("postprocess_exit", "INTEGER"),
+    ("postprocess_message", "TEXT"),
+    ("quarantine_path", "TEXT"),
+];
 
 /// Rebuild of `downloads` for schema v3: widens the `download_type` CHECK to accept
 /// torrent and magnet, and adds torrents / torrent_files tables.
@@ -287,6 +300,12 @@ pub struct DownloadRecord {
     pub queue_name: String,
     /// `direct` for 0.0.1; `hls`/`dash` are reserved.
     pub download_type: String,
+    /// Where the antivirus quarantined the file, when it found an infection.
+    pub quarantine_path: Option<String>,
+    /// Exit code of the post-processing hook or of the antivirus scan.
+    pub postprocess_exit: Option<i32>,
+    /// Bounded message of the finalizing phase.
+    pub postprocess_message: Option<String>,
     /// Creation timestamp (SQLite `CURRENT_TIMESTAMP`).
     pub created_at: Option<String>,
     /// Completion timestamp.
@@ -410,6 +429,12 @@ pub struct Settings {
     pub proxy_url: Option<String>,
     /// Post-processing command without a shell.
     pub postprocess_command: Vec<String>,
+    /// Run ClamAV over every finished file before publishing it as `completed`.
+    pub antivirus_enabled: bool,
+    /// Deadline of one scan, in seconds (1-3600, OpenSpec 12 §5).
+    pub antivirus_timeout_secs: u64,
+    /// Directory that receives infected files.
+    pub antivirus_quarantine_dir: String,
     /// UI appearance: `system`, `light` or `dark` (S22).
     pub appearance: String,
 }
@@ -447,9 +472,27 @@ impl Default for Settings {
             proxy_mode: "system".to_string(),
             proxy_url: None,
             postprocess_command: Vec::new(),
+            antivirus_enabled: false,
+            antivirus_timeout_secs: DEFAULT_ANTIVIRUS_TIMEOUT_SECS,
+            antivirus_quarantine_dir: default_quarantine_dir(),
             appearance: "system".to_string(),
         }
     }
+}
+
+/// Default deadline of one antivirus scan, in seconds (OpenSpec 12 §5).
+pub const DEFAULT_ANTIVIRUS_TIMEOUT_SECS: u64 = 120;
+
+/// Directory that receives infected files when the user never configured one.
+///
+/// `$XDG_DATA_HOME/segmenta/quarantine`, which is exactly [`crate::data_dir`] plus the
+/// documented folder name, so the quarantine always lives next to the database and never
+/// inside the download directory.
+pub fn default_quarantine_dir() -> String {
+    crate::data_dir()
+        .join("quarantine")
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// Download directory used when the user never configured one.
@@ -541,6 +584,9 @@ pub const SETTING_KEYS: &[&str] = &[
     "proxy_mode",
     "proxy_url",
     "postprocess_command",
+    "antivirus_enabled",
+    "antivirus_timeout_secs",
+    "antivirus_quarantine_dir",
     "appearance",
 ];
 
@@ -684,6 +730,18 @@ impl Settings {
                 "download_dir must be an absolute path".to_string(),
             ));
         }
+        // Antivirus bounds (OpenSpec 12 §5): a zero-second scan would never finish and an
+        // unbounded one could hold a queue slot for hours.
+        if !(1..=3600).contains(&self.antivirus_timeout_secs) {
+            return Err(StoreError::Invalid(
+                "antivirus_timeout_secs must be between 1 and 3600".to_string(),
+            ));
+        }
+        if !Path::new(&self.antivirus_quarantine_dir).is_absolute() {
+            return Err(StoreError::Invalid(
+                "antivirus_quarantine_dir must be an absolute path".to_string(),
+            ));
+        }
         for (category, dir) in &self.category_dirs {
             if !Path::new(dir).is_absolute() {
                 return Err(StoreError::Invalid(format!(
@@ -734,17 +792,16 @@ impl Settings {
     }
 }
 
-/// Result of the post-processing hook of one task (OpenSpec 12 §4).
+/// Result of the finalizing phase of one task: the post-processing hook (OpenSpec 12 §4)
+/// or the antivirus scan (§5).
 ///
-/// Schema v4 owns the columns `postprocess_exit` and `postprocess_message` of
-/// `downloads` (OpenSpec 08, OpenSpec 12 §7) and that migration is **not** part of this
-/// unit: `schema.sql` is untouched, so the record lives in memory only and a daemon
-/// restart drops it. When the migration lands, [`Store::record_postprocess`] writes the
-/// same struct into those two columns and [`Store::postprocess`] reads them back, with no
-/// change in the caller.
+/// Schema v4 persists it in `postprocess_exit` and `postprocess_message` of `downloads`
+/// (OpenSpec 08 §4.2.2), so the record survives a daemon restart: [`Store::record_postprocess`]
+/// writes it and [`Store::postprocess`] reads it back, memory first and database second.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PostprocessRecord {
-    /// Exit code of the hook, `None` when it timed out, was killed or never started.
+    /// Exit code of the hook or of the scanner; `None` when it timed out, was killed,
+    /// never started or never ran at all.
     pub exit_code: Option<i32>,
     /// Bounded human message: the reason plus the tail of the captured output.
     pub message: String,
@@ -850,6 +907,18 @@ impl Store {
             tx.execute_batch(TORRENT_REBUILD_SQL)?;
             tx.execute_batch("PRAGMA foreign_keys = ON")?;
         }
+        if current < 4 {
+            // No CHECK constraint changes, so `ALTER TABLE ... ADD COLUMN` is enough and
+            // every existing row stays where it is. The guard on `pragma_table_info`
+            // covers the two paths that already have the columns: a database created from
+            // `schema.sql` (whose table was rebuilt by v2/v3 without them, so they are
+            // added here) and a re-run of this step after an interrupted upgrade.
+            for (column, kind) in V4_COLUMNS {
+                if !has_column(&tx, "downloads", column)? {
+                    tx.execute_batch(&format!("ALTER TABLE downloads ADD COLUMN {column} {kind}"))?;
+                }
+            }
+        }
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         Ok(SCHEMA_VERSION)
@@ -875,9 +944,10 @@ impl Store {
                 id, url, final_url, final_path, temp_path, total_bytes, downloaded_bytes,
                 status, supports_ranges, etag, last_modified, content_type, expected_checksum,
                 error_code, error_message, retry_count, priority, queue_name, download_type,
-                media_kind, media_format, playlist_title, playlist_count, batch_id
+                media_kind, media_format, playlist_title, playlist_count, batch_id,
+                quarantine_path, postprocess_exit, postprocess_message
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
-                       ?20, ?21, ?22, ?23, ?24)",
+                       ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)",
             params![
                 record.id,
                 record.url,
@@ -903,6 +973,9 @@ impl Store {
                 record.playlist_title,
                 record.playlist_count,
                 record.batch_id,
+                record.quarantine_path,
+                record.postprocess_exit,
+                record.postprocess_message,
             ],
         )?;
         Ok(())
@@ -1122,7 +1195,8 @@ impl Store {
                     status, supports_ranges, etag, last_modified, content_type, expected_checksum,
                     error_code, error_message, retry_count, priority, queue_name, download_type,
                     created_at, completed_at,
-                    media_kind, media_format, playlist_title, playlist_count, batch_id
+                    media_kind, media_format, playlist_title, playlist_count, batch_id,
+                    quarantine_path, postprocess_exit, postprocess_message
              FROM downloads WHERE id = ?1",
         )?;
         let row = statement.query_row(params![id], row_to_record).optional()?;
@@ -1147,7 +1221,8 @@ impl Store {
                             status, supports_ranges, etag, last_modified, content_type, expected_checksum,
                             error_code, error_message, retry_count, priority, queue_name, download_type,
                             created_at, completed_at,
-                            media_kind, media_format, playlist_title, playlist_count, batch_id
+                            media_kind, media_format, playlist_title, playlist_count, batch_id,
+                    quarantine_path, postprocess_exit, postprocess_message
                      FROM downloads WHERE status = ?3 ORDER BY created_at DESC, rowid DESC LIMIT ?1 OFFSET ?2",
                 )?;
                 let mapped =
@@ -1162,7 +1237,8 @@ impl Store {
                             status, supports_ranges, etag, last_modified, content_type, expected_checksum,
                             error_code, error_message, retry_count, priority, queue_name, download_type,
                             created_at, completed_at,
-                            media_kind, media_format, playlist_title, playlist_count, batch_id
+                            media_kind, media_format, playlist_title, playlist_count, batch_id,
+                    quarantine_path, postprocess_exit, postprocess_message
                      FROM downloads ORDER BY created_at DESC, rowid DESC LIMIT ?1 OFFSET ?2",
                 )?;
                 let mapped = statement.query_map(params![limit, offset], row_to_record)?;
@@ -1186,7 +1262,8 @@ impl Store {
                     status, supports_ranges, etag, last_modified, content_type, expected_checksum,
                     error_code, error_message, retry_count, priority, queue_name, download_type,
                     created_at, completed_at,
-                    media_kind, media_format, playlist_title, playlist_count, batch_id
+                    media_kind, media_format, playlist_title, playlist_count, batch_id,
+                    quarantine_path, postprocess_exit, postprocess_message
              FROM downloads WHERE queue_name = ?1 AND status = 'pending'
              ORDER BY priority DESC, created_at ASC, rowid ASC LIMIT ?2",
         )?;
@@ -1259,24 +1336,61 @@ impl Store {
         Ok(affected > 0)
     }
 
-    /// Record the post-processing outcome of a task.
+    /// Record the finalizing outcome of a task, in memory and in the database.
     ///
-    /// See [`PostprocessRecord`]: this is the in-memory stand-in for the `postprocess_exit`
-    /// and `postprocess_message` columns of schema v4, which belongs to another unit.
+    /// The row is updated with the same struct; a task id that does not exist (a caller
+    /// that records before inserting) keeps the in-memory entry only. A write that fails
+    /// is logged and never aborts a task that already finished downloading.
     pub fn record_postprocess(&self, id: &str, record: PostprocessRecord) {
         self.postprocess
             .lock()
             .unwrap_or_else(|err| err.into_inner())
-            .insert(id, record);
+            .insert(id, record.clone());
+        let written = self.lock().execute(
+            "UPDATE downloads SET postprocess_exit = ?2, postprocess_message = ?3 WHERE id = ?1",
+            params![id, record.exit_code, record.message],
+        );
+        if let Err(err) = written {
+            tracing::warn!(task_id = %id, error = %err, "cannot persist the post-processing record");
+        }
     }
 
-    /// Post-processing outcome of a task, when one was recorded in this process.
+    /// Finalizing outcome of a task: the live memory entry when this process recorded it,
+    /// otherwise the persisted row, so a restart does not lose the reason of a failure.
     pub fn postprocess(&self, id: &str) -> Option<PostprocessRecord> {
-        self.postprocess
+        let live = self
+            .postprocess
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .get(id)
-            .cloned()
+            .cloned();
+        if live.is_some() {
+            return live;
+        }
+        let conn = self.lock();
+        conn.query_row(
+            "SELECT postprocess_exit, postprocess_message FROM downloads WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(PostprocessRecord {
+                    exit_code: row.get::<_, Option<i64>>(0)?.map(|value| value as i32),
+                    message: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                })
+            },
+        )
+        .optional()
+        .ok()
+        .flatten()
+    }
+
+    /// Point a task at the file the antivirus moved into the quarantine directory.
+    pub fn set_quarantine_path(&self, id: &str, path: Option<&str>) -> Result<()> {
+        let conn = self.lock();
+        conn.execute(
+            "UPDATE downloads SET quarantine_path = ?2 WHERE id = ?1",
+            params![id, path],
+        )?;
+        Ok(())
     }
 
     /// Non-sensitive headers of a task.
@@ -1614,7 +1728,20 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<DownloadRecord> {
         playlist_title: row.get(23)?,
         playlist_count: row.get::<_, Option<i64>>(24)?.map(|value| value as u32),
         batch_id: row.get(25)?,
+        quarantine_path: row.get(26)?,
+        postprocess_exit: row.get::<_, Option<i64>>(27)?.map(|value| value as i32),
+        postprocess_message: row.get(28)?,
     })
+}
+
+/// Whether `table` already has `column`, so a migration step that also exists in
+/// `schema.sql` can run without a duplicate-column error.
+fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    let mut statement = conn.prepare(&format!(
+        "SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = ?1"
+    ))?;
+    let count: i64 = statement.query_row(params![column], |row| row.get(0))?;
+    Ok(count > 0)
 }
 
 fn set_mode(path: &Path, mode: u32) -> std::io::Result<()> {

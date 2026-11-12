@@ -67,10 +67,12 @@ pub const DEFAULT_CAPTURE_LIMIT: usize = 8 * 1024;
 /// Characters kept from the recorded message.
 pub const MESSAGE_LIMIT: usize = 512;
 
+/// Label used in the recorded messages of the post-processing hook.
+const HOOK_LABEL: &str = "hook";
+
 /// Longest sleep between two exit polls, so a hook that ends instantly is noticed fast and
 /// a hook that runs for the whole timeout does not burn the CPU.
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
-
 /// How long the reader threads get to hand over what they captured once the child is gone.
 const CAPTURE_GRACE: Duration = Duration::from_millis(250);
 
@@ -165,8 +167,14 @@ impl HookOutcome {
         }
     }
 
-    fn new(exit: HookExit, stdout: String, stderr: String, timeout: Duration) -> HookOutcome {
-        let message = summarize(&exit, &stdout, &stderr, timeout);
+    fn new(
+        label: &str,
+        exit: HookExit,
+        stdout: String,
+        stderr: String,
+        timeout: Duration,
+    ) -> HookOutcome {
+        let message = summarize(label, &exit, &stdout, &stderr, timeout);
         HookOutcome {
             exit,
             message,
@@ -281,26 +289,43 @@ pub fn run(command: &[String], target: &HookTarget, options: &HookOptions) -> Ho
 
 fn execute(command: &[String], target: &HookTarget, options: &HookOptions) -> HookOutcome {
     let argv = build_argv(command, target);
+    run_process(&argv, options.timeout, options.capture_limit, HOOK_LABEL)
+}
+
+/// Run one argv vector with no shell, a deadline and bounded capture.
+///
+/// Shared by the post-processing hook and the antivirus scan: both execute a binary the
+/// user does not control the contents of, so both get the same guarantees — argument
+/// boundaries preserved, no `sh -c`, `stdin` closed, kill on timeout and a bounded record
+/// of the output.
+fn run_process(
+    argv: &[String],
+    timeout: Duration,
+    capture_limit: usize,
+    label: &str,
+) -> HookOutcome {
     let Some(binary) = argv.first() else {
         return HookOutcome::new(
+            label,
             HookExit::Spawn {
                 binary: String::new(),
                 error: "empty command".to_string(),
             },
             String::new(),
             String::new(),
-            options.timeout,
+            timeout,
         );
     };
     if binary.is_empty() {
         return HookOutcome::new(
+            label,
             HookExit::Spawn {
                 binary: String::new(),
                 error: "empty arguments[0]".to_string(),
             },
             String::new(),
             String::new(),
-            options.timeout,
+            timeout,
         );
     }
     let mut child = match Command::new(binary)
@@ -313,23 +338,24 @@ fn execute(command: &[String], target: &HookTarget, options: &HookOptions) -> Ho
         Ok(child) => child,
         Err(err) => {
             return HookOutcome::new(
+                label,
                 HookExit::Spawn {
                     binary: binary.clone(),
                     error: err.to_string(),
                 },
                 String::new(),
                 String::new(),
-                options.timeout,
+                timeout,
             )
         }
     };
 
     let stdout_pipe = child.stdout.take();
     let stderr_pipe = child.stderr.take();
-    let stdout_rx = stdout_pipe.map(|pipe| capture(pipe, options.capture_limit));
-    let stderr_rx = stderr_pipe.map(|pipe| capture(pipe, options.capture_limit));
+    let stdout_rx = stdout_pipe.map(|pipe| capture(pipe, capture_limit));
+    let stderr_rx = stderr_pipe.map(|pipe| capture(pipe, capture_limit));
 
-    let deadline = Instant::now() + options.timeout;
+    let deadline = Instant::now() + timeout;
     let exit = loop {
         match child.try_wait() {
             Ok(Some(status)) => break exit_of(&status),
@@ -340,7 +366,7 @@ fn execute(command: &[String], target: &HookTarget, options: &HookOptions) -> Ho
                 let _ = child.wait();
                 break HookExit::Spawn {
                     binary: binary.clone(),
-                    error: format!("cannot wait for the hook: {err}"),
+                    error: format!("cannot wait for {label}: {err}"),
                 };
             }
         }
@@ -355,7 +381,7 @@ fn execute(command: &[String], target: &HookTarget, options: &HookOptions) -> Ho
 
     let stdout = stdout_rx.map(drain).unwrap_or_default();
     let stderr = stderr_rx.map(drain).unwrap_or_default();
-    HookOutcome::new(exit, stdout, stderr, options.timeout)
+    HookOutcome::new(label, exit, stdout, stderr, timeout)
 }
 
 fn exit_of(status: &std::process::ExitStatus) -> HookExit {
@@ -400,17 +426,23 @@ fn drain(rx: Receiver<Vec<u8>>) -> String {
     }
 }
 
-fn summarize(exit: &HookExit, stdout: &str, stderr: &str, timeout: Duration) -> String {
+fn summarize(
+    label: &str,
+    exit: &HookExit,
+    stdout: &str,
+    stderr: &str,
+    timeout: Duration,
+) -> String {
     let head = match exit {
-        HookExit::Code(0) => "hook exited with code 0".to_string(),
-        HookExit::Code(code) => format!("hook exited with code {code}"),
-        HookExit::Signal(signal) => format!("hook was killed by signal {signal}"),
+        HookExit::Code(0) => format!("{label} exited with code 0"),
+        HookExit::Code(code) => format!("{label} exited with code {code}"),
+        HookExit::Signal(signal) => format!("{label} was killed by signal {signal}"),
         HookExit::Timeout => format!(
-            "hook exceeded its timeout of {:.1}s and was killed",
+            "{label} exceeded its timeout of {:.1}s and was killed",
             timeout.as_secs_f64()
         ),
         HookExit::Spawn { binary, error } => {
-            format!("cannot run hook `{binary}`: {error}")
+            format!("cannot run {label} `{binary}`: {error}")
         }
     };
     match last_line(stderr).or_else(|| last_line(stdout)) {
@@ -435,4 +467,261 @@ fn truncate(text: &str, limit: usize) -> String {
     let mut cut: String = text.chars().take(limit.saturating_sub(1)).collect();
     cut.push('…');
     cut
+}
+
+// ---------------------------------------------------------------------------
+// Antivirus (OpenSpec 12 §5)
+// ---------------------------------------------------------------------------
+
+/// `ERR_ANTIVIRUS_FOUND`: the scan found an infection and the file is in quarantine.
+pub const ERR_ANTIVIRUS_FOUND: i64 = 1046;
+
+/// `ERR_ANTIVIRUS_UNAVAILABLE`: antivirus is enabled and no scan could produce a verdict.
+///
+/// This covers both documented causes: neither `clamdscan` nor `clamscan` is usable, and a
+/// scan that timed out or failed without reporting an infection. Declaring such a file
+/// `completed` would tell the user it was checked when it was not (OpenSpec 11 §decisiones).
+pub const ERR_ANTIVIRUS_UNAVAILABLE: i64 = 1047;
+
+/// Name of [`ERR_ANTIVIRUS_FOUND`], prefixed to the recorded message.
+pub const ERR_ANTIVIRUS_FOUND_NAME: &str = "ERR_ANTIVIRUS_FOUND";
+
+/// Name of [`ERR_ANTIVIRUS_UNAVAILABLE`], prefixed to the recorded message.
+pub const ERR_ANTIVIRUS_UNAVAILABLE_NAME: &str = "ERR_ANTIVIRUS_UNAVAILABLE";
+
+/// Environment override of the engine search path.
+///
+/// The same idea as `SEGMENTA_YT_DLP` in `media`: the tests point it at a tempdir with fake
+/// engines, so no test needs the real ClamAV, no test inherits one from the host and no
+/// test rewrites the process `PATH`.
+pub const ANTIVIRUS_PATH_ENV: &str = "SEGMENTA_ANTIVIRUS_PATH";
+
+/// Exit code ClamAV uses for "infected file found".
+pub const INFECTION_EXIT_CODE: i32 = 1;
+
+/// Label used in the recorded messages of a scan.
+const SCANNER_LABEL: &str = "antivirus scanner";
+
+/// Which ClamAV front end the daemon will run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanEngine {
+    /// `clamdscan`: talks to a running `clamd` over its socket. Preferred.
+    Clamdscan,
+    /// `clamscan`: standalone scanner. The alternative when there is no daemon.
+    Clamscan,
+}
+
+impl ScanEngine {
+    /// Binary name of the engine.
+    pub fn name(self) -> &'static str {
+        match self {
+            ScanEngine::Clamdscan => "clamdscan",
+            ScanEngine::Clamscan => "clamscan",
+        }
+    }
+}
+
+/// A usable engine: which one it is and where it lives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Engine {
+    /// The front end that will be executed.
+    pub kind: ScanEngine,
+    /// Absolute path of its binary.
+    pub binary: PathBuf,
+}
+
+/// What one scan of one file means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScanVerdict {
+    /// The scanner produced a verdict and the file is clean.
+    Clean,
+    /// The scanner reported an infection: the file must be quarantined.
+    Infected,
+    /// The scanner ran but produced no verdict (timeout, error exit, crash).
+    Failed,
+    /// Antivirus is enabled and there is no usable engine.
+    Unavailable,
+}
+
+/// Everything one scan leaves behind.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanReport {
+    /// Engine that ran, `None` when none was available.
+    pub engine: Option<Engine>,
+    /// Exit code of the scanner; `None` when it timed out, was killed or never started.
+    pub exit_code: Option<i32>,
+    /// Bounded, human-readable record; prefixed with the `ERR_ANTIVIRUS_*` name.
+    pub message: String,
+    /// Bounded captured output, kept for diagnostics.
+    pub output: String,
+}
+
+impl ScanReport {
+    /// What the daemon must do with the file.
+    pub fn verdict(&self) -> ScanVerdict {
+        match (self.engine.is_some(), self.exit_code) {
+            (false, _) => ScanVerdict::Unavailable,
+            (true, Some(0)) => ScanVerdict::Clean,
+            (true, Some(INFECTION_EXIT_CODE)) => ScanVerdict::Infected,
+            (true, _) => ScanVerdict::Failed,
+        }
+    }
+}
+
+/// Bounds of one scan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanOptions {
+    /// Deadline of the whole process.
+    pub timeout: Duration,
+    /// Bytes kept from each stream.
+    pub capture_limit: usize,
+}
+
+impl Default for ScanOptions {
+    fn default() -> ScanOptions {
+        ScanOptions {
+            timeout: Duration::from_secs(crate::store::DEFAULT_ANTIVIRUS_TIMEOUT_SECS),
+            capture_limit: DEFAULT_CAPTURE_LIMIT,
+        }
+    }
+}
+
+/// Directories searched for an engine.
+///
+/// [`ANTIVIRUS_PATH_ENV`] when it is set and non-empty, `PATH` otherwise. Same shape as
+/// `media::locate_tool`, which is what lets the tests use a fake engine.
+pub fn engine_search_path() -> Vec<PathBuf> {
+    let raw = match std::env::var_os(ANTIVIRUS_PATH_ENV) {
+        Some(value) if !value.is_empty() => value,
+        _ => std::env::var_os("PATH").unwrap_or_default(),
+    };
+    std::env::split_paths(&raw).collect()
+}
+
+/// Detect the engine in `dirs`: `clamdscan` first, `clamscan` after (OpenSpec 12 §5).
+pub fn detect_engine_in(dirs: &[PathBuf]) -> Option<Engine> {
+    for kind in [ScanEngine::Clamdscan, ScanEngine::Clamscan] {
+        for dir in dirs {
+            let binary = dir.join(kind.name());
+            if is_executable(&binary) {
+                return Some(Engine { kind, binary });
+            }
+        }
+    }
+    None
+}
+
+/// Detect the engine on this machine.
+pub fn detect_engine() -> Option<Engine> {
+    detect_engine_in(&engine_search_path())
+}
+
+/// Scan `file` with the engine detected now.
+pub fn scan(file: &Path, options: &ScanOptions) -> ScanReport {
+    scan_with(detect_engine(), file, options)
+}
+
+/// Scan `file` with a caller-chosen engine, `None` meaning "no engine available".
+///
+/// The scanner is invoked as `[binary, "--no-summary", file]`: an argv vector, never a
+/// string a shell could re-parse, with the same deadline and bounded capture as the hook.
+/// Exit code 0 is clean and 1 is an infection; every other ending — other code, signal,
+/// timeout, spawn failure — is [`ScanVerdict::Failed`] and never deletes anything.
+pub fn scan_with(engine: Option<Engine>, file: &Path, options: &ScanOptions) -> ScanReport {
+    let Some(engine) = engine else {
+        return ScanReport {
+            engine: None,
+            exit_code: None,
+            message: truncate(
+                &format!(
+                    "{ERR_ANTIVIRUS_UNAVAILABLE_NAME}: neither clamdscan nor clamscan is available"
+                ),
+                MESSAGE_LIMIT,
+            ),
+            output: String::new(),
+        };
+    };
+    let argv = vec![
+        engine.binary.to_string_lossy().into_owned(),
+        "--no-summary".to_string(),
+        file.to_string_lossy().into_owned(),
+    ];
+    let outcome = run_process(&argv, options.timeout, options.capture_limit, SCANNER_LABEL);
+    let exit_code = outcome.exit.code();
+    let detail = last_line(&outcome.stdout)
+        .or_else(|| last_line(&outcome.stderr))
+        .unwrap_or_else(|| outcome.message.clone());
+    let message = match exit_code {
+        Some(0) => format!("{} found no infection", engine.kind.name()),
+        Some(INFECTION_EXIT_CODE) => format!("{ERR_ANTIVIRUS_FOUND_NAME}: {detail}"),
+        _ => format!("{ERR_ANTIVIRUS_UNAVAILABLE_NAME}: {}", outcome.message),
+    };
+    ScanReport {
+        engine: Some(engine),
+        exit_code,
+        message: truncate(&message, MESSAGE_LIMIT),
+        output: outcome.stderr,
+    }
+}
+
+/// Move an infected file into `dir`, keeping its name and never overwriting anything.
+///
+/// Same filesystem: one `rename`. Different filesystem: a copy that is verified by length
+/// and renamed into place before the original is removed, so a partial copy can never be
+/// mistaken for the quarantined file. The result is not executable and is only readable by
+/// its owner: a quarantined binary is evidence, not something to run.
+pub fn quarantine(file: &Path, dir: &Path) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(dir)?;
+    let _ = set_mode(dir, 0o700);
+    let name = file
+        .file_name()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "no file name"))?;
+    let mut target = dir.join(name);
+    let mut attempt = 1;
+    while target.exists() {
+        let mut candidate = name.to_os_string();
+        candidate.push(format!(".{attempt}"));
+        target = dir.join(candidate);
+        attempt += 1;
+    }
+    match std::fs::rename(file, &target) {
+        Ok(()) => {
+            let _ = set_mode(&target, 0o600);
+            Ok(target)
+        }
+        Err(err) if err.raw_os_error() == Some(libc::EXDEV) => {
+            let mut staging = target.as_os_str().to_os_string();
+            staging.push(".staging");
+            let staging = PathBuf::from(staging);
+            std::fs::copy(file, &staging)?;
+            let source_len = std::fs::metadata(file)?.len();
+            let copied_len = std::fs::metadata(&staging)?.len();
+            if source_len != copied_len {
+                let _ = std::fs::remove_file(&staging);
+                return Err(std::io::Error::other(format!(
+                    "quarantine copy is incomplete: {copied_len} of {source_len} bytes"
+                )));
+            }
+            std::fs::rename(&staging, &target)?;
+            std::fs::remove_file(file)?;
+            let _ = set_mode(&target, 0o600);
+            Ok(target)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    match std::fs::metadata(path) {
+        Ok(metadata) => metadata.is_file() && metadata.permissions().mode() & 0o111 != 0,
+        Err(_) => false,
+    }
+}
+
+fn set_mode(path: &Path, mode: u32) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut permissions = std::fs::metadata(path)?.permissions();
+    permissions.set_mode(mode);
+    std::fs::set_permissions(path, permissions)
 }
