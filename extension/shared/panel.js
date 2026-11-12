@@ -82,6 +82,16 @@
     '  background: #1f3327; border: 1px solid #2f6b45; color: #d8ffe6; word-break: break-all;',
     '}',
     '.segmenta-toast[hidden] { display: none; }',
+    '.segmenta-sent { margin: 12px 0 0; }',
+    '.segmenta-sent[hidden] { display: none; }',
+    '.segmenta-sent-title { margin: 0 0 8px; font-weight: 700; font-size: 13px; color: #d8ffe6; }',
+    '.segmenta-sent-actions { display: flex; gap: 8px; }',
+    '.segmenta-sent-actions button {',
+    '  flex: 1 1 0; padding: 8px 10px; border: 1px solid #3584e4; border-radius: 9px;',
+    '  background: #26262c; color: #f6f6f6; cursor: pointer;',
+    '  font: 600 12px/1.2 system-ui, sans-serif;',
+    '}',
+    '.segmenta-sent-actions button:hover { background: #30303a; }',
   ].join('\n');
 
   function element(document, tag, className, text) {
@@ -239,6 +249,21 @@
     const toast = element(document, 'p', 'segmenta-toast', '');
     toast.hidden = true;
 
+    // Handoff state: after a successful add the card body becomes this block, so the
+    // format list never stays on screen (S9).
+    const sent = element(document, 'section', 'segmenta-sent', null);
+    sent.hidden = true;
+    const sentTitle = element(document, 'p', 'segmenta-sent-title', text(t, 'sentTitle'));
+    const sentActions = element(document, 'div', 'segmenta-sent-actions', null);
+    const openTaskButton = element(document, 'button', 'segmenta-open-task', text(t, 'openSegmenta'));
+    openTaskButton.type = 'button';
+    const openProgressButton = element(document, 'button', 'segmenta-open-progress', text(t, 'viewProgress'));
+    openProgressButton.type = 'button';
+    sentActions.appendChild(openTaskButton);
+    sentActions.appendChild(openProgressButton);
+    sent.appendChild(sentTitle);
+    sent.appendChild(sentActions);
+
     targets.appendChild(formatList);
     targets.appendChild(limitRow);
     targets.appendChild(hint);
@@ -248,13 +273,14 @@
     panel.appendChild(error);
     panel.appendChild(targets);
     panel.appendChild(startButton);
+    panel.appendChild(sent);
     panel.appendChild(progress);
     panel.appendChild(toast);
 
     root.appendChild(launcher);
     root.appendChild(panel);
 
-    const state = { options: [], selected: null, kind: 'video', count: 0 };
+    const state = { options: [], selected: null, kind: 'video', count: 0, taskId: '' };
 
     function clearFormats() {
       while (formatList.firstChild) {
@@ -304,6 +330,11 @@
       barFill.style.width = '0%';
       progressText.textContent = '';
       playlistText.hidden = true;
+      // A new probe brings the format list back and forgets the previous handoff.
+      state.taskId = '';
+      sent.hidden = true;
+      targets.hidden = false;
+      startButton.hidden = false;
 
       if (!formats || typeof formats !== 'object') {
         loading.hidden = false;
@@ -316,34 +347,37 @@
       startButton.disabled = false;
       mediaTitle.textContent = sanitize(formats.title, 160);
 
-      const videoFormats = Array.isArray(formats.formats) ? formats.formats : [];
-      const audioFormats = Array.isArray(formats.audio) ? formats.audio : [];
       const playlist = formats.playlist && typeof formats.playlist === 'object' ? formats.playlist : null;
       const count = playlist && Number.isFinite(Number(playlist.count)) ? Math.floor(Number(playlist.count)) : 0;
       state.count = count;
 
-      let defaults = null;
-      for (const entry of videoFormats) {
-        const height = Number(entry && entry.height);
-        const label = sanitize(entry && entry.label, 60) || (Number.isFinite(height) && height > 0 ? height + 'p' : '');
-        if (!label) {
-          continue;
-        }
-        const formatId = sanitize(entry && entry.format_id, 64);
-        const id = 'format:' + (formatId || label);
-        addOption({ id, label, mode: 'video', formatId: formatId || undefined, height: Number.isFinite(height) && height > 0 ? height : undefined });
-        if (!defaults && Number.isFinite(height) && height >= 720) {
-          defaults = id;
-        }
+      // Only the grouped ladder is rendered: deduped by height, capped to
+      // 4K/1080p/720p/360p plus audio. No endless raw list (S9).
+      const groups = PROTOCOL && typeof PROTOCOL.groupQualities === 'function'
+        ? PROTOCOL.groupQualities(formats)
+        : [];
+      for (const group of groups) {
+        const isAudio = group.mode === 'audio';
+        addOption({
+          id: 'quality:' + group.quality,
+          label: isAudio ? text(t, 'audioOnly') || group.label : group.label,
+          mode: group.mode,
+          height: isAudio ? undefined : group.height || undefined,
+          // Video selection is by height only; the audio mode keeps its format id.
+          formatId: isAudio ? group.formatId || undefined : undefined,
+        });
       }
 
-      const audioEntry = audioFormats[0] || null;
-      addOption({
-        id: 'audio',
-        label: text(t, 'audioOnly'),
-        mode: 'audio',
-        formatId: audioEntry ? sanitize(audioEntry.format_id, 64) || undefined : undefined,
-      });
+      const audioEntry = Array.isArray(formats.audio) ? formats.audio[0] || null : null;
+      if (!groups || !groups.length) {
+        // Nothing grouped: keep the audio-only target reachable on its own.
+        addOption({
+          id: 'audio',
+          label: text(t, 'audioOnly'),
+          mode: 'audio',
+          formatId: audioEntry ? sanitize(audioEntry.format_id, 64) || undefined : undefined,
+        });
+      }
 
       if (playlist && count > 0) {
         addOption({
@@ -366,7 +400,11 @@
       }
 
       const fallback = state.options.find((option) => option.mode === 'video' && !option.url);
-      select(defaults || (fallback ? fallback.id : state.options[0].id));
+      const preferred = PROTOCOL && typeof PROTOCOL.defaultQuality === 'function'
+        ? 'quality:' + PROTOCOL.defaultQuality(groups)
+        : '';
+      const preferredOption = preferred ? state.options.find((option) => option.id === preferred) : null;
+      select(preferredOption ? preferredOption.id : fallback ? fallback.id : state.options[0].id);
     }
 
     function buildRequest() {
@@ -454,6 +492,41 @@
       startButton.disabled = false;
     }
 
+    function requestOpenTask() {
+      const taskId = typeof state.taskId === 'string' ? state.taskId : '';
+      if (!taskId || typeof config.onOpenTask !== 'function') {
+        return;
+      }
+      config.onOpenTask(taskId);
+    }
+
+    /**
+     * Replaces the card body with the "sent to Segmenta" state: the download already
+     * exists, so the format list is cleared and only the two task actions remain.
+     */
+    function showSent(taskId) {
+      const id = sanitize(taskId, 64);
+      if (!id) {
+        return;
+      }
+      state.taskId = id;
+      loading.hidden = true;
+      error.hidden = true;
+      error.textContent = '';
+      clearFormats();
+      limitRow.hidden = true;
+      targets.hidden = true;
+      startButton.hidden = true;
+      sentTitle.textContent = text(t, 'sentTitle');
+      openTaskButton.textContent = text(t, 'openSegmenta');
+      openProgressButton.textContent = text(t, 'viewProgress');
+      sent.hidden = false;
+      progress.hidden = false;
+    }
+
+    openTaskButton.addEventListener('click', requestOpenTask);
+    openProgressButton.addEventListener('click', requestOpenTask);
+
     function open(formats) {
       panel.hidden = false;
       renderFormats(formats);
@@ -500,6 +573,7 @@
       open: open,
       setProgress: updateProgress,
       setError: showError,
+      setSent: showSent,
       close: close,
       isOpen: () => panel.hidden === false,
     };

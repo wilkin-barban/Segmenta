@@ -190,5 +190,14 @@
   "taskAddedBodyGeneric": {
     "message": "A tarefa foi aberta no Segmenta.",
     "description": "Corpo da notificação quando o host não informa a pasta."
+  },
+  "sentTitle": {
+    "message": "Enviado ao Segmenta"
+  },
+  "openSegmenta": {
+    "message": "Abrir Segmenta"
+  },
+  "viewProgress": {
+    "message": "Ver progresso"
   }
 }

@@ -169,8 +169,30 @@
       panel.setError(t('errorGeneric'));
       return;
     }
+    // The task exists: swap the card body for the handoff state, then follow it.
+    panel.setSent(data.task_id);
     stopPolling();
     pollStatus(data.task_id, 0);
+  }
+
+  /**
+   * Brings Segmenta forward focused on an existing task. The background turns this
+   * into a single `system.open` call, so the task is never added twice (S9).
+   */
+  async function onOpenTask(taskId) {
+    if (typeof taskId !== 'string' || !taskId) {
+      return;
+    }
+    let reply;
+    try {
+      reply = await API.sendMessage({ type: 'segmenta.open', taskId: taskId });
+    } catch (err) {
+      panel.setError(t('errorHostUnavailable'));
+      return;
+    }
+    if (!reply || reply.ok !== true) {
+      panel.setError(translateError(reply && reply.error));
+    }
   }
 
   function startSniffer() {
@@ -205,6 +227,7 @@
       t: t,
       onProbe: onProbe,
       onStart: onStart,
+      onOpenTask: onOpenTask,
       onClose: stopPolling,
     });
   }

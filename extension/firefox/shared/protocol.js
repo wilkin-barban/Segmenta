@@ -22,6 +22,10 @@
   const MAX_PLAYLIST_LIMIT = 500;
   const MAX_HEIGHT = 4320;
   const MAX_TEXT_LENGTH = 200;
+  // Grouped quality ladder (S9): the panel never renders the raw backend list.
+  const QUALITY_HEIGHTS = [2160, 1080, 720, 360];
+  const DEFAULT_QUALITY_HEIGHT = 720;
+  const AUDIO_QUALITY = 'audio';
   const STREAM_PATTERN = /\.(m3u8|mpd)$/i;
   const HOST_ERROR_CODES = {
     1040: 'ERR_DRM_PROTECTED',
@@ -243,6 +247,147 @@
     return floored;
   }
 
+  function heightOf(value) {
+    const numeric = typeof value === 'string' ? Number(value.trim()) : Number(value);
+    if (!Number.isFinite(numeric)) {
+      return null;
+    }
+    const floored = Math.floor(numeric);
+    return floored > 0 ? floored : null;
+  }
+
+  function qualityLabel(height) {
+    return height === 2160 ? '4K' : height + 'p';
+  }
+
+  /**
+   * Dedupes the probe formats by height and returns only the documented ladder:
+   * 2160, 1080, 720, 360 and one audio-only entry, in that order. Heights outside
+   * the ladder (480, 240, ...) are dropped, so the panel can never render an
+   * endless raw list. Accepts a probe result or a raw format array, and is pure:
+   * no DOM, no browser APIs.
+   */
+  function groupQualities(formats) {
+    const source = formats && typeof formats === 'object' && !Array.isArray(formats) ? formats : null;
+    const video = Array.isArray(formats)
+      ? formats
+      : source && Array.isArray(source.formats)
+        ? source.formats
+        : [];
+    const audio = source && Array.isArray(source.audio) ? source.audio : [];
+    const ladder = source && Array.isArray(source.qualities) ? source.qualities : [];
+
+    const kept = {};
+    function keep(height, formatId) {
+      if (Object.prototype.hasOwnProperty.call(kept, height)) {
+        return;
+      }
+      kept[height] = {
+        quality: String(height),
+        label: qualityLabel(height),
+        mode: 'video',
+        height: height,
+        formatId: sanitizeText(formatId, 64),
+      };
+    }
+    // The daemon ladder already carries the chosen candidate per height; the raw
+    // list fills the gaps (streams, older hosts) and is ordered best first.
+    for (const entry of ladder) {
+      if (!entry || typeof entry !== 'object') {
+        continue;
+      }
+      const height = heightOf(entry.height);
+      if (height === null) {
+        continue;
+      }
+      keep(height, entry.format_id);
+    }
+    for (const entry of video) {
+      if (!entry || typeof entry !== 'object') {
+        continue;
+      }
+      const height = heightOf(entry.height);
+      if (height === null) {
+        continue;
+      }
+      keep(height, entry.format_id);
+    }
+
+    const grouped = [];
+    for (const height of QUALITY_HEIGHTS) {
+      if (Object.prototype.hasOwnProperty.call(kept, height)) {
+        grouped.push(kept[height]);
+      }
+    }
+
+    let audioFormatId = '';
+    let hasAudio = false;
+    for (const entry of audio) {
+      if (!entry || typeof entry !== 'object') {
+        continue;
+      }
+      hasAudio = true;
+      audioFormatId = sanitizeText(entry.format_id, 64);
+      break;
+    }
+    if (!hasAudio) {
+      for (const entry of ladder) {
+        if (entry && typeof entry === 'object' && String(entry.quality) === AUDIO_QUALITY) {
+          hasAudio = true;
+          audioFormatId = sanitizeText(entry.format_id, 64);
+          break;
+        }
+      }
+    }
+    if (hasAudio) {
+      grouped.push({
+        quality: AUDIO_QUALITY,
+        label: AUDIO_QUALITY,
+        mode: 'audio',
+        height: null,
+        formatId: audioFormatId,
+      });
+    }
+    return grouped;
+  }
+
+  /**
+   * Preselected quality: 720 whenever it is in the ladder, else the closest
+   * available height (ties resolve to the higher quality), else 'audio'.
+   */
+  function defaultQuality(qualities) {
+    const list = Array.isArray(qualities) ? qualities : [];
+    let closestDistance = null;
+    let closestTag = '';
+    for (const entry of list) {
+      if (!entry || typeof entry !== 'object') {
+        continue;
+      }
+      const height = heightOf(entry.height);
+      if (height === null) {
+        continue;
+      }
+      const tag = typeof entry.quality === 'string' && entry.quality ? entry.quality : String(height);
+      if (height === DEFAULT_QUALITY_HEIGHT) {
+        return tag;
+      }
+      const distance = Math.abs(height - DEFAULT_QUALITY_HEIGHT);
+      if (closestDistance === null || distance < closestDistance) {
+        closestDistance = distance;
+        closestTag = tag;
+      }
+    }
+    if (closestDistance !== null) {
+      return closestTag;
+    }
+    for (const entry of list) {
+      if (entry && typeof entry === 'object' && String(entry.quality) === AUDIO_QUALITY) {
+        return AUDIO_QUALITY;
+      }
+    }
+    return '';
+  }
+
   function envelope(method, params, id) {
     const numericId = typeof id === 'number' && Number.isFinite(id) ? id : nextId();
     return { jsonrpc: '2.0', id: numericId, method: method, params: params };
@@ -443,6 +588,8 @@
     MAX_PLAYLIST_LIMIT: MAX_PLAYLIST_LIMIT,
     PROBE_KINDS: PROBE_KINDS.slice(),
     ADD_MODES: ADD_MODES.slice(),
+    QUALITY_HEIGHTS: QUALITY_HEIGHTS.slice(),
+    DEFAULT_QUALITY_HEIGHT: DEFAULT_QUALITY_HEIGHT,
     HOST_ERROR_CODES: Object.assign({}, HOST_ERROR_CODES),
     ProtocolError: ProtocolError,
     nextId: nextId,
@@ -453,6 +600,9 @@
     playlistUrlFrom: playlistUrlFrom,
     clampPlaylistLimit: clampPlaylistLimit,
     clampHeight: clampHeight,
+    qualityLabel: qualityLabel,
+    groupQualities: groupQualities,
+    defaultQuality: defaultQuality,
     parseHttpUrl: parseHttpUrl,
     parseTorrentUrl: parseTorrentUrl,
     buildProbe: buildProbe,
