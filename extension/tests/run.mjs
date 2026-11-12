@@ -16,6 +16,7 @@ const SUITES = [
   './pack.test.mjs',
   './capture.test.mjs',
   './confirm.test.mjs',
+  './watchdog.test.mjs',
 ];
 
 const failures = [];

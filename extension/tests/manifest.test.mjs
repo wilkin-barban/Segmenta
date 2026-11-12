@@ -24,6 +24,7 @@ export default function suite({ test }) {
     assert.equal(manifest.key.length > 100, true);
     assert.deepEqual(manifest.permissions.slice().sort(), [
       'activeTab',
+      'alarms',
       'contextMenus',
       'downloads',
       'nativeMessaging',

@@ -20,7 +20,10 @@ function setupFakeBrowser(settings, nativeReplies = {}, options = {}) {
   const statusReplies = Array.isArray(options.statusReplies) ? options.statusReplies.slice() : [];
   let statusCalls = 0;
   // Keep in step with SegmentaBackground.SETTINGS_CACHE_VERSION (asserted below).
-  const storageData = { segmenta_settings: settings, segmenta_settings_version: '0.1.2' };
+  const storageData = { segmenta_settings: settings, segmenta_settings_version: '0.1.3' };
+  // The capture watchdog: every pause is preceded by an alarm this fake records.
+  const alarms = { created: [], cleared: [], active: new Set() };
+  const openWindows = new Set();
   let nextTaskId = 0;
 
   function statusReply(taskId) {
@@ -99,6 +102,21 @@ function setupFakeBrowser(settings, nativeReplies = {}, options = {}) {
         },
       },
     },
+    alarms: {
+      onAlarm: { listeners: [], addListener(fn) { this.listeners.push(fn); } },
+      create(name, info, cb) {
+        alarms.created.push({ name: name, info: info });
+        alarms.active.add(name);
+        if (cb) cb();
+        return undefined;
+      },
+      clear(name, cb) {
+        alarms.cleared.push(name);
+        alarms.active.delete(name);
+        if (cb) cb(true);
+        return undefined;
+      },
+    },
     downloads: {
       onCreated: {
         listeners: [],
@@ -133,10 +151,25 @@ function setupFakeBrowser(settings, nativeReplies = {}, options = {}) {
           // A browser that accepts the call and never answers.
           return new Promise(() => {});
         }
+        openWindows.add(900);
         if (cb) cb({ id: 900 });
         return undefined;
       },
+      get(id, cb) {
+        if (openWindows.has(id)) {
+          if (cb) cb({ id: id });
+          return undefined;
+        }
+        globalThis.chrome.runtime.lastError = { message: 'No window with id: ' + id };
+        try {
+          if (cb) cb(undefined);
+        } finally {
+          globalThis.chrome.runtime.lastError = undefined;
+        }
+        return undefined;
+      },
       remove(id, cb) {
+        openWindows.delete(id);
         events.push('window:remove:' + id);
         if (cb) cb();
       },
@@ -151,7 +184,7 @@ function setupFakeBrowser(settings, nativeReplies = {}, options = {}) {
     globalThis.chrome.notifications = notificationsApi;
   }
 
-  return { canceled, erased, nativeCalls, notifications, events, storageData, statusCalls: () => statusCalls };
+  return { canceled, erased, nativeCalls, notifications, events, storageData, alarms, statusCalls: () => statusCalls };
 }
 
 function statusEventIndices(events) {
@@ -624,7 +657,7 @@ export default function suite({ test }) {
     await loadShared('SegmentaValidate', 'validate.js');
     await import(new URL('../chromium/background.js', import.meta.url).href);
 
-    assert.equal(globalThis.SegmentaBackground.SETTINGS_CACHE_VERSION, '0.1.2');
+    assert.equal(globalThis.SegmentaBackground.SETTINGS_CACHE_VERSION, '0.1.3');
   });
 
   test('background open: a failing host error is reported and nothing is announced', async () => {

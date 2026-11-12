@@ -8,7 +8,7 @@ const EXTENSION_ID = 'abcdefghijklmnopabcdefghijklmnop';
 const ZIP_URL = 'https://downloads.example.org/tools/archive.zip';
 // Kept in sync with the background cache constant; the background test below
 // fails loudly when the two drift.
-const CACHE_VERSION = '0.1.2';
+const CACHE_VERSION = '0.1.3';
 const SENDER = {
   id: EXTENSION_ID,
   url: `chrome-extension://${EXTENSION_ID}/confirm.html`,
@@ -38,6 +38,9 @@ function setupFakeBrowser(settings, nativeReplies = {}, options = {}) {
     segmenta_settings: settings,
     segmenta_settings_version: typeof options.cacheVersion === 'string' ? options.cacheVersion : CACHE_VERSION,
   };
+  // The capture watchdog: every pause is preceded by an alarm this fake records.
+  const alarms = { created: [], cleared: [], active: new Set() };
+  const openWindows = new Set();
   let nextTaskId = 0;
 
   function statusReply(taskId) {
@@ -115,6 +118,21 @@ function setupFakeBrowser(settings, nativeReplies = {}, options = {}) {
         },
       },
     },
+    alarms: {
+      onAlarm: { listeners: [], addListener(fn) { this.listeners.push(fn); } },
+      create(name, info, cb) {
+        alarms.created.push({ name: name, info: info });
+        alarms.active.add(name);
+        if (cb) cb();
+        return undefined;
+      },
+      clear(name, cb) {
+        alarms.cleared.push(name);
+        alarms.active.delete(name);
+        if (cb) cb(true);
+        return undefined;
+      },
+    },
     downloads: {
       onCreated: {
         listeners: [],
@@ -156,11 +174,26 @@ function setupFakeBrowser(settings, nativeReplies = {}, options = {}) {
         windowSequence += 1;
         const id = windowSequence;
         createdWindows.push({ id: id, url: data && data.url });
+        openWindows.add(id);
         if (cb) cb({ id: id });
+        return undefined;
+      },
+      get(id, cb) {
+        if (openWindows.has(id)) {
+          if (cb) cb({ id: id });
+          return undefined;
+        }
+        globalThis.chrome.runtime.lastError = { message: 'No window with id: ' + id };
+        try {
+          if (cb) cb(undefined);
+        } finally {
+          globalThis.chrome.runtime.lastError = undefined;
+        }
         return undefined;
       },
       remove(id, cb) {
         removedWindows.push(id);
+        openWindows.delete(id);
         events.push('window:remove:' + id);
         if (cb) cb();
       },
@@ -186,6 +219,7 @@ function setupFakeBrowser(settings, nativeReplies = {}, options = {}) {
     notifications,
     events,
     storageData,
+    alarms,
     statusCalls() {
       return statusCalls;
     },
