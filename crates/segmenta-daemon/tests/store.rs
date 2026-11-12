@@ -624,3 +624,108 @@ fn two_downloads_can_share_engine_segment_ids() {
     assert_eq!(store.segments("first").unwrap().len(), 2);
     assert_eq!(store.segments("second").unwrap().len(), 2);
 }
+
+/// The extension list the previous release stored as its own default.
+const PREVIOUS_DEFAULT_CAPTURE_EXTENSIONS: &[&str] = &[
+    "3gp", "7z", "aac", "ace", "aif", "apk", "arj", "asf", "avi", "bin", "bz2", "exe", "gz",
+    "gzip", "img", "iso", "lzh", "m4a", "m4v", "mkv", "mov", "mp3", "mp4", "mpa", "mpe", "mpeg",
+    "mpg", "msi", "msu", "ogg", "ogv", "pdf", "plj", "pps", "ppt", "qt", "r0*", "r1*", "ra", "rar",
+    "rm", "rmvb", "sea", "sit", "sitx", "tar", "tif", "tiff", "wav", "wma", "wmv", "z", "zip",
+    "pkg",
+];
+
+fn write_raw_setting(path: &std::path::Path, key: &str, value: serde_json::Value) {
+    let conn = rusqlite::Connection::open(path).unwrap();
+    conn.execute(
+        "INSERT INTO settings (key, value_json) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json",
+        rusqlite::params![key, value.to_string()],
+    )
+    .unwrap();
+}
+
+/// S11: a settings row written before `capture_confirm` existed still loads, keeps its
+/// values and gains the new default plus the widened extension list.
+#[test]
+fn a_settings_row_written_before_the_new_keys_still_loads() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("segmenta.db");
+    {
+        let store = Store::open(&path).unwrap();
+        store
+            .update_settings(
+                json!({ "max_connections": 8, "download_dir": "/mnt/descargas", "capture_enabled": false })
+                    .as_object()
+                    .unwrap(),
+            )
+            .unwrap();
+    }
+    // The exact rows 0.1.1 wrote: its default token list and no `capture_confirm` row.
+    write_raw_setting(
+        &path,
+        "capture_extensions",
+        json!(PREVIOUS_DEFAULT_CAPTURE_EXTENSIONS),
+    );
+
+    let store = Store::open(&path).unwrap();
+    let settings = store.settings().unwrap();
+    assert!(settings.capture_confirm, "the new key takes its default");
+    assert_eq!(
+        settings.capture_extensions,
+        Settings::default().capture_extensions,
+        "the old default list is upgraded in memory"
+    );
+    assert!(settings
+        .capture_extensions
+        .contains(&"appimage".to_string()));
+    // Stored values are preserved.
+    assert_eq!(settings.max_connections, 8);
+    assert_eq!(settings.download_dir, "/mnt/descargas");
+    assert!(!settings.capture_enabled);
+
+    // A list the user customized is never rewritten.
+    let other = tempfile::tempdir().unwrap();
+    let other_path = other.path().join("segmenta.db");
+    {
+        let store = Store::open(&other_path).unwrap();
+        store
+            .update_settings(
+                json!({ "capture_extensions": ["zip", "iso"] })
+                    .as_object()
+                    .unwrap(),
+            )
+            .unwrap();
+    }
+    let store = Store::open(&other_path).unwrap();
+    assert_eq!(
+        store.settings().unwrap().capture_extensions,
+        vec!["zip".to_string(), "iso".to_string()]
+    );
+}
+
+/// S11: the catalog defaults carry `capture_confirm` next to the other capture keys.
+#[test]
+fn capture_confirm_defaults_to_true_in_the_catalog() {
+    let (_dir, store) = open_temp();
+    let settings = store.settings().unwrap();
+    assert!(settings.capture_confirm);
+    for token in [
+        "deb", "rpm", "appimage", "xz", "whl", "jar", "epub", "vsix", "xpi", "msix",
+    ] {
+        assert!(
+            settings.capture_extensions.contains(&token.to_string()),
+            "missing {token}"
+        );
+    }
+}
+
+/// The daemon default and the shared capture list must stay the same tokens in the
+/// same order, or the UI would promise a format the daemon never captures.
+#[test]
+fn the_capture_default_is_the_shared_core_list() {
+    let expected: Vec<String> = segmenta_core::rules::CAPTURE_EXTENSIONS
+        .iter()
+        .map(|token| token.to_string())
+        .collect();
+    assert_eq!(Settings::default().capture_extensions, expected);
+}

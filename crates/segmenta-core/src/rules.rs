@@ -1,14 +1,16 @@
 //! Pure browser-capture rules (0.1.1): extensions, wildcards and denylist.
 
-/// Extensions the extension captures by default (approved 0.1.1 list).
+/// Extensions the extension captures by default (approved 0.1.2 list).
+///
+/// The daemon's `Settings::default` uses the same tokens and order; a daemon test
+/// asserts the parity so the two cannot drift apart silently.
 pub const CAPTURE_EXTENSIONS: &[&str] = &[
-    "3gp", "7z", "aac", "ace", "aif", "apk", "arj", "asf", "avi", "bin", "bz2", "exe", "gz",
-    "gzip", "img", "iso", "lzh", "m4a", "m4v", "mkv", "mov", "mp3", "mp4", "mpa", "mpe", "mpeg",
-    "mpg", "msi", "msu", "ogg", "ogv", "pdf", "plj", "pps", "ppt", "qt", "r0*", "r1*", "ra", "rar",
-    "rm", "rmvb", "sea", "sit", "sitx", "tar", "tif", "tiff", "wav", "wma", "wmv", "z", "zip",
-    "pkg",
+    "3gp", "7z", "aac", "ace", "aif", "apk", "appimage", "arj", "asf", "avi", "bin", "bz2", "deb",
+    "epub", "exe", "gz", "gzip", "img", "iso", "jar", "lzh", "m4a", "m4v", "mkv", "mov", "mp3",
+    "mp4", "mpa", "mpe", "mpeg", "mpg", "msi", "msix", "msu", "ogg", "ogv", "pdf", "plj", "pps",
+    "ppt", "qt", "r0*", "r1*", "ra", "rar", "rm", "rmvb", "rpm", "sea", "sit", "sitx", "tar",
+    "tif", "tiff", "vsix", "wav", "whl", "wma", "wmv", "xpi", "xz", "z", "zip", "pkg",
 ];
-
 /// Normalize one token: lower case, no leading dot, wildcard only at the end.
 pub fn normalize_extension(raw: &str) -> Option<String> {
     let token = raw.trim().trim_start_matches('.').to_ascii_lowercase();
