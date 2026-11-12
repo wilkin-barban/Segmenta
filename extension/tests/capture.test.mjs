@@ -438,4 +438,58 @@ export default function suite({ test }) {
       'system.open',
     ]);
   });
+
+  test('background open: a valid request only focuses the task (no add, no toast)', async () => {
+    const taskId = '123e4567-e89b-12d3-a456-426614174010';
+    const env = setupFakeBrowser({});
+    await loadShared('SegmentaApi', 'browser-api.js');
+    await loadShared('SegmentaProtocol', 'protocol.js');
+    await loadShared('SegmentaValidate', 'validate.js');
+    await import(new URL('../chromium/background.js', import.meta.url).href);
+    const bg = globalThis.SegmentaBackground;
+
+    const result = await bg.handle({ type: 'segmenta.open', taskId: taskId }, SENDER);
+
+    assert.equal(result.ok, true);
+    // One host call and nothing else: the task already exists.
+    assert.deepEqual(env.events, ['native:system.open']);
+    assert.equal(env.notifications.length, 0);
+    assert.deepEqual(env.nativeCalls.map((call) => call.message.method), ['system.open']);
+    assert.deepEqual(env.nativeCalls[0].message.params, { task_id: taskId });
+  });
+
+  test('background open: an invalid task id is rejected before touching the host', async () => {
+    const env = setupFakeBrowser({});
+    await loadShared('SegmentaApi', 'browser-api.js');
+    await loadShared('SegmentaProtocol', 'protocol.js');
+    await loadShared('SegmentaValidate', 'validate.js');
+    await import(new URL('../chromium/background.js', import.meta.url).href);
+    const bg = globalThis.SegmentaBackground;
+
+    for (const taskId of ['', '   ', 'a b', 'a;rm -rf /', 'short', null]) {
+      const result = await bg.handle({ type: 'segmenta.open', taskId: taskId }, SENDER);
+      assert.equal(result.ok, false, `should reject ${String(taskId)}`);
+      assert.equal(result.error.code, 'ERR_INVALID_PARAMS', `should reject ${String(taskId)}`);
+    }
+    assert.deepEqual(env.nativeCalls, []);
+    assert.deepEqual(env.events, []);
+    assert.equal(env.notifications.length, 0);
+  });
+
+  test('background open: a failing host error is reported and nothing is announced', async () => {
+    const env = setupFakeBrowser({}, {}, { failingMethods: ['system.open'] });
+    await loadShared('SegmentaApi', 'browser-api.js');
+    await loadShared('SegmentaProtocol', 'protocol.js');
+    await loadShared('SegmentaValidate', 'validate.js');
+    await import(new URL('../chromium/background.js', import.meta.url).href);
+    const bg = globalThis.SegmentaBackground;
+
+    const result = await bg.handle({ type: 'segmenta.open', taskId: 'task-123456' }, SENDER);
+
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, 'ERR_UNKNOWN');
+    assert.equal(result.error.host_code, -32601);
+    assert.deepEqual(env.events, ['native:system.open']);
+    assert.equal(env.notifications.length, 0);
+  });
 }

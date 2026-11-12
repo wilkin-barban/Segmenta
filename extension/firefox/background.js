@@ -461,6 +461,10 @@ if (typeof importScripts === 'function') {
         );
       case 'segmenta.status':
         return callHost(() => PROTOCOL.buildStatus({ taskId: value.taskId }));
+      // Focus an already existing task (S9): `callHost` only, never the announce
+      // path, so nothing is added again and no toast is shown.
+      case 'segmenta.open':
+        return callHost(() => PROTOCOL.buildSystemOpen({ taskId: value.taskId }));
       case 'segmenta.capture':
         return callHostAndAnnounce(() =>
           PROTOCOL.buildDownloadAdd({
