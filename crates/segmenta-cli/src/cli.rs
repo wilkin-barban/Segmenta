@@ -117,6 +117,11 @@ enum Command {
         #[command(subcommand)]
         action: TorrentAction,
     },
+    /// Manage browser extensions and manifests.
+    Extension {
+        #[command(subcommand)]
+        action: ExtensionAction,
+    },
     /// Ask the daemon for its protocol and version.
     Hello,
     /// Daemon diagnostics and lifecycle.
@@ -155,6 +160,24 @@ enum MediaAction {
         /// Playlist limit (1-500, default 100).
         #[arg(long)]
         limit: Option<u32>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ExtensionAction {
+    /// Show extension status across browsers.
+    Status,
+    /// Unzip and prepare browser extension.
+    Prepare {
+        #[arg(long, default_value = "all")]
+        family: String,
+    },
+    /// Install per-user native messaging manifests.
+    InstallNative,
+    /// Open browser extensions page.
+    Open {
+        #[arg(long)]
+        browser: String,
     },
 }
 
@@ -640,6 +663,40 @@ fn run(cli: Cli, locale: Locale) -> Result<String, ClientError> {
                     &serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string()),
                 );
                 out.push('\n');
+            }
+        },
+        Command::Extension { action } => match action {
+            ExtensionAction::Status => {
+                let result = client.call("extension.status", json!({}))?;
+                if json_out {
+                    out.push_str(&format!("{result}\n"));
+                } else {
+                    out.push_str(&render::render_extension_status(locale, &result));
+                }
+            }
+            ExtensionAction::Prepare { family } => {
+                let result = client.call("extension.prepare", json!({ "family": family }))?;
+                if json_out {
+                    out.push_str(&format!("{result}\n"));
+                } else {
+                    out.push_str(&render::render_extension_prepare(locale, &result));
+                }
+            }
+            ExtensionAction::InstallNative => {
+                let result = client.call("extension.install-native", json!({}))?;
+                if json_out {
+                    out.push_str(&format!("{result}\n"));
+                } else {
+                    out.push_str(&render::render_extension_install_native(locale, &result));
+                }
+            }
+            ExtensionAction::Open { browser } => {
+                let result = client.call("extension.open", json!({ "browser_id": browser }))?;
+                if json_out {
+                    out.push_str(&format!("{result}\n"));
+                } else {
+                    out.push_str(&render::render_extension_open(locale, &result));
+                }
             }
         },
         Command::Hello => {

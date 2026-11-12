@@ -293,10 +293,14 @@ pub fn present(
     let browser_dialog_poll = dialog.clone();
     let browser_open_poll = Rc::clone(&open);
     let browser_locale = locale();
+    let dialog_for_browser = dialog.clone();
+    let client_for_browser = Arc::clone(&client);
     gtk::glib::timeout_add_local(Duration::from_millis(150), move || {
         if !browser_open_poll.get() {
             return gtk::glib::ControlFlow::Break;
         }
+        let dialog = dialog_for_browser.clone();
+        let client = Arc::clone(&client_for_browser);
         for (_, result) in browser_poll.take() {
             match result {
                 Ok(value) => {
@@ -341,6 +345,63 @@ pub fn present(
                                         .build(),
                                 );
                             }
+
+                            let browser_id =
+                                browser.get("id").and_then(Value::as_str).unwrap_or("");
+                            let family =
+                                browser.get("family").and_then(Value::as_str).unwrap_or("");
+                            let prepared_path = browser
+                                .get("prepared_path")
+                                .and_then(Value::as_str)
+                                .map(str::to_string);
+
+                            let prep_btn =
+                                gtk::Button::with_label(tr(browser_locale, Msg::ExtensionPrepare));
+                            let prep_bus = browser_bus.clone();
+                            let prep_client = Arc::clone(&client);
+                            let fam_str = family.to_string();
+                            prep_btn.connect_clicked(move |_| {
+                                prep_bus.spawn(
+                                    &prep_client,
+                                    "extension.prepare",
+                                    json!({ "family": fam_str }),
+                                );
+                            });
+                            row.add_suffix(&prep_btn);
+
+                            let open_btn =
+                                gtk::Button::with_label(tr(browser_locale, Msg::ExtensionOpen));
+                            let open_bus = browser_bus.clone();
+                            let open_client = Arc::clone(&client);
+                            let bid_str = browser_id.to_string();
+                            open_btn.connect_clicked(move |_| {
+                                open_bus.spawn(
+                                    &open_client,
+                                    "extension.open",
+                                    json!({ "browser_id": bid_str }),
+                                );
+                            });
+                            row.add_suffix(&open_btn);
+
+                            if let Some(path) = prepared_path {
+                                let copy_btn = gtk::Button::with_label(tr(
+                                    browser_locale,
+                                    Msg::ExtensionCopyPath,
+                                ));
+                                let row_for_clipboard = row.clone();
+                                let toast_dialog = dialog.clone();
+                                let locale_for_toast = browser_locale;
+                                let p_clone = path.clone();
+                                copy_btn.connect_clicked(move |_| {
+                                    row_for_clipboard.clipboard().set_text(&p_clone);
+                                    toast_dialog.add_toast(adw::Toast::new(tr(
+                                        locale_for_toast,
+                                        Msg::ExtensionPathCopied,
+                                    )));
+                                });
+                                row.add_suffix(&copy_btn);
+                            }
+
                             browser_group_poll.add(&row);
                             dynamic_rows_poll.borrow_mut().push(row);
                         }
