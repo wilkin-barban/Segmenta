@@ -89,7 +89,8 @@ CREATE TABLE IF NOT EXISTS settings (
 CREATE TABLE IF NOT EXISTS site_logins (
     domain TEXT PRIMARY KEY,
     username TEXT NOT NULL,
-    keyring_secret_id TEXT NOT NULL
+    keyring_secret_id TEXT NOT NULL,
+    origin TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS torrents (
