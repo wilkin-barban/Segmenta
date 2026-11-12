@@ -39,7 +39,7 @@ Release de integración con navegadores, captura de descargas y torrents.
 
 - 46 suites Rust, GUI bajo Xvfb, 76 tests de extensión, clippy `-D warnings` 0, `packaging/check-package.sh` 22/22.
 - QA en Ubuntu: captura `.zip` real, motor torrent real de Sintel, magnet/.torrent, hover, smoke GUI.
-- Limitaciones documentadas: cold-start del service worker, `torrent.probe` multiarchivo, `supports_ranges` y registro automático del handler según escritorio.
+- Limitaciones documentadas: cold-start del service worker, probe de `.torrent` multiarchivo y registro automático del handler del sistema según escritorio.
 
 ## Artefactos
 
