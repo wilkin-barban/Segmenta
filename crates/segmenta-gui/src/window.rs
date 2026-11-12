@@ -304,6 +304,7 @@ impl SegmentaWindow {
         let defaults = add_dialog::AddDefaults {
             destination_dir: settings.download_dir.clone(),
             connections: settings.max_connections.clamp(1, 32),
+            clip_monitor_enabled: settings.clip_monitor_enabled,
         };
         let window = self.0.window.clone();
         let client = Arc::clone(&self.0.client);
@@ -1185,7 +1186,7 @@ impl Inner {
                     .get(&task_id)
                     .map(|item| item.filename.clone())
                     .unwrap_or_else(|| task_id.clone());
-                self.notify("Descarga fallida", &filename);
+                self.notify(tr(locale(), Msg::FailedNotification), &filename);
                 self.refresh_task(&task_id);
             }
             "task_added" | "download_restarted_due_to_stale_cache" => {
@@ -1212,7 +1213,7 @@ impl Inner {
             .get(task_id)
             .map(|item| item.filename.clone())
             .unwrap_or_else(|| task_id.to_string());
-        self.notify("Descarga completada", &filename);
+        self.notify(tr(locale(), Msg::CompletedNotification), &filename);
     }
 
     fn notify(&self, title: &str, body: &str) {
