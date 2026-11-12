@@ -36,6 +36,7 @@ uuid.workspace = true
 url = "2"
 librqbit = "9.1"
 librqbit-bencode = "9.1"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
 
 
 [dev-dependencies]

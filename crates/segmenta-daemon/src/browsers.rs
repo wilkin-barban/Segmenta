@@ -24,6 +24,10 @@ pub struct Browser {
     pub manifest_path: PathBuf,
     /// Whether the system manifest exists.
     pub manifest_present: bool,
+    /// Prepared extension path if present.
+    pub prepared_path: Option<PathBuf>,
+    /// Shipped archive path if present.
+    pub archive_path: Option<PathBuf>,
 }
 
 struct Spec {
@@ -149,6 +153,8 @@ pub fn detect_with(path_env: &str, manifest_root: &Path, probe_version: bool) ->
                 unsupported,
                 manifest_present: manifest_path.is_file(),
                 manifest_path,
+                prepared_path: get_prepared_path(spec.family),
+                archive_path: shipped_archive_path(spec.family),
             }
         })
         .collect()
@@ -310,6 +316,256 @@ pub fn install_user_manifest(browser: &Browser, home: &Path) -> Result<PathBuf, 
     Ok(path)
 }
 
+fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
+    let input = input.trim();
+    let mut output = Vec::new();
+    let mut val: u32 = 0;
+    let mut valb: i32 = -8;
+    for c in input.chars() {
+        let dec = match c {
+            'A'..='Z' => c as u32 - 'A' as u32,
+            'a'..='z' => c as u32 - 'a' as u32 + 26,
+            '0'..='9' => c as u32 - '0' as u32 + 52,
+            '+' => 62,
+            '/' => 63,
+            '=' => break,
+            _ => continue,
+        };
+        val = (val << 6) | dec;
+        valb += 6;
+        if valb >= 0 {
+            output.push((val >> valb) as u8);
+            val &= (1 << valb) - 1;
+            valb -= 8;
+        }
+    }
+    Ok(output)
+}
+
+fn compute_chromium_extension_id(key_base64: &str) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    let der_bytes = base64_decode(key_base64)?;
+    let hash = Sha256::digest(&der_bytes);
+    let mut id = String::new();
+    for &b in hash.iter().take(16) {
+        let high = (b >> 4) & 0x0f;
+        let low = b & 0x0f;
+        id.push((b'a' + high) as char);
+        id.push((b'a' + low) as char);
+    }
+    Ok(id)
+}
+
+/// Find the shipped extension archive path for a family.
+pub fn shipped_archive_path(family: &str) -> Option<PathBuf> {
+    let filename = if family == "firefox" {
+        "segmenta-firefox.zip"
+    } else {
+        "segmenta-chromium.zip"
+    };
+
+    let env_key = if family == "firefox" {
+        "SEGMENTA_FIREFOX_ZIP"
+    } else {
+        "SEGMENTA_CHROMIUM_ZIP"
+    };
+    if let Ok(path) = std::env::var(env_key) {
+        if !path.is_empty() {
+            let p = PathBuf::from(path);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+
+    let system_path = PathBuf::from("/usr/share/segmenta/extensions").join(filename);
+    if system_path.is_file() {
+        return Some(system_path);
+    }
+
+    if let Ok(cargo_manifest) = std::env::var("CARGO_MANIFEST_DIR") {
+        let p = PathBuf::from(&cargo_manifest).join(format!("../../extension/{filename}"));
+        if p.is_file() {
+            return Some(p);
+        }
+        let p2 = PathBuf::from(&cargo_manifest).join(format!("../../dist/{filename}"));
+        if p2.is_file() {
+            return Some(p2);
+        }
+        let p3 = PathBuf::from(&cargo_manifest).join(format!("../extension/{filename}"));
+        if p3.is_file() {
+            return Some(p3);
+        }
+    }
+
+    let local = PathBuf::from("extension").join(filename);
+    if local.is_file() {
+        return Some(local);
+    }
+    let dist = PathBuf::from("dist").join(filename);
+    if dist.is_file() {
+        return Some(dist);
+    }
+
+    Some(system_path)
+}
+
+/// Get the prepared extension path if it exists and is valid.
+pub fn get_prepared_path(family: &str) -> Option<PathBuf> {
+    let data_home = std::env::var("XDG_DATA_HOME")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let home = std::env::var("HOME").unwrap_or_default();
+            PathBuf::from(home).join(".local/share")
+        });
+    let version = env!("CARGO_PKG_VERSION");
+    let path = data_home
+        .join("segmenta/extensions")
+        .join(format!("{family}-{version}"));
+    if path.join("manifest.json").is_file() && path.join("_locales").is_dir() {
+        Some(path)
+    } else {
+        None
+    }
+}
+
+/// Unzip and prepare browser extension(s) into $XDG_DATA_HOME/segmenta/extensions/<family>-<version>.
+pub fn prepare_extension(family: &str) -> Result<Vec<(String, PathBuf)>, String> {
+    let families = match family {
+        "chromium" => vec!["chromium"],
+        "firefox" => vec!["firefox"],
+        "all" | "" => vec!["chromium", "firefox"],
+        _ => return Err(format!("unknown family `{family}`")),
+    };
+    let mut results = Vec::new();
+    let data_home = std::env::var("XDG_DATA_HOME")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let home = std::env::var("HOME").unwrap_or_default();
+            PathBuf::from(home).join(".local/share")
+        });
+    let extensions_base = data_home.join("segmenta/extensions");
+    std::fs::create_dir_all(&extensions_base).map_err(|e| e.to_string())?;
+    let version = env!("CARGO_PKG_VERSION");
+
+    for fam in families {
+        let archive_path = shipped_archive_path(fam)
+            .ok_or_else(|| format!("extension archive for `{fam}` not found"))?;
+        let target_dir = extensions_base.join(format!("{fam}-{version}"));
+        let rand_suffix: u64 = rand::random();
+        let temp_dir = extensions_base.join(format!("{fam}-{version}.tmp.{rand_suffix}"));
+        if temp_dir.exists() {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+        }
+
+        let file = std::fs::File::open(&archive_path)
+            .map_err(|e| format!("cannot open archive {}: {e}", archive_path.display()))?;
+        let mut archive = zip::ZipArchive::new(file)
+            .map_err(|e| format!("corrupt zip archive {}: {e}", archive_path.display()))?;
+
+        for i in 0..archive.len() {
+            let mut file = archive
+                .by_index(i)
+                .map_err(|e| format!("zip index error: {e}"))?;
+            let outpath = match file.enclosed_name() {
+                Some(path) => temp_dir.join(path),
+                None => continue,
+            };
+            if file.name().ends_with('/') {
+                std::fs::create_dir_all(&outpath).map_err(|e| e.to_string())?;
+            } else {
+                if let Some(p) = outpath.parent() {
+                    if !p.exists() {
+                        std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
+                    }
+                }
+                let mut outfile = std::fs::File::create(&outpath).map_err(|e| e.to_string())?;
+                std::io::copy(&mut file, &mut outfile).map_err(|e| e.to_string())?;
+            }
+        }
+
+        let manifest_path = temp_dir.join("manifest.json");
+        let locales_path = temp_dir.join("_locales");
+        if !manifest_path.is_file() || !locales_path.is_dir() {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            return Err(format!(
+                "invalid extension archive for `{fam}`: missing manifest.json or _locales"
+            ));
+        }
+
+        let manifest_content = std::fs::read_to_string(&manifest_path)
+            .map_err(|e| format!("cannot read manifest.json: {e}"))?;
+        let manifest_json: serde_json::Value = serde_json::from_str(&manifest_content)
+            .map_err(|e| format!("invalid manifest.json JSON: {e}"))?;
+
+        if fam == "firefox" {
+            let gecko_id = manifest_json
+                .get("browser_specific_settings")
+                .and_then(|v| v.get("gecko"))
+                .and_then(|v| v.get("id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            if gecko_id != FIREFOX_EXTENSION_ID {
+                let _ = std::fs::remove_dir_all(&temp_dir);
+                return Err(format!("firefox extension id mismatch: expected `{FIREFOX_EXTENSION_ID}`, got `{gecko_id}`"));
+            }
+        } else {
+            let key_str = manifest_json
+                .get("key")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "chromium manifest.json missing `key`".to_string())?;
+            let computed_id = compute_chromium_extension_id(key_str)?;
+            if computed_id != CHROMIUM_EXTENSION_ID {
+                let _ = std::fs::remove_dir_all(&temp_dir);
+                return Err(format!("chromium extension id mismatch: expected `{CHROMIUM_EXTENSION_ID}`, got `{computed_id}`"));
+            }
+        }
+
+        if target_dir.exists() {
+            let _ = std::fs::remove_dir_all(&target_dir);
+        }
+        std::fs::rename(&temp_dir, &target_dir)
+            .map_err(|e| format!("cannot rename extracted extension dir: {e}"))?;
+
+        results.push((fam.to_string(), target_dir));
+    }
+
+    Ok(results)
+}
+
+/// Open browser extensions page with fixed argv array.
+pub fn open_browser(browser_id: &str) -> Result<(), String> {
+    let browsers = detect();
+    let browser = browsers
+        .iter()
+        .find(|b| b.id == browser_id)
+        .ok_or_else(|| format!("unknown browser `{browser_id}`"))?;
+    if let Some(reason) = browser.unsupported {
+        return Err(format!(
+            "browser `{}` is a {reason} package and cannot run",
+            browser.name
+        ));
+    }
+    let binary = browser
+        .command
+        .as_ref()
+        .ok_or_else(|| format!("browser `{}` is not installed", browser.name))?;
+    let url = match browser.id {
+        "firefox" => "about:debugging#/runtime/this-firefox",
+        "chrome" | "chromium" | "edge" | "brave" | "vivaldi" | "opera" => "chrome://extensions",
+        _ => "chrome://extensions",
+    };
+    std::process::Command::new(binary)
+        .arg(url)
+        .spawn()
+        .map_err(|e| format!("cannot launch `{binary}`: {e}"))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,5 +667,57 @@ mod tests {
             body.contains(FIREFOX_EXTENSION_ID),
             "manifest does not declare {FIREFOX_EXTENSION_ID}"
         );
+    }
+
+    #[test]
+    fn test_compute_chromium_extension_id() {
+        let key = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAld43LYBouFzGPA0BOUOLBF3Wv/DMAh431KHvYebpNr4OMKKS2IHfhq7o8qNwfBQsVNi2KD8zXvtT+Skf9b2Cs1VGa3Hm9fgRV26u0yISA0nGEh7pEZr8axGS7A2loRtr8uGNGXTERGYrxlCgXAjkU1JFMO9Un7X0n8dtBWVxGfxCNMIPzAUaJpOw+SsphKUv3l01vdK1HPCoPnkkGWi/kkgVA2ceBBg8c6Srq6I/5AKzTOOunuHsFjqsQhZSBCDGwhEKTceRC5DCWEDFyj0gXp/ArjNgpxct9/RX7pa4aMfwKDeYfSp1YKLWH5WeeDQlpLl82gQkPxej07LuvpIidwIDAQAB";
+        let id = compute_chromium_extension_id(key).unwrap();
+        assert_eq!(id, CHROMIUM_EXTENSION_ID);
+    }
+
+    fn create_test_zip(path: &Path, manifest_json: &str, include_locales: bool) {
+        use std::io::Write;
+        let file = std::fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::FileOptions::default();
+        zip.start_file("manifest.json", options).unwrap();
+        zip.write_all(manifest_json.as_bytes()).unwrap();
+        if include_locales {
+            zip.add_directory("_locales/en", options).unwrap();
+            zip.start_file("_locales/en/messages.json", options)
+                .unwrap();
+            zip.write_all(b"{}").unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
+    #[test]
+    fn extension_prepare_tests() {
+        let dir = fake_dir();
+        let zip_path = dir.path().join("segmenta-chromium.zip");
+        let valid_manifest =
+            "{\"key\": \"MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAld43LYBouFzGPA0BOUOLBF3Wv/DMAh431KHvYebpNr4OMKKS2IHfhq7o8qNwfBQsVNi2KD8zXvtT+Skf9b2Cs1VGa3Hm9fgRV26u0yISA0nGEh7pEZr8axGS7A2loRtr8uGNGXTERGYrxlCgXAjkU1JFMO9Un7X0n8dtBWVxGfxCNMIPzAUaJpOw+SsphKUv3l01vdK1HPCoPnkkGWi/kkgVA2ceBBg8c6Srq6I/5AKzTOOunuHsFjqsQhZSBCDGwhEKTceRC5DCWEDFyj0gXp/ArjNgpxct9/RX7pa4aMfwKDeYfSp1YKLWH5WeeDQlpLl82gQkPxej07LuvpIidwIDAQAB\"}"
+                .to_string();
+        create_test_zip(&zip_path, &valid_manifest, true);
+
+        std::env::set_var("SEGMENTA_CHROMIUM_ZIP", &zip_path);
+        let home = dir.path().join("home");
+        std::env::set_var("HOME", &home);
+
+        let res = prepare_extension("chromium");
+        assert!(res.is_ok());
+
+        let invalid_zip = dir.path().join("invalid.zip");
+        create_test_zip(&invalid_zip, &valid_manifest, false);
+        std::env::set_var("SEGMENTA_CHROMIUM_ZIP", &invalid_zip);
+        let res2 = prepare_extension("chromium");
+        assert!(res2.is_err());
+
+        let wrong_zip = dir.path().join("wrong.zip");
+        create_test_zip(&wrong_zip, "{\"key\": \"INVALIDKEY\"}", true);
+        std::env::set_var("SEGMENTA_CHROMIUM_ZIP", &wrong_zip);
+        let res3 = prepare_extension("chromium");
+        assert!(res3.is_err());
     }
 }

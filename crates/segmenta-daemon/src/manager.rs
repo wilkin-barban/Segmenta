@@ -2055,7 +2055,13 @@ impl RpcHandler for Manager {
                         .unwrap_or_else(|| home.join(".config"));
                     Ok(json!({
                         "extension_id": crate::browsers::CHROMIUM_EXTENSION_ID,
+                        "firefox_extension_id": crate::browsers::FIREFOX_EXTENSION_ID,
                         "host_path": crate::browsers::HOST_PATH,
+                        "extension_version": env!("CARGO_PKG_VERSION"),
+                        "shipped_archives": {
+                            "chromium": crate::browsers::shipped_archive_path("chromium").map(|p| p.to_string_lossy().into_owned()),
+                            "firefox": crate::browsers::shipped_archive_path("firefox").map(|p| p.to_string_lossy().into_owned()),
+                        },
                         "browsers": browsers.iter().map(|browser| json!({
                             "id": browser.id,
                             "name": browser.name,
@@ -2077,6 +2083,8 @@ impl RpcHandler for Manager {
                                 &home,
                                 &config_home,
                             ),
+                            "prepared_path": browser.prepared_path.as_ref().map(|p| p.to_string_lossy().into_owned()),
+                            "archive_path": browser.archive_path.as_ref().map(|p| p.to_string_lossy().into_owned()),
                             "state": if browser.unsupported.is_some() {
                                 "unsupported"
                             } else if browser.command.is_none() {
@@ -2090,6 +2098,32 @@ impl RpcHandler for Manager {
                             },
                         })).collect::<Vec<_>>(),
                     }))
+                }
+                "extension.prepare" => {
+                    let params_obj: Value = parse(params)?;
+                    let family = params_obj
+                        .get("family")
+                        .and_then(Value::as_str)
+                        .unwrap_or("all");
+                    let prepared = crate::browsers::prepare_extension(family)
+                        .map_err(|err| RpcError::new(1051, "ERR_EXTENSION_PREPARE", err))?;
+                    Ok(json!({
+                        "prepared": prepared.into_iter().map(|(fam, path)| json!({
+                            "family": fam,
+                            "path": path.to_string_lossy(),
+                        })).collect::<Vec<_>>()
+                    }))
+                }
+                "extension.open" => {
+                    let params_obj: Value = parse(params)?;
+                    let browser_id = params_obj
+                        .get("browser_id")
+                        .or_else(|| params_obj.get("browser"))
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| RpcError::invalid_params("missing browser_id"))?;
+                    crate::browsers::open_browser(browser_id)
+                        .map_err(|err| RpcError::new(1052, "ERR_EXTENSION_OPEN", err))?;
+                    Ok(json!({ "opened": true, "browser_id": browser_id }))
                 }
                 "extension.install-native" => {
                     let home = std::env::var("HOME").unwrap_or_default();

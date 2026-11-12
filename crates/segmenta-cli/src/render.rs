@@ -11,6 +11,7 @@
 
 use segmenta_daemon::rpc::DownloadView;
 use segmenta_i18n::{tr, ErrorText, Locale, Msg};
+use serde_json::Value;
 
 /// Width of the `label:` column of the detail blocks.
 const LABEL_WIDTH: usize = 12;
@@ -269,6 +270,66 @@ pub fn render_queues(locale: Locale, queues: &serde_json::Value) -> String {
         ));
     }
     out
+}
+
+pub fn render_extension_status(_locale: Locale, value: &Value) -> String {
+    let Some(browsers) = value.get("browsers").and_then(Value::as_array) else {
+        return format!("{value}\n");
+    };
+    let mut out = String::new();
+    out.push_str(&format!(
+        "{:<12}  {:<16}  {:<20}  {}\n",
+        "ID", "NAME", "STATE", "PATH"
+    ));
+    for b in browsers {
+        let id = b.get("id").and_then(Value::as_str).unwrap_or("-");
+        let name = b.get("name").and_then(Value::as_str).unwrap_or("-");
+        let state = b.get("state").and_then(Value::as_str).unwrap_or("-");
+        let path = b
+            .get("prepared_path")
+            .or_else(|| b.get("manifest_path"))
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        out.push_str(&format!(
+            "{:<12}  {:<16}  {:<20}  {}\n",
+            id, name, state, path
+        ));
+    }
+    out
+}
+
+pub fn render_extension_prepare(_locale: Locale, value: &Value) -> String {
+    let Some(prepared) = value.get("prepared").and_then(Value::as_array) else {
+        return format!("{value}\n");
+    };
+    let mut out = String::new();
+    for p in prepared {
+        let family = p.get("family").and_then(Value::as_str).unwrap_or("-");
+        let path = p.get("path").and_then(Value::as_str).unwrap_or("-");
+        out.push_str(&format!("prepared {family}: {path}\n"));
+    }
+    out
+}
+
+pub fn render_extension_install_native(_locale: Locale, value: &Value) -> String {
+    let Some(installed) = value.get("installed").and_then(Value::as_array) else {
+        return format!("{value}\n");
+    };
+    let mut out = String::new();
+    for i in installed {
+        let id = i.get("id").and_then(Value::as_str).unwrap_or("-");
+        let path = i.get("path").and_then(Value::as_str).unwrap_or("-");
+        out.push_str(&format!("installed manifest for {id}: {path}\n"));
+    }
+    out
+}
+
+pub fn render_extension_open(_locale: Locale, value: &Value) -> String {
+    let browser = value
+        .get("browser_id")
+        .and_then(Value::as_str)
+        .unwrap_or("browser");
+    format!("opened extensions page for {browser}\n")
 }
 
 #[cfg(test)]

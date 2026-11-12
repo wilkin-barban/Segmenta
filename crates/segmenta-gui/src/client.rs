@@ -271,6 +271,61 @@ impl Client for DemoClient {
                 }))
             }
             "settings.get" => Ok(state.settings.clone().unwrap_or_else(default_settings)),
+            "extension.status" => Ok(json!({
+                "extension_id": "kdeldnifdbpemnhfpmhonlnibbhnoaan",
+                "firefox_extension_id": "segmenta@wilkin.github.io",
+                "host_path": "/usr/bin/segmenta-host",
+                "extension_version": "0.1.2",
+                "shipped_archives": {
+                    "chromium": "/usr/share/segmenta/extensions/segmenta-chromium.zip",
+                    "firefox": "/usr/share/segmenta/extensions/segmenta-firefox.zip"
+                },
+                "browsers": [
+                    {
+                        "id": "chrome",
+                        "name": "Google Chrome",
+                        "family": "chromium",
+                        "command": "/usr/bin/google-chrome",
+                        "version": "Chrome 120.0",
+                        "unsupported": null,
+                        "manifest_path": "/etc/opt/chrome/native-messaging-hosts/io.github.wilkin.segmenta.json",
+                        "manifest_present": true,
+                        "user_manifest_present": false,
+                        "extension_installed": false,
+                        "prepared_path": "/home/user/.local/share/segmenta/extensions/chromium-0.1.2",
+                        "archive_path": "/usr/share/segmenta/extensions/segmenta-chromium.zip",
+                        "state": "native-ready"
+                    },
+                    {
+                        "id": "firefox",
+                        "name": "Firefox",
+                        "family": "firefox",
+                        "command": "/usr/bin/firefox",
+                        "version": "Firefox 120.0",
+                        "unsupported": null,
+                        "manifest_path": "/usr/lib/mozilla/native-messaging-hosts/io.github.wilkin.segmenta.json",
+                        "manifest_present": true,
+                        "user_manifest_present": false,
+                        "extension_installed": false,
+                        "prepared_path": "/home/user/.local/share/segmenta/extensions/firefox-0.1.2",
+                        "archive_path": "/usr/share/segmenta/extensions/segmenta-firefox.zip",
+                        "state": "native-ready"
+                    }
+                ]
+            })),
+            "extension.prepare" => Ok(json!({
+                "prepared": [
+                    { "family": "chromium", "path": "/home/user/.local/share/segmenta/extensions/chromium-0.1.2" },
+                    { "family": "firefox", "path": "/home/user/.local/share/segmenta/extensions/firefox-0.1.2" }
+                ]
+            })),
+            "extension.install-native" => Ok(json!({
+                "installed": [
+                    { "id": "chrome", "path": "/home/user/.config/google-chrome/NativeMessagingHosts/io.github.wilkin.segmenta.json" }
+                ],
+                "errors": []
+            })),
+            "extension.open" => Ok(json!({ "opened": true })),
             "settings.update" => {
                 let mut settings = state.settings.clone().unwrap_or_else(default_settings);
                 if let (Some(target), Some(patch)) = (settings.as_object_mut(), params.as_object())
