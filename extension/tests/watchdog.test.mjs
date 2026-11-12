@@ -65,6 +65,9 @@ function setupFakeBrowser(settings, options = {}) {
   // Windows the browser still reports through windows.get.
   const openWindows = new Set();
   const alarms = { created: [], cleared: [], active: new Set(), listeners: [] };
+  // Every downloads.search query the worker sent: the cold-start reconciliation must
+  // ask the browser for state instead of waiting for an event that already happened.
+  const searches = [];
   // A valid settings cache: the capture path must never depend on a host round
   // trip that a `storage.local.set` failure would otherwise mask.
   const storageData = {
@@ -84,6 +87,10 @@ function setupFakeBrowser(settings, options = {}) {
       id: EXTENSION_ID,
       lastError: undefined,
       onStartup: {
+        listeners: [],
+        addListener(fn) { this.listeners.push(fn); },
+      },
+      onInstalled: {
         listeners: [],
         addListener(fn) { this.listeners.push(fn); },
       },
@@ -159,6 +166,25 @@ function setupFakeBrowser(settings, options = {}) {
         erased.push(query);
         timeline.push('erase:' + query.id);
         if (cb) cb();
+      },
+      // What the browser already had in progress before this worker existed.
+      search(query, cb) {
+        searches.push(query);
+        timeline.push('search');
+        if (options.searchFails) {
+          chrome.runtime.lastError = { message: 'downloads search failed' };
+          try {
+            if (cb) cb(undefined);
+          } finally {
+            chrome.runtime.lastError = undefined;
+          }
+          return undefined;
+        }
+        const list = typeof options.inProgress === 'function'
+          ? options.inProgress(query)
+          : options.inProgress;
+        if (cb) cb(Array.isArray(list) ? list.slice() : []);
+        return undefined;
       },
     },
     windows: {
@@ -251,6 +277,7 @@ function setupFakeBrowser(settings, options = {}) {
     notifications,
     alarms,
     storageData,
+    searches,
     /** Persisted pending records, as a list (never a raw scalar). */
     pendingRecords() {
       const raw = storageData[PENDING_KEY];
@@ -276,6 +303,11 @@ function setupFakeBrowser(settings, options = {}) {
     fireStartup() {
       const listeners = chrome.runtime.onStartup.listeners;
       assert.equal(listeners.length > 0, true, 'no worker registered an onStartup listener');
+      return listeners[listeners.length - 1]();
+    },
+    fireInstalled() {
+      const listeners = chrome.runtime.onInstalled.listeners;
+      assert.equal(listeners.length > 0, true, 'no worker registered an onInstalled listener');
       return listeners[listeners.length - 1]();
     },
     fireWindowRemoved(windowId) {
@@ -621,6 +653,179 @@ export default function suite({ test }) {
     assert.deepEqual(env.erased, []);
     assert.deepEqual(env.pendingRecords(), []);
     assert.equal(env.alarms.active.size, 0);
+  });
+
+  // ---- Cold-start reconciliation (R1) ----------------------------------------
+  // A download the browser started while no worker existed never fires
+  // `downloads.onCreated`, so a fresh worker asks for what is still in progress and
+  // routes it through the very same capture path a live download takes.
+
+  function inProgressItem(id) {
+    return Object.assign(item(id), { state: 'in_progress' });
+  }
+
+  test('reconcile: a download the browser already had is captured at startup', async () => {
+    const env = setupFakeBrowser(settingsWith(), { inProgress: [inProgressItem(801)] });
+    // The worker that never saw the download, then the restarted one that takes over.
+    await bootWorker();
+    const bg = await bootWorker();
+    await env.fireStartup();
+
+    assert.deepEqual(env.searches, [{ state: 'in_progress' }], 'the scan asks for in-progress downloads only');
+    assert.deepEqual(env.paused, [801], 'the reconciled download is paused like a live one');
+    assert.equal(env.createdWindows.length, 1, 'the normal confirmation window is opened');
+    assert.match(env.createdWindows[0].url, /[?&]download=801(&|$)/);
+    assert.equal(env.alarms.active.has(ALARM_NAME), true, 'the watchdog is armed before the pause');
+    const records = env.pendingRecords();
+    assert.equal(records.length, 1, 'the pause is recorded for a worker that never sees the answer');
+    assert.equal(records[0].downloadId, 801);
+
+    // The answer arrives in a window a restarted worker can resolve: same rules.
+    const reply = await accept(bg, 801);
+
+    assert.equal(reply.ok, true);
+    assert.deepEqual(env.canceled, [801], 'the browser copy is discarded only after the add');
+    assert.deepEqual(env.erased, [{ id: 801 }]);
+    assert.deepEqual(env.pendingRecords(), []);
+    assert.equal(env.alarms.active.size, 0);
+  });
+
+  test('reconcile: a non-matching extension, a denylisted host and a disabled capture are ignored', async () => {
+    const cases = [
+      ['a non-matching extension', settingsWith({ capture_extensions: ['mp4'] })],
+      ['a denylisted host', settingsWith({ domain_denylist: ['example.org'] })],
+      ['a disabled capture setting', settingsWith({ capture_enabled: false })],
+    ];
+    for (const [label, settings] of cases) {
+      const env = setupFakeBrowser(settings, { inProgress: [inProgressItem(802)] });
+      await bootWorker();
+      await env.fireStartup();
+
+      assert.equal(env.searches.length, 1, `${label}: the scan still runs`);
+      assert.deepEqual(env.paused, [], `${label}: nothing is paused`);
+      assert.deepEqual(env.createdWindows, [], `${label}: no confirmation window`);
+      assert.deepEqual(env.nativeCalls, [], `${label}: nothing reaches the host`);
+      assert.deepEqual(env.pendingRecords(), [], `${label}: no record is written`);
+      assert.equal(env.alarms.active.size, 0, `${label}: no orphan watchdog`);
+    }
+  });
+
+  test('reconcile: an id a live event already handled is not captured twice', async () => {
+    const env = setupFakeBrowser(settingsWith({ capture_confirm: false }), {
+      inProgress: [inProgressItem(803)],
+    });
+    const bg = await bootWorker();
+
+    await bg.onDownloadCreated(item(803));
+    await env.fireStartup();
+
+    assert.deepEqual(env.paused, [803], 'the download is paused exactly once');
+    assert.deepEqual(env.canceled, [803]);
+    assert.deepEqual(env.nativeCalls.map((call) => call.message.method), [
+      'download.add',
+      'media.status',
+      'system.open',
+    ]);
+  });
+
+  test('reconcile: an id with a persisted pending record is not captured twice', async () => {
+    const env = setupFakeBrowser(settingsWith(), { inProgress: [inProgressItem(804)] });
+    env.storageData[PENDING_KEY] = [
+      {
+        v: PENDING_SCHEMA,
+        downloadId: 804,
+        url: ZIP_URL,
+        filename: 'archive.zip',
+        referrer: '',
+        windowId: null,
+        deadline: Date.now() + 60000,
+      },
+    ];
+    await bootWorker();
+    await env.fireStartup();
+
+    assert.deepEqual(env.paused, [], 'an already paused download is never paused again');
+    assert.deepEqual(env.createdWindows, [], 'no second confirmation window');
+    assert.equal(env.pendingRecords().length, 1, 'the existing record is left to the sweep');
+    assert.equal(env.alarms.active.has(ALARM_NAME), true);
+  });
+
+  test('reconcile: a downloads.search failure leaves everything untouched and does not throw', async () => {
+    const env = setupFakeBrowser(settingsWith(), {
+      inProgress: [inProgressItem(805)],
+      searchFails: true,
+    });
+    await bootWorker();
+
+    // A rejected scan must resolve, never reject: the lifecycle listener is not a
+    // place where a browser API failure can become an exception.
+    await env.fireStartup();
+
+    assert.equal(env.searches.length, 1);
+    assert.deepEqual(env.paused, [], 'the download keeps running in the browser');
+    assert.deepEqual(env.createdWindows, []);
+    assert.deepEqual(env.nativeCalls, []);
+    assert.deepEqual(env.pendingRecords(), []);
+    assert.equal(env.alarms.active.size, 0);
+  });
+
+  test('reconcile: never pauses without a persisted record plus a live alarm', async () => {
+    const failures = [
+      ['the record cannot be written', { storageSetFails: true }],
+      ['the watchdog cannot be armed', { alarmsCreateFails: true }],
+    ];
+    for (const [label, options] of failures) {
+      const env = setupFakeBrowser(settingsWith(), Object.assign({ inProgress: [inProgressItem(806)] }, options));
+      await bootWorker();
+      await env.fireStartup();
+
+      assert.deepEqual(env.paused, [], `${label}: never pause`);
+      assert.deepEqual(env.createdWindows, [], `${label}: no confirmation window`);
+      assert.deepEqual(env.pendingRecords(), [], `${label}: no leftover record`);
+    }
+  });
+
+  test('reconcile: the watchdog tick scans once, not on every alarm', async () => {
+    const env = setupFakeBrowser(settingsWith({ capture_confirm: false }), {
+      inProgress: [inProgressItem(807)],
+    });
+    await bootWorker();
+
+    await env.fireAlarm();
+    await env.fireAlarm();
+
+    assert.deepEqual(env.paused, [807], 'the first tick captures the in-progress download');
+    assert.equal(env.searches.length, 1, 'the second tick stays inside the throttle window');
+  });
+
+  test('reconcile: an install or update reconciles as well', async () => {
+    const env = setupFakeBrowser(settingsWith({ capture_confirm: false }), {
+      inProgress: [inProgressItem(808)],
+    });
+    await bootWorker();
+
+    await env.fireInstalled();
+
+    assert.deepEqual(env.paused, [808]);
+    assert.equal(env.searches.length, 1);
+    assert.deepEqual(env.canceled, [808]);
+  });
+
+  test('reconcile: the number of downloads examined per scan is capped', async () => {
+    const many = [];
+    const env = setupFakeBrowser(settingsWith({ capture_confirm: false }), {
+      inProgress: () => many,
+    });
+    const bg = await bootWorker();
+    const cap = bg.MAX_RECONCILE_DOWNLOADS;
+    assert.equal(Number.isInteger(cap) && cap > 0, true, 'the cap must be a positive constant');
+    for (let index = 0; index < cap + 5; index += 1) {
+      many.push(inProgressItem(820 + index));
+    }
+
+    await env.fireStartup();
+
+    assert.equal(env.paused.length, cap, `only the first ${cap} downloads are examined`);
   });
 
   test('watchdog: the alarms wrapper settles for promise-style browsers', async () => {
