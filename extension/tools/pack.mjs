@@ -15,10 +15,16 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const extensionDir = path.resolve(here, '..');
 export const localesDir = path.join(extensionDir, '_locales');
+// The archive name follows the manifest version, so a release can never ship a ZIP
+// whose name belongs to the previous version.
 export const targets = [
-  { name: 'chromium', zip: 'segmenta-extension-0.1.1.zip' },
-  { name: 'firefox', zip: 'segmenta-firefox-0.1.1.zip' },
+  { name: 'chromium', stem: 'segmenta-extension' },
+  { name: 'firefox', stem: 'segmenta-firefox' },
 ];
+
+export function zipName(target, version) {
+  return `${target.stem}-${version}.zip`;
+}
 export const languages = ['es', 'en', 'pt_BR'];
 
 /**
@@ -243,7 +249,8 @@ function main() {
       console.log(`ok ${target.name} files=${files.length} locales=${languages.join(',')}`);
       continue;
     }
-    const output = path.join(outDir, target.zip);
+    const shipped = JSON.parse(readFileSync(path.join(root, 'manifest.json'), 'utf8'));
+    const output = path.join(outDir, zipName(target, shipped.version));
     const size = writeZip(root, files, output);
     console.log(`wrote ${output} (${size} bytes, ${files.length} files, locales ${languages.join(',')})`);
   }
