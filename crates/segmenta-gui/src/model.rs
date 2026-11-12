@@ -196,6 +196,9 @@ pub struct DownloadItem {
     pub error_code: Option<i64>,
     #[serde(default)]
     pub error_message: Option<String>,
+    /// Where the daemon moved an infected file (`ERR_ANTIVIRUS_FOUND`).
+    #[serde(default)]
+    pub quarantine_path: Option<String>,
     #[serde(default)]
     pub segments: Vec<SegmentItem>,
     /// Media kind for 0.1.0 tasks (`video`, `audio`, `playlist`).
@@ -206,7 +209,32 @@ pub struct DownloadItem {
     pub playlist_title: Option<String>,
 }
 
+/// The daemon quarantined the file: it is no longer in the downloads folder.
+pub const ERR_ANTIVIRUS_FOUND: i64 = 1046;
+/// The scan was requested but neither `clamdscan` nor `clamscan` is usable.
+pub const ERR_ANTIVIRUS_UNAVAILABLE: i64 = 1047;
+
 impl DownloadItem {
+    /// Whether the daemon moved this file to quarantine.
+    ///
+    /// The quarantine path is the evidence: `1046` alone would still be a code, and the
+    /// UI must never claim a quarantined file is in the downloads folder.
+    pub fn is_quarantined(&self) -> bool {
+        self.error_code == Some(ERR_ANTIVIRUS_FOUND)
+            && self
+                .quarantine_path
+                .as_deref()
+                .is_some_and(|path| !path.trim().is_empty())
+    }
+
+    /// Path to show for this task: the quarantine copy when there is one.
+    pub fn display_path(&self) -> &str {
+        match self.quarantine_path.as_deref() {
+            Some(path) if self.is_quarantined() => path,
+            _ => &self.final_path,
+        }
+    }
+
     /// `0.0..=1.0`, or `0.0` while the total size is unknown.
     pub fn progress(&self) -> f64 {
         match self.total_bytes {
@@ -559,6 +587,10 @@ impl DownloadStore {
 }
 
 /// `settings.get` / `settings.update` payload.
+fn default_antivirus_timeout() -> u64 {
+    120
+}
+
 fn default_true() -> bool {
     true
 }
@@ -588,6 +620,15 @@ pub struct Settings {
     pub capture_extensions: Vec<String>,
     #[serde(default)]
     pub domain_denylist: Vec<String>,
+    /// Run ClamAV before a download is marked completed (A2).
+    #[serde(default)]
+    pub antivirus_enabled: bool,
+    /// Scan timeout in seconds, 1..=3600.
+    #[serde(default = "default_antivirus_timeout")]
+    pub antivirus_timeout_secs: u64,
+    /// Where an infected file is moved.
+    #[serde(default)]
+    pub antivirus_quarantine_dir: String,
     #[serde(default)]
     pub schedule_start: Option<String>,
     #[serde(default)]

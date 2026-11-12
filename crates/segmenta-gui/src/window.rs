@@ -429,6 +429,30 @@ impl SegmentaWindow {
     }
 
     /// Detail actions currently offered for the selected task.
+    /// Label of the state pill for the open detail, with quarantine as its own state.
+    pub fn detail_state(&self) -> Option<String> {
+        let item = self.detail()?;
+        Some(if item.is_quarantined() {
+            tr(locale(), Msg::StatusQuarantined).to_string()
+        } else {
+            item.status.label(locale()).to_string()
+        })
+    }
+
+    /// Path shown for the open detail: the quarantine copy when the daemon moved it.
+    pub fn detail_path(&self) -> Option<String> {
+        self.detail().map(|item| item.display_path().to_string())
+    }
+
+    /// Quarantine notice for the open detail, or `None` when nothing was quarantined.
+    pub fn detail_quarantine(&self) -> Option<String> {
+        let item = self.detail()?;
+        if !item.is_quarantined() {
+            return None;
+        }
+        Some(tr(locale(), Msg::QuarantineFile).replacen("{}", item.display_path(), 1))
+    }
+
     pub fn detail_actions(&self) -> Vec<String> {
         let Some(item) = self.detail() else {
             return Vec::new();
@@ -446,7 +470,9 @@ impl SegmentaWindow {
         if item.status.can_delete() {
             actions.push("delete".to_string());
         }
-        if !item.final_path.is_empty() {
+        // A quarantined file is no longer in the downloads folder: offering to open it
+        // there would point at something the daemon already moved away.
+        if !item.final_path.is_empty() && !item.is_quarantined() {
             actions.push("open_folder".to_string());
         }
         actions
