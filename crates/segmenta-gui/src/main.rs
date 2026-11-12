@@ -31,8 +31,9 @@ fn main() -> glib::ExitCode {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         println!(
             "segmenta-gui {}\n\n\
-             Usage: segmenta-gui [--smoke] [--screenshots DIR] [--version]\n\n\
+             Usage: segmenta-gui [--smoke] [--show-task ID] [--screenshots DIR] [--version]\n\n\
              --smoke             build the window with a synthetic download and exit\n\
+             --show-task ID      open the window focused on that task\n\
              --screenshots DIR   write the light and dark 1440x900 QA captures\n\
              --version           print the version and exit",
             env!("CARGO_PKG_VERSION")
@@ -66,18 +67,15 @@ fn main() -> glib::ExitCode {
     if args.iter().any(|arg| arg == "--smoke") {
         return run_smoke();
     }
-    // `--smoke` is consumed here so GApplication does not reject it.
-    let argv: Vec<String> = args
-        .iter()
-        .skip(1)
-        .filter(|arg| *arg != "--smoke")
-        .cloned()
-        .collect();
+    // `--smoke` and `--show-task` are consumed here so GApplication does not
+    // reject them; the task id travels through the app module.
+    let mut argv: Vec<String> = args.iter().skip(1).cloned().collect();
+    app::set_show_task(app::take_show_task(&mut argv));
     let mut forwarded = vec![args
         .first()
         .cloned()
         .unwrap_or_else(|| "segmenta-gui".to_string())];
-    forwarded.extend(argv);
+    forwarded.extend(argv.into_iter().filter(|arg| arg != "--smoke"));
     let application = app::with_window();
     application.run_with_args(&forwarded)
 }
