@@ -34,7 +34,11 @@ CREATE TABLE IF NOT EXISTS downloads (
     queue_name TEXT NOT NULL DEFAULT 'main' REFERENCES queues(name),
     download_type TEXT NOT NULL DEFAULT 'direct' CHECK(download_type IN ('direct', 'hls', 'dash', 'youtube_video', 'youtube_playlist', 'youtube_audio', 'torrent', 'magnet')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    completed_at TIMESTAMP
+    completed_at TIMESTAMP,
+    -- Resultado de la fase de cierre (hook y antivirus) y ruta de cuarentena (v4).
+    postprocess_exit INTEGER,
+    postprocess_message TEXT,
+    quarantine_path TEXT
 );
 
 CREATE TABLE IF NOT EXISTS download_headers (

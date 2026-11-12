@@ -38,6 +38,9 @@ fn record(id: &str, status: DownloadStatus) -> DownloadRecord {
         playlist_title: None,
         playlist_count: None,
         batch_id: None,
+        quarantine_path: None,
+        postprocess_exit: None,
+        postprocess_message: None,
     }
 }
 
@@ -438,7 +441,7 @@ fn migration_from_v2_to_v3_preserves_data_and_creates_torrent_tables() {
     }
     let store = Store::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 3);
+    assert_eq!(SCHEMA_VERSION, 4);
 
     let rows = store.list(None, 10, 0).unwrap();
     assert_eq!(rows.len(), 1);
