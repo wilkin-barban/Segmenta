@@ -282,6 +282,12 @@ pub fn present(
     dialog.connect_closed(move |_| open_for_close.set(false));
 
     // Browsers poll: `extension.status` fills the list, `install-native` reports back.
+    // Rows added by the last status answer, so a refresh replaces instead of appends.
+    let dynamic_rows: Rc<std::cell::RefCell<Vec<adw::ActionRow>>> =
+        Rc::new(std::cell::RefCell::new(Vec::new()));
+    let dynamic_rows_poll = Rc::clone(&dynamic_rows);
+    let refresh_poll_bus = Rc::clone(&browser_bus);
+    let refresh_poll_client = Arc::clone(&client);
     let browser_poll = Rc::clone(&browser_bus);
     let browser_group_poll = browsers_group.clone();
     let browser_dialog_poll = dialog.clone();
@@ -295,6 +301,9 @@ pub fn present(
             match result {
                 Ok(value) => {
                     if let Some(list) = value.get("browsers").and_then(Value::as_array) {
+                        for row in dynamic_rows_poll.borrow_mut().drain(..) {
+                            browser_group_poll.remove(&row);
+                        }
                         for browser in list {
                             let installed =
                                 browser.get("command").and_then(Value::as_str).is_some();
@@ -302,17 +311,23 @@ pub fn present(
                                 continue;
                             }
                             let name = browser.get("name").and_then(Value::as_str).unwrap_or("?");
-                            let unsupported = browser.get("unsupported").and_then(Value::as_str);
-                            let present = browser
-                                .get("manifest_present")
-                                .and_then(Value::as_bool)
-                                .unwrap_or(false);
-                            let status = if unsupported.is_some() {
-                                tr(browser_locale, Msg::BrowserUnsupported)
-                            } else if present {
-                                tr(browser_locale, Msg::NativeReady)
-                            } else {
-                                tr(browser_locale, Msg::NativeMissing)
+                            // State comes from the daemon; the UI never guesses readiness.
+                            let state = browser
+                                .get("state")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default();
+                            let status = match state {
+                                "unsupported" => tr(browser_locale, Msg::BrowserUnsupported),
+                                "extension-installed" => {
+                                    tr(browser_locale, Msg::ExtensionInstalled)
+                                }
+                                "native-ready" => &format!(
+                                    "{} · {}",
+                                    tr(browser_locale, Msg::NativeReady),
+                                    tr(browser_locale, Msg::ExtensionMissing)
+                                ),
+                                "native-missing" => tr(browser_locale, Msg::NativeMissing),
+                                _ => tr(browser_locale, Msg::ExtensionMissing),
                             };
                             let row = adw::ActionRow::builder()
                                 .title(name)
@@ -327,9 +342,12 @@ pub fn present(
                                 );
                             }
                             browser_group_poll.add(&row);
+                            dynamic_rows_poll.borrow_mut().push(row);
                         }
                     } else if let Some(installed) = value.get("installed").and_then(Value::as_array)
                     {
+                        // Refresh so every row shows its post-install state.
+                        refresh_poll_bus.spawn(&refresh_poll_client, "extension.status", json!({}));
                         let errors = value
                             .get("errors")
                             .and_then(Value::as_array)
