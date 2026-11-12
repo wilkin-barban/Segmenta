@@ -263,5 +263,13 @@
   "confirmInvalid": {
     "message": "Esta confirmação não é mais válida. Feche esta janela.",
     "description": "Exibido quando a janela não tem download pendente."
+  },
+  "captureKeptTitle": {
+    "message": "Download mantido no navegador",
+    "description": "Aviso quando a tarefa não recebeu dados no Segmenta."
+  },
+  "captureKeptBody": {
+    "message": "O Segmenta não recebeu os dados. O download continua no seu navegador.",
+    "description": "Corpo do aviso quando a cópia do navegador é mantida."
   }
 }

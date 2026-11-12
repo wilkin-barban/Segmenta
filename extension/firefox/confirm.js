@@ -11,6 +11,7 @@
   'use strict';
 
   const API = global.SegmentaApi;
+  const PROTOCOL = global.SegmentaProtocol;
 
   const CLOSE_DELAY_MS = 1500;
 
@@ -126,12 +127,21 @@
     };
   }
 
+  /**
+   * Folder where the accepted task landed. `final_path` is a file, so the whole path
+   * is never shown as a directory: only its parent is (same rule as the background).
+   */
   function acceptedFolder(data, fallback) {
-    if (data && typeof data.destination_dir === 'string' && data.destination_dir.trim()) {
-      return data.destination_dir.trim();
-    }
-    if (data && typeof data.final_path === 'string' && data.final_path.trim()) {
-      return data.final_path.trim();
+    if (data && typeof data === 'object') {
+      if (typeof data.destination_dir === 'string' && data.destination_dir.trim()) {
+        return data.destination_dir.trim();
+      }
+      const parent = PROTOCOL && typeof PROTOCOL.parentDirectory === 'function'
+        ? PROTOCOL.parentDirectory(data.final_path)
+        : '';
+      if (parent) {
+        return parent;
+      }
     }
     return fallback;
   }
@@ -221,5 +231,6 @@
     renderQuery: renderQuery,
     sendDecision: sendDecision,
     acceptedFolder: acceptedFolder,
+    boot: boot,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);

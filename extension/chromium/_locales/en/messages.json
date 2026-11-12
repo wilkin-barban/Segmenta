@@ -263,5 +263,13 @@
   "confirmInvalid": {
     "message": "This confirmation is no longer valid. Close this window.",
     "description": "Shown when the window has no pending download."
+  },
+  "captureKeptTitle": {
+    "message": "Download kept in the browser",
+    "description": "Shown when the task never received data in Segmenta."
+  },
+  "captureKeptBody": {
+    "message": "Segmenta did not receive the data. The download continues in your browser.",
+    "description": "Body of the notice when the browser copy is kept."
   }
 }

@@ -32,13 +32,25 @@ if (typeof importScripts === 'function') {
   const CONFIRM_PAGE = 'confirm.html';
   const CAPTURE_CONFIRM_TIMEOUT_MS = 120000;
   const MAX_PENDING_CONFIRMS = 20;
+  // The browser copy is the safety net until the daemon demonstrably holds bytes:
+  // both waits below are bounded and every expiry keeps the browser download.
+  const TASK_OWNERSHIP_TIMEOUT_MS = 60000;
+  const TASK_POLL_INTERVAL_MS = 1000;
+  const CONFIRM_WINDOW_TIMEOUT_MS = 5000;
+  // A terminal state means the daemon will never hold bytes for this task.
+  const TASK_FAILED_STATUSES = ['failed', 'error', 'cancelled'];
   // downloadId -> { windowId, timer }. The browser download stays paused while the
   // entry exists; every exit path resumes it.
   const pendingConfirms = new Map();
   // Download ids whose confirmation was already resolved (accept/reject/timeout).
   const decidedDownloads = new Set();
-  // Overridable for the Node tests only; production always uses the constant.
+  // Overridable for the Node tests only; production always uses the constants.
   let confirmTimeoutMs = CAPTURE_CONFIRM_TIMEOUT_MS;
+  const captureTiming = {
+    ownershipTimeoutMs: TASK_OWNERSHIP_TIMEOUT_MS,
+    pollIntervalMs: TASK_POLL_INTERVAL_MS,
+    windowTimeoutMs: CONFIRM_WINDOW_TIMEOUT_MS,
+  };
 
   function trackHandledId(id) {
     if (handledDownloadIds.size >= 100) {
@@ -144,9 +156,13 @@ if (typeof importScripts === 'function') {
   const NOTIFICATION_ID = 'segmenta-task-added';
   const NOTIFICATION_TIMEOUT_MS = 2000;
   const NOTIFICATION_ICON = 'icons/icon-128.png';
+  const CAPTURE_KEPT_NOTIFICATION_ID = 'segmenta-capture-kept';
   // ASCII source, Spanish literal: the catalogs supply the real title.
   const TASK_ADDED_TITLE_FALLBACK = 'A\u00f1adida a Segmenta';
   const TASK_ADDED_BODY_FALLBACK = 'La tarea se abri\u00f3 en Segmenta.';
+  const CAPTURE_KEPT_TITLE_FALLBACK = 'Descarga conservada en el navegador';
+  const CAPTURE_KEPT_BODY_FALLBACK =
+    'Segmenta no recibi\u00f3 los datos. La descarga contin\u00faa en tu navegador.';
 
   function message(key, substitutions) {
     if (!API || typeof API.getMessage !== 'function') {
@@ -156,19 +172,9 @@ if (typeof importScripts === 'function') {
     return typeof text === 'string' ? text : '';
   }
 
+  /** Folder that contains a path; the same helper the confirmation window uses. */
   function parentDirectory(value) {
-    if (typeof value !== 'string') {
-      return '';
-    }
-    const trimmed = value.trim().replace(/[\\/]+$/, '');
-    if (!trimmed) {
-      return '';
-    }
-    const cut = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf('\\'));
-    if (cut === 0) {
-      return trimmed.slice(0, 1);
-    }
-    return cut > 0 ? trimmed.slice(0, cut) : '';
+    return PROTOCOL.parentDirectory(value);
   }
 
   /** Folder the task lands in: destination_dir, else the parent of final_path. */
@@ -195,10 +201,10 @@ if (typeof importScripts === 'function') {
     return runtime && runtime.notifications ? runtime.notifications : null;
   }
 
-  // Resolves to true when the toast was handed to the browser; it never rejects.
-  // An absent API, a refused permission, a create() error and a silent browser are
-  // all reported as "no toast" instead of an error.
-  function showTaskNotification(folder) {
+  // Resolves to true when the notification was handed to the browser; it never
+  // rejects. An absent API, a refused permission, a create() error and a silent
+  // browser are all reported as "no notification" instead of an error.
+  function notifyUser(notificationId, title, body) {
     const notifications = notificationsApi();
     if (!notifications || typeof notifications.create !== 'function') {
       return Promise.resolve(false);
@@ -206,8 +212,8 @@ if (typeof importScripts === 'function') {
     const options = {
       type: 'basic',
       iconUrl: NOTIFICATION_ICON,
-      title: message('taskAddedTitle') || TASK_ADDED_TITLE_FALLBACK,
-      message: taskAddedBody(folder),
+      title: title,
+      message: body,
     };
     return new Promise((resolve) => {
       let settled = false;
@@ -224,7 +230,7 @@ if (typeof importScripts === 'function') {
       };
       timer = setTimeout(() => finish(false), NOTIFICATION_TIMEOUT_MS);
       try {
-        const returned = notifications.create(NOTIFICATION_ID, options, () => finish(true));
+        const returned = notifications.create(notificationId, options, () => finish(true));
         if (returned && typeof returned.then === 'function') {
           returned.then(() => finish(true), () => finish(false));
         } else if (typeof returned !== 'undefined') {
@@ -234,6 +240,23 @@ if (typeof importScripts === 'function') {
         finish(false);
       }
     });
+  }
+
+  function showTaskNotification(folder) {
+    return notifyUser(
+      NOTIFICATION_ID,
+      message('taskAddedTitle') || TASK_ADDED_TITLE_FALLBACK,
+      taskAddedBody(folder),
+    );
+  }
+
+  /** Tells the user the browser copy was kept because Segmenta never got the data. */
+  function showCaptureKeptNotification() {
+    return notifyUser(
+      CAPTURE_KEPT_NOTIFICATION_ID,
+      message('captureKeptTitle') || CAPTURE_KEPT_TITLE_FALLBACK,
+      message('captureKeptBody') || CAPTURE_KEPT_BODY_FALLBACK,
+    );
   }
 
   function openTask(taskId) {
@@ -356,20 +379,15 @@ if (typeof importScripts === 'function') {
   }
 
   /**
-   * Effective destination folder reported by the daemon. The extension never
-   * invents a path: when the settings carry none the window shows it as pending.
+   * Effective destination folder reported by the daemon. `Settings` only carries
+   * `download_dir`; the per-task folder arrives later with the add reply. The
+   * extension never invents a path: without it the window shows it as pending.
    */
   function captureFolder(settings) {
     if (!settings || typeof settings !== 'object') {
       return '';
     }
-    for (const key of ['destination_dir', 'download_dir']) {
-      const value = typeof settings[key] === 'string' ? settings[key].trim() : '';
-      if (value) {
-        return value;
-      }
-    }
-    return '';
+    return typeof settings.download_dir === 'string' ? settings.download_dir.trim() : '';
   }
 
   function buildConfirmUrl(baseUrl, entry) {
@@ -421,7 +439,7 @@ if (typeof importScripts === 'function') {
     }
   }
 
-  /** Cancels and erases the browser copy. Only ever called after a successful add. */
+  /** Cancels and erases the browser copy. Only called once the daemon holds bytes. */
   async function discardDownload(downloadId) {
     try {
       if (API.downloads && typeof API.downloads.cancel === 'function') {
@@ -448,15 +466,99 @@ if (typeof importScripts === 'function') {
     );
   }
 
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function taskStatusName(data) {
+    return data && typeof data.status === 'string' ? data.status.trim().toLowerCase() : '';
+  }
+
+  /** True once the daemon holds bytes for the task, or already finished it. */
+  function taskOwnsBytes(data) {
+    if (!data || typeof data !== 'object') {
+      return false;
+    }
+    const status = taskStatusName(data);
+    if (status === 'completed') {
+      return true;
+    }
+    const bytes = Number(data.downloaded_bytes);
+    return status === 'downloading' && Number.isFinite(bytes) && bytes > 0;
+  }
+
+  function taskFailed(data) {
+    return TASK_FAILED_STATUSES.indexOf(taskStatusName(data)) !== -1;
+  }
+
   /**
-   * Safe capture order: add, then cancel+erase, then announce. A failed add resumes
-   * the browser download, which still owns the file.
+   * Bounded wait for the daemon to demonstrably own the file, over the same
+   * `media.status` path the panel already uses. A host error is treated as "not yet"
+   * so only the budget can end the wait: a transient status failure never loses the
+   * download.
+   */
+  async function waitForTaskOwnership(taskId) {
+    const deadline = Date.now() + captureTiming.ownershipTimeoutMs;
+    for (;;) {
+      const reply = await callHost(() => PROTOCOL.buildStatus({ taskId: taskId }));
+      if (reply.ok) {
+        if (taskOwnsBytes(reply.data)) {
+          return true;
+        }
+        if (taskFailed(reply.data)) {
+          return false;
+        }
+      }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        return false;
+      }
+      await sleep(Math.min(captureTiming.pollIntervalMs, remaining));
+    }
+  }
+
+  /** Best effort: drop a task the extension created but cannot own. No file deleted. */
+  async function dropCapturedTask(taskId) {
+    if (!taskId) {
+      return false;
+    }
+    const reply = await callHost(() => PROTOCOL.buildDownloadCancel({ taskId: taskId }));
+    return !!(reply && reply.ok);
+  }
+
+  /**
+   * Keeps the browser copy: resume it, drop the orphan task and, when no window
+   * can explain it, tell the user the download stayed in the browser.
+   */
+  async function keepBrowserCopy(entry, taskId) {
+    await resumeDownload(entry.downloadId);
+    await dropCapturedTask(taskId);
+    if (entry.inform) {
+      try {
+        await showCaptureKeptNotification();
+      } catch (err) {}
+    }
+    return failure(
+      'ERR_CAPTURE_NOT_OWNED',
+      'the task never received data; the browser copy was kept',
+    );
+  }
+
+  /**
+   * Safe capture order: add, wait until the task demonstrably holds bytes, then
+   * cancel+erase and announce. Anything short of proven ownership resumes the
+   * browser download, which still owns the file.
    */
   async function completeCapture(entry) {
     const reply = await addCapturedDownload(entry);
     if (!reply.ok) {
       await resumeDownload(entry.downloadId);
       return reply;
+    }
+    const taskId = reply.data && typeof reply.data.task_id === 'string' ? reply.data.task_id.trim() : '';
+    const owned = taskId ? await waitForTaskOwnership(taskId) : false;
+    if (!owned) {
+      return keepBrowserCopy(entry, taskId);
     }
     await discardDownload(entry.downloadId);
     await announceAddedTask(reply.data);
@@ -509,14 +611,35 @@ if (typeof importScripts === 'function') {
       await abandonConfirm(pendingConfirms.keys().next().value);
     }
     let created = null;
+    // windows.create is the last unguarded await of the pause -> handoff stretch: a
+    // browser that never answers must not leave the download paused forever.
+    const attempt = new Promise((resolve, reject) => {
+      try {
+        resolve(
+          windows.create({
+            url: buildConfirmUrl(confirmPageUrl(), entry),
+            type: 'popup',
+            width: 460,
+            height: 380,
+          }),
+        );
+      } catch (err) {
+        reject(err);
+      }
+    });
     try {
-      created = await windows.create({
-        url: buildConfirmUrl(confirmPageUrl(), entry),
-        type: 'popup',
-        width: 460,
-        height: 380,
-      });
+      created = await withTimeout(attempt, captureTiming.windowTimeoutMs);
     } catch (err) {
+      // A window that shows up after the timeout would be orphaned: close it and
+      // let the browser download continue.
+      attempt.then(
+        (late) => {
+          if (late && typeof late.id === 'number') {
+            closeConfirmWindow(late.id);
+          }
+        },
+        () => {},
+      );
       await resumeDownload(entry.downloadId);
       return false;
     }
@@ -571,6 +694,18 @@ if (typeof importScripts === 'function') {
       confirmTimeoutMs = numeric;
     }
     return confirmTimeoutMs;
+  }
+
+  /** Overridable bounded waits (tests only); production keeps the constants. */
+  function setCaptureTiming(overrides) {
+    const input = overrides && typeof overrides === 'object' ? overrides : {};
+    for (const key of ['ownershipTimeoutMs', 'pollIntervalMs', 'windowTimeoutMs']) {
+      const numeric = Number(input[key]);
+      if (Number.isFinite(numeric) && numeric > 0) {
+        captureTiming[key] = numeric;
+      }
+    }
+    return Object.assign({}, captureTiming);
   }
 
   async function onDownloadCreated(downloadItem) {
@@ -636,15 +771,19 @@ if (typeof importScripts === 'function') {
       return;
     }
 
+    const confirm = captureConfirmEnabled(settings);
     const entry = {
       downloadId: downloadItem.id,
       url: url,
       filename: typeof downloadItem.filename === 'string' ? downloadItem.filename : '',
       referrer: typeof downloadItem.referrer === 'string' ? downloadItem.referrer : '',
       folder: captureFolder(settings),
+      // Without a window to report the outcome, the notification is the only way to
+      // tell the user the browser copy was kept.
+      inform: !confirm,
     };
 
-    if (!captureConfirmEnabled(settings)) {
+    if (!confirm) {
       await completeCapture(entry);
       return;
     }
@@ -769,6 +908,10 @@ if (typeof importScripts === 'function') {
     SETTINGS_CACHE_VERSION: SETTINGS_CACHE_VERSION,
     CONFIRM_PAGE: CONFIRM_PAGE,
     CAPTURE_CONFIRM_TIMEOUT_MS: CAPTURE_CONFIRM_TIMEOUT_MS,
+    TASK_OWNERSHIP_TIMEOUT_MS: TASK_OWNERSHIP_TIMEOUT_MS,
+    TASK_POLL_INTERVAL_MS: TASK_POLL_INTERVAL_MS,
+    CONFIRM_WINDOW_TIMEOUT_MS: CONFIRM_WINDOW_TIMEOUT_MS,
+    CAPTURE_KEPT_NOTIFICATION_ID: CAPTURE_KEPT_NOTIFICATION_ID,
     handle: handle,
     hostFailure: hostFailure,
     onDownloadCreated: onDownloadCreated,
@@ -779,6 +922,7 @@ if (typeof importScripts === 'function') {
     destinationFolder: destinationFolder,
     taskAddedBody: taskAddedBody,
     showTaskNotification: showTaskNotification,
+    showCaptureKeptNotification: showCaptureKeptNotification,
     announceAddedTask: announceAddedTask,
     callHostAndAnnounce: callHostAndAnnounce,
     captureFolder: captureFolder,
@@ -786,8 +930,12 @@ if (typeof importScripts === 'function') {
     buildConfirmUrl: buildConfirmUrl,
     openConfirmWindow: openConfirmWindow,
     completeCapture: completeCapture,
+    waitForTaskOwnership: waitForTaskOwnership,
+    taskOwnsBytes: taskOwnsBytes,
+    dropCapturedTask: dropCapturedTask,
     decideCapture: decideCapture,
     onWindowRemoved: onWindowRemoved,
     setConfirmTimeoutMs: setConfirmTimeoutMs,
+    setCaptureTiming: setCaptureTiming,
   };
 })(typeof globalThis !== 'undefined' ? globalThis : this);
