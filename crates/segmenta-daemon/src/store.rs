@@ -565,6 +565,24 @@ fn is_legacy_capture_list(current: &[String], legacy: &[&str]) -> bool {
     current.len() == legacy.len() && current.iter().zip(legacy).all(|(token, old)| token == old)
 }
 
+/// Upgrade a historical default list to the current one without dropping tokens.
+///
+/// The 0.1.0 default carried formats the 0.1.2 default does not (`dmg`, `flac`, `tgz`,
+/// `webm`), so replacing the list would silently stop capturing them. The upgrade is a
+/// union instead: the current defaults first, then every legacy token they lack in the
+/// order the stored list had it. Idempotent: applying it to its own result changes
+/// nothing.
+fn upgraded_capture_list(legacy: &[&str]) -> Vec<String> {
+    let mut upgraded = Settings::default().capture_extensions;
+    for token in legacy {
+        let token = token.to_string();
+        if !upgraded.contains(&token) {
+            upgraded.push(token);
+        }
+    }
+    upgraded
+}
+
 fn is_hh_mm(value: &str) -> bool {
     let Some((hh, mm)) = value.split_once(':') else {
         return false;
@@ -1211,14 +1229,15 @@ impl Store {
         settings = serde_json::from_value(object)
             .map_err(|err| StoreError::Invalid(format!("stored settings are invalid: {err}")))?;
         // Older releases stored their own default list as a row. Upgrade that exact
-        // default in memory for existing profiles; a list the user customized is left
-        // untouched. Keys written before they existed already took their default above.
+        // default in memory for existing profiles by union, so formats only the old
+        // default had are kept; a list the user customized is left untouched. Keys
+        // written before they existed already took their default above.
         for legacy in [
             LEGACY_CAPTURE_EXTENSIONS_0_1_1,
             LEGACY_CAPTURE_EXTENSIONS_0_1_0,
         ] {
             if is_legacy_capture_list(&settings.capture_extensions, legacy) {
-                settings.capture_extensions = Settings::default().capture_extensions;
+                settings.capture_extensions = upgraded_capture_list(legacy);
                 break;
             }
         }
