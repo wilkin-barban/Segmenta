@@ -305,13 +305,28 @@ Respuesta:
 
 ```json
 {"result":{"kind":"video","title":"...","duration_seconds":213,"thumbnail":"https://...",
- "formats":[{"format_id":"137","label":"1080p","height":1080,"ext":"mp4","kind":"video"}],
- "audio":[{"format_id":"140","label":"m4a","ext":"m4a"}],
+ "formats":[{"format_id":"22","label":"720p","height":720,"ext":"mp4","kind":"video"}],
+ "audio":[{"format_id":"251","label":"webm","ext":"webm","kind":"audio"}],
+ "qualities":[{"quality":"720","label":"720p","height":720,"format_id":"22"},
+              {"quality":"audio","label":"audio","height":null,"format_id":"251"}],
+ "default_quality":"720",
  "playlist":{"count":0,"entries":[]}}}
 ```
 
 - `kind` ∈ `video|playlist|stream`. Para una playlist, `playlist.count` es el total público y
   `entries` una muestra acotada (máximo 200).
+- `formats` llega deduplicado por altura: un solo candidato por altura, el mejor según muxed
+  (vídeo+audio en un archivo), luego DASH video-only, luego el de mayor bitrate. `audio` va
+  ordenado por bitrate descendente.
+- `qualities` es la escalera agrupada que consume la extensión: como máximo `2160` (etiqueta
+  `4K`), `1080`, `720`, `360` y una entrada `audio`, en ese orden y sólo cuando existen. Las
+  demás alturas que reporta el backend (480, 240, …) se omiten en la escalera aunque sigan en
+  `formats`. Cada entrada lleva `quality`, `label`, `height` (`null` para audio) y el
+  `format_id` del candidato elegido para esa altura.
+- `default_quality` vale `720` cuando está disponible; si no, la altura disponible más cercana
+  (los empates resuelven hacia la mayor calidad); si no hay ninguna altura, `audio`.
+- Los manifiestos HLS/DASH devuelven la misma escalera calculada sobre sus variantes o
+  representaciones, sin entrada `audio`.
 - El daemon valida esquema y host; sólo `https://`. Errores: `1004`, `1022`, `1023`, `1031`,
   `1040`-`1045`.
 
@@ -319,10 +334,14 @@ Respuesta:
 
 ```json
 {"method":"media.add","params":{"url":"https://www.youtube.com/watch?v=...",
- "mode":"video","format_id":"137","height":1080,"playlist_limit":100}}
+ "mode":"video","height":720,"playlist_limit":100}}
 ```
 
 - `mode` ∈ `video|audio|playlist`. `playlist_limit` se acota a 1–500 (default 100).
+- En `mode: "video"` (y `"playlist"`) la calidad se elige **por `height`**: el daemon ignora
+  `format_id` y compone el selector muxed/DASH por altura; `media_format` guarda `"720p"`.
+  Sólo `mode: "audio"` usa `format_id`. Para manifiestos, `height` selecciona la variante o
+  representación concreta en lugar de la mejor disponible.
 - Devuelve `{"task_id":"...","status":"downloading","kind":"youtube_video"}`.
 - `download_type` pasa a admitir `youtube_video`, `youtube_playlist`, `youtube_audio`, además de
   `direct`, `hls` y `dash`.
