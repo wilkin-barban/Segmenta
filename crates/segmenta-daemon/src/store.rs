@@ -598,6 +598,16 @@ pub fn parse_hh_mm(value: &str) -> Option<u32> {
     }
 }
 
+/// Validate the `max_active` range shared by `queue.create` and the queue update.
+fn validate_max_active(max_active: u32) -> Result<()> {
+    if !(1..=8).contains(&max_active) {
+        return Err(StoreError::Queue(
+            "max_active must be between 1 and 8".into(),
+        ));
+    }
+    Ok(())
+}
+
 impl Settings {
     /// Apply a JSON patch, rejecting unknown keys and out-of-range values.
     pub fn apply_patch(&mut self, patch: &serde_json::Map<String, Value>) -> Result<()> {
@@ -1139,14 +1149,25 @@ impl Store {
     /// A paused task does not hold a slot and neither does a terminal one, exactly the
     /// state list OpenSpec 12 §3 names.
     pub fn active_count(&self, queue: &str) -> Result<u32> {
+        Ok(self.active_ids(queue)?.len() as u32)
+    }
+
+    /// Ids of the tasks of one queue that occupy a `max_active` slot right now.
+    ///
+    /// The manager merges this set with the tasks it has already spawned but not yet
+    /// marked, so two concurrent starts can never see the same free slot twice.
+    pub fn active_ids(&self, queue: &str) -> Result<Vec<String>> {
         let conn = self.lock();
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM downloads WHERE queue_name = ?1 AND status IN
+        let mut statement = conn.prepare(
+            "SELECT id FROM downloads WHERE queue_name = ?1 AND status IN
              ('downloading', 'probing', 'retrying', 'verifying', 'finalizing')",
-            params![queue],
-            |row| row.get(0),
         )?;
-        Ok(count.max(0) as u32)
+        let mapped = statement.query_map(params![queue], |row| row.get::<_, String>(0))?;
+        let mut rows = Vec::new();
+        for row in mapped {
+            rows.push(row?);
+        }
+        Ok(rows)
     }
 
     /// Segments of one task, ordered by start offset.
@@ -1361,11 +1382,7 @@ impl Store {
         {
             return Err(StoreError::Queue("queue name must match [a-z0-9_-]".into()));
         }
-        if !(1..=8).contains(&max_active) {
-            return Err(StoreError::Queue(
-                "max_active must be between 1 and 8".into(),
-            ));
-        }
+        validate_max_active(max_active)?;
         let conn = self.lock();
         conn.execute(
             "INSERT INTO queues (name, max_active) VALUES (?1, ?2)",
@@ -1379,6 +1396,25 @@ impl Store {
             }
             other => StoreError::Sqlite(other),
         })?;
+        Ok(())
+    }
+
+    /// Change the concurrency of an existing queue.
+    ///
+    /// `max_active` is read from the `queues` row by every start, so the new value
+    /// applies to the next start and never to a task already running (OpenSpec 12 §3):
+    /// lowering the limit below the active count leaves the queue in debt until those
+    /// tasks end.
+    pub fn set_queue_max_active(&self, name: &str, max_active: u32) -> Result<()> {
+        validate_max_active(max_active)?;
+        let conn = self.lock();
+        let affected = conn.execute(
+            "UPDATE queues SET max_active = ?2 WHERE name = ?1",
+            params![name, max_active as i64],
+        )?;
+        if affected == 0 {
+            return Err(StoreError::Queue(format!("queue `{name}` does not exist")));
+        }
         Ok(())
     }
 

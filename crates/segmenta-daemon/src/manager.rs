@@ -49,6 +49,8 @@ pub struct ProgressSnapshot {
 struct RunningTask {
     cancel: Canceller,
     handle: tokio::task::JoinHandle<()>,
+    /// Queue the task belongs to, so its slot can be counted without a second lookup.
+    queue: String,
 }
 
 /// Coordinates the store, the engine and the IPC layer.
@@ -59,6 +61,9 @@ pub struct Manager {
     settings: Mutex<Settings>,
     progress: Arc<Mutex<HashMap<String, ProgressSnapshot>>>,
     running: Arc<Mutex<HashMap<String, RunningTask>>>,
+    /// Serialises the slot decision of [`Manager::start_pending_for_queue`]: two callers
+    /// (an RPC handler and the scheduler tick) must never both see the same free slot.
+    start_lock: Mutex<()>,
     shutdown: watch::Sender<bool>,
     /// Wall clock the scheduler gate reads; injectable so tests never depend on the host.
     clock: Mutex<Arc<dyn Clock>>,
@@ -83,6 +88,7 @@ impl Manager {
             settings: Mutex::new(settings),
             progress: Arc::new(Mutex::new(HashMap::new())),
             running: Arc::new(Mutex::new(HashMap::new())),
+            start_lock: Mutex::new(()),
             shutdown,
             clock: Mutex::new(Arc::new(LocalClock)),
             scheduler_wake: Arc::new(Notify::new()),
@@ -176,28 +182,62 @@ impl Manager {
         self.queue_schedule(queue).is_open_at(self.minute_of_day())
     }
 
-    /// Start every pending task of `queue` that fits right now.
+    /// Tasks of `queue` that already occupy a slot, running here or persisted as active.
     ///
-    /// This is the single entry point of OpenSpec 12 §2: the scheduler and the resume
-    /// path both come through here, and a closed window or a full queue starts nothing.
-    /// Every step is synchronous, so the `running` mutex is never held across an `await`.
-    pub fn start_pending_for_queue(&self, queue: &str) -> Result<usize, RpcError> {
-        if !self.queue_is_open(queue) {
-            tracing::debug!(queue = %queue, "queue window is closed");
-            return Ok(0);
+    /// The persisted states cover a task the engine restarts (`retrying`, `verifying`,
+    /// `finalizing`); the in-memory map covers a task this process has just spawned but
+    /// whose row is not the scheduler's business yet. Task ids make the union exact, so a
+    /// task present in both places is only counted once.
+    fn occupied_slots(&self, queue: &str) -> Result<usize, StoreError> {
+        let mut occupied: std::collections::HashSet<String> =
+            self.store.active_ids(queue)?.into_iter().collect();
+        let running = self.running.lock().unwrap_or_else(|err| err.into_inner());
+        for (id, task) in running.iter() {
+            if task.queue == queue {
+                occupied.insert(id.clone());
+            }
         }
+        Ok(occupied.len())
+    }
+
+    /// Free `max_active` slots of `queue` right now.
+    ///
+    /// `None` means the queue does not exist (SQLite rejects a task that references it,
+    /// so the caller simply has nothing to start). The limit is read from the `queues`
+    /// row on every call, never cached: `queue.create` and the queue update stay the only
+    /// source of truth, and a raised limit applies to the next start.
+    fn free_slots(&self, queue: &str) -> Result<Option<usize>, RpcError> {
         let queues = self.store.queues().map_err(store_error)?;
         let Some(max_active) = queues
             .iter()
             .find(|row| row.name == queue)
             .map(|row| row.max_active)
         else {
-            // A task cannot reference a queue that does not exist (SQLite enforces it),
-            // so an unknown name simply has nothing to start.
+            return Ok(None);
+        };
+        let active = self.occupied_slots(queue).map_err(store_error)?;
+        Ok(Some((max_active as usize).saturating_sub(active)))
+    }
+
+    /// Start every pending task of `queue` that fits right now.
+    ///
+    /// This is the single entry point of OpenSpec 12 §2: the scheduler and the resume
+    /// path both come through here, so a closed window or a full queue starts nothing.
+    /// Every step is synchronous, so the `running` mutex is never held across an `await`.
+    pub fn start_pending_for_queue(&self, queue: &str) -> Result<usize, RpcError> {
+        // One start decision at a time: the window, the limit and the pending list must
+        // be read and acted on without another caller slipping a task into the same slot.
+        let _gate = self
+            .start_lock
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        if !self.queue_is_open(queue) {
+            tracing::debug!(queue = %queue, "queue window is closed");
+            return Ok(0);
+        }
+        let Some(free) = self.free_slots(queue)? else {
             return Ok(0);
         };
-        let active = self.store.active_count(queue).map_err(store_error)?;
-        let free = max_active.saturating_sub(active) as usize;
         if free == 0 {
             return Ok(0);
         }
@@ -208,6 +248,11 @@ impl Manager {
         let connections = self.settings().max_connections;
         let mut started = 0;
         for record in pending {
+            // A completion that lands between two iterations frees a slot this loop has
+            // already spent; stopping at `free` keeps the limit true either way.
+            if started >= free {
+                break;
+            }
             match self.start_task(&record.id, connections) {
                 Ok(()) => {
                     started += 1;
@@ -461,8 +506,21 @@ impl Manager {
                 "final_path": record.final_path,
             }),
         );
-        if params.start_immediately && self.queue_is_open(&params.queue_name) {
-            self.start_task(&task_id, connections)?;
+        if params.start_immediately {
+            // `download.add` uses the same gate and the same limit as the scheduler path.
+            // When no slot fits, the task stays `pending` and the completion of a running
+            // one (which wakes the scheduler) starts it, in queue priority order.
+            let _gate = self
+                .start_lock
+                .lock()
+                .unwrap_or_else(|err| err.into_inner());
+            if self.queue_is_open(&params.queue_name) {
+                if let Some(free) = self.free_slots(&params.queue_name)? {
+                    if free > 0 {
+                        self.start_task(&task_id, connections)?;
+                    }
+                }
+            }
         }
         // A closed window leaves the task `pending`: the scheduler starts it when the
         // window opens instead of the daemon ignoring the schedule on `download.add`.
@@ -564,9 +622,25 @@ impl Manager {
         let store = Arc::clone(&self.store);
         let bus = Arc::clone(&self.bus);
         let progress = Arc::clone(&self.progress);
+        let running = Arc::clone(&self.running);
         let id = task_id.to_string();
         let cancel_for_task = cancel.clone();
         let wake = Arc::clone(&self.scheduler_wake);
+        let queue = record.queue_name.clone();
+
+        // Claim the slot while holding the same lock that owns the in-flight set: the
+        // spawned task removes itself before releasing the lock, so a task that ends
+        // immediately can neither leave a stale entry behind nor let a second caller
+        // start an extra task in a slot that is already gone.
+        let mut inflight = self.running.lock().unwrap_or_else(|err| err.into_inner());
+        if inflight.contains_key(task_id) {
+            return Err(RpcError::task_already_active(task_id));
+        }
+        // `downloading` is persisted before the engine exists, so the slot is visible to
+        // [`Manager::occupied_slots`] even if the very first event is a terminal one.
+        self.store
+            .set_status(task_id, DownloadStatus::Downloading, None)
+            .map_err(store_error)?;
         let join = tokio::spawn(async move {
             let engine = tokio::spawn(run_engine(cfg, spec, event_tx, cancel_for_task));
             while let Some(event) = event_rx.recv().await {
@@ -576,22 +650,24 @@ impl Manager {
                 error: CoreError::Network(format!("engine task panicked: {err}")),
             });
             finish_task(&store, &bus, &progress, &id, outcome);
-            // The slot is free now: wake the scheduler instead of waiting for the tick.
+            // The slot is free now: drop the in-flight entry before waking the queue
+            // path, which reads it to decide how many tasks still fit, and wake the
+            // scheduler instead of waiting for the next tick.
+            running
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .remove(&id);
             wake.notify_one();
         });
-        self.running
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .insert(
-                task_id.to_string(),
-                RunningTask {
-                    cancel,
-                    handle: join,
-                },
-            );
-        self.store
-            .set_status(task_id, DownloadStatus::Downloading, None)
-            .map_err(store_error)?;
+        inflight.insert(
+            task_id.to_string(),
+            RunningTask {
+                cancel,
+                handle: join,
+                queue,
+            },
+        );
+        drop(inflight);
         self.publish_state(task_id, "pending", "downloading", None);
         Ok(())
     }
@@ -1727,7 +1803,15 @@ impl Manager {
         self.running
             .lock()
             .unwrap_or_else(|err| err.into_inner())
-            .insert(task_id.clone(), RunningTask { cancel, handle });
+            .insert(
+                task_id.clone(),
+                RunningTask {
+                    cancel,
+                    handle,
+                    // Media and torrent tasks are added to the default queue.
+                    queue: "main".to_string(),
+                },
+            );
         Ok(json!({
             "task_id": task_id,
             "status": "downloading",
@@ -2018,7 +2102,15 @@ impl Manager {
         self.running
             .lock()
             .unwrap_or_else(|err| err.into_inner())
-            .insert(task_id.clone(), RunningTask { cancel, handle });
+            .insert(
+                task_id.clone(),
+                RunningTask {
+                    cancel,
+                    handle,
+                    // Media and torrent tasks are added to the default queue.
+                    queue: "main".to_string(),
+                },
+            );
 
         Ok(json!({
             "task_id": task_id,
@@ -2170,7 +2262,15 @@ impl Manager {
         self.running
             .lock()
             .unwrap_or_else(|err| err.into_inner())
-            .insert(task_id, RunningTask { cancel, handle });
+            .insert(
+                task_id,
+                RunningTask {
+                    cancel,
+                    handle,
+                    // Media tasks are added to the default queue.
+                    queue: "main".to_string(),
+                },
+            );
         Ok(())
     }
 }
