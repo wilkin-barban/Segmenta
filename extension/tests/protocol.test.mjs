@@ -14,6 +14,7 @@ export default function suite({ test }) {
       'buildProbe',
       'buildAdd',
       'buildStatus',
+      'buildSystemOpen',
       'validateHostReply',
       'clampPlaylistLimit',
       'sanitizeText',
@@ -191,6 +192,38 @@ export default function suite({ test }) {
     assert.throws(() => P.buildStatus({ taskId: '' }), /task/i);
     assert.throws(() => P.buildStatus({}), /task/i);
     assert.throws(() => P.buildStatus({ taskId: 'has space' }), /task/i);
+  });
+
+  test('buildSystemOpen builds the system.open envelope', async () => {
+    const P = await loadShared('SegmentaProtocol', 'protocol.js');
+    assert.deepEqual(P.buildSystemOpen({ taskId: 'task-123456', id: 12 }), {
+      jsonrpc: '2.0',
+      id: 12,
+      method: 'system.open',
+      params: { task_id: 'task-123456' },
+    });
+    const uuid = '123e4567-e89b-12d3-a456-426614174000';
+    const generated = P.buildSystemOpen({ taskId: uuid });
+    assert.equal(generated.method, 'system.open');
+    assert.equal(typeof generated.id, 'number');
+    assert.deepEqual(generated.params, { task_id: uuid });
+    // Surrounding whitespace is trimmed before the id is validated.
+    assert.deepEqual(P.buildSystemOpen({ taskId: '  task-123456  ', id: 13 }).params, {
+      task_id: 'task-123456',
+    });
+  });
+
+  test('buildSystemOpen rejects ids outside the task id pattern', async () => {
+    const P = await loadShared('SegmentaProtocol', 'protocol.js');
+    for (const taskId of ['', '   ', 'short', 'has space', 'a;rm -rf /', '../etc/passwd', 'x'.repeat(65), null, 42]) {
+      assert.throws(
+        () => P.buildSystemOpen({ taskId: taskId }),
+        (err) => err instanceof P.ProtocolError && err.code === 'ERR_INVALID_PARAMS',
+        `should reject ${String(taskId)}`,
+      );
+    }
+    assert.throws(() => P.buildSystemOpen({}), /task/i);
+    assert.throws(() => P.buildSystemOpen(null), /task/i);
   });
 
   test('validateHostReply accepts a matching result reply', async () => {

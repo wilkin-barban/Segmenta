@@ -27,6 +27,7 @@ export default function suite({ test }) {
       'contextMenus',
       'downloads',
       'nativeMessaging',
+      'notifications',
       'scripting',
       'storage',
     ]);
@@ -97,6 +98,7 @@ export default function suite({ test }) {
     assert.equal(manifest.permissions.includes('storage'), true);
     assert.equal(manifest.permissions.includes('downloads'), true);
     assert.equal(manifest.permissions.includes('contextMenus'), true);
+    assert.equal(manifest.permissions.includes('notifications'), true);
     assert.equal(manifest.host_permissions.includes('https://www.youtube.com/*'), true);
     assert.equal(Array.isArray(manifest.background.scripts), true);
     assert.equal(manifest.background.scripts[manifest.background.scripts.length - 1], 'background.js');

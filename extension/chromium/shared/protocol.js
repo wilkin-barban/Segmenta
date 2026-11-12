@@ -335,6 +335,20 @@
   }
 
   /**
+   * Brings Segmenta to the front focused on one task. The id is validated with the
+   * same pattern every other task-scoped method uses, so the extension can never
+   * smuggle an arbitrary argument into the GUI launch.
+   */
+  function buildSystemOpen(input) {
+    const request = input && typeof input === 'object' ? input : {};
+    const taskId = typeof request.taskId === 'string' ? request.taskId.trim() : '';
+    if (!TASK_ID_PATTERN.test(taskId)) {
+      throw new ProtocolError('ERR_INVALID_PARAMS', 'task id is not acceptable');
+    }
+    return envelope('system.open', { task_id: taskId }, request.id);
+  }
+
+  /**
    * Validates a JSON-RPC 2.0 reply coming from the native host.
    * Returns {ok:true, id, result} or {ok:false, id, error:{code, message}}.
    * Throws ProtocolError when the envelope itself is not trustworthy.
@@ -446,6 +460,7 @@
     buildDownloadAdd: buildDownloadAdd,
     buildTorrentAdd: buildTorrentAdd,
     buildStatus: buildStatus,
+    buildSystemOpen: buildSystemOpen,
     envelope: envelope,
     validateHostReply: validateHostReply,
     sanitizeText: sanitizeText,

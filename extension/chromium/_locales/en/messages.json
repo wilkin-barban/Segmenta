@@ -178,5 +178,17 @@
   "notAvailable": {
     "message": "Segmenta is not available on this page.",
     "description": "Page without a floating button."
+  },
+  "taskAddedTitle": {
+    "message": "Added to Segmenta",
+    "description": "Notification title once the task is created."
+  },
+  "taskAddedBody": {
+    "message": "Destination folder: $1",
+    "description": "Notification body with the destination folder."
+  },
+  "taskAddedBodyGeneric": {
+    "message": "The task opened in Segmenta.",
+    "description": "Notification body when the host reports no folder."
   }
 }

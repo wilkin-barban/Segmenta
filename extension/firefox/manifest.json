@@ -32,7 +32,15 @@
       "background.js"
     ]
   },
-  "permissions": ["nativeMessaging", "storage", "scripting", "activeTab", "downloads", "contextMenus"],
+  "permissions": [
+    "nativeMessaging",
+    "storage",
+    "scripting",
+    "activeTab",
+    "downloads",
+    "contextMenus",
+    "notifications"
+  ],
   "host_permissions": ["https://www.youtube.com/*"],
   "optional_host_permissions": ["https://*/*"],
   "content_scripts": [
