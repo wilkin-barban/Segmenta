@@ -3,7 +3,7 @@
 //!
 //! Security boundaries of this module:
 //!
-//! * only methods under the `media.`, `system.`, `download.` and `settings.` prefixes
+//! * only methods under the `media.`, `system.`, `download.`, `settings.` and `torrent.` prefixes
 //!   reach the daemon; everything else is answered with `-32601` locally;
 //! * the browser never supplies a command, a path or an argument vector; the only
 //!   external process is `systemctl --user start segmenta.socket` with a fixed argv;
