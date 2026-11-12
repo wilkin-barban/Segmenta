@@ -5,7 +5,9 @@
 //   * validate every inbound message (sender, type, url, size);
 //   * translate an allowlisted message into one JSON-RPC 2.0 envelope;
 //   * correlate the native reply by id with a 10 s timeout;
-//   * never forward arbitrary methods, urls or commands to the host.
+//   * never forward arbitrary methods, urls or commands to the host;
+//   * never leave a browser download paused without a watchdog that survives the
+//     suspension of this worker.
 if (typeof importScripts === 'function') {
   importScripts('./shared/browser-api.js', './shared/protocol.js', './shared/validate.js');
 }
@@ -21,7 +23,7 @@ if (typeof importScripts === 'function') {
   const NATIVE_TIMEOUT_MS = 10000;
   // Bumped whenever the settings contract gains keys the extension reads, so an
   // older cache can never silently answer with the previous defaults (S11).
-  const SETTINGS_CACHE_VERSION = '0.1.2';
+  const SETTINGS_CACHE_VERSION = '0.1.3';
   // HLS/DASH sites are opt-in for the future optional host permission; until the
   // user grants a site, only the fixed allowlist below is accepted.
   const STREAM_ALLOWLIST = [];
@@ -37,10 +39,19 @@ if (typeof importScripts === 'function') {
   const TASK_OWNERSHIP_TIMEOUT_MS = 60000;
   const TASK_POLL_INTERVAL_MS = 1000;
   const CONFIRM_WINDOW_TIMEOUT_MS = 5000;
+  // The watchdog that survives MV3 service-worker suspension. `alarms` is the only
+  // timer the browser keeps across a suspended worker, and 1 minute is Chrome's
+  // production minimum period; the ~120 s decision timeout stays the deadline the
+  // persisted record carries, never the only guard.
+  const PENDING_CAPTURE_SCHEMA = 1;
+  const PENDING_CAPTURE_KEY = 'segmenta_pending_captures_v' + PENDING_CAPTURE_SCHEMA;
+  const CAPTURE_WATCHDOG_ALARM = 'segmenta-capture-watchdog';
+  const CAPTURE_WATCHDOG_PERIOD_MINUTES = 1;
   // A terminal state means the daemon will never hold bytes for this task.
   const TASK_FAILED_STATUSES = ['failed', 'error', 'cancelled'];
-  // downloadId -> { windowId, timer }. The browser download stays paused while the
-  // entry exists; every exit path resumes it.
+  // downloadId -> { windowId, deadline, timer }. The browser download stays paused
+  // while the entry exists; every exit path resumes it. This map is only the fast
+  // path: the persisted record plus the alarms watchdog outlive this worker.
   const pendingConfirms = new Map();
   // Download ids whose confirmation was already resolved (accept/reject/timeout).
   const decidedDownloads = new Set();
@@ -453,6 +464,287 @@ if (typeof importScripts === 'function') {
     } catch (err) {}
   }
 
+  // ---- Suspension-safe capture watchdog (S10) --------------------------------
+  // An MV3 service worker is suspended at will, so an in-memory timer can never be
+  // the only guard for a paused browser download. Every pause is preceded by a
+  // persisted pending record plus a periodic alarm, a fresh worker rehydrates both,
+  // and no record survives an exit: accept, reject, closed window, timeout or a
+  // failed host all remove it and clear the alarm once the list is empty.
+
+  // Serialises pending-record mutations: pause, decision, sweep and alarm can run
+  // concurrently in one worker, and a read-modify-write must not interleave.
+  let pendingStoreChain = Promise.resolve();
+
+  function withPendingStore(work) {
+    const run = pendingStoreChain.then(work, work);
+    pendingStoreChain = run.then(
+      () => {},
+      () => {},
+    );
+    return run;
+  }
+
+  async function readPendingRecords() {
+    const stored = await API.storage.get([PENDING_CAPTURE_KEY]);
+    const value = stored ? stored[PENDING_CAPTURE_KEY] : undefined;
+    if (value === undefined || value === null) {
+      return [];
+    }
+    // A scalar instead of a list is unreadable state, not an empty one: keep it so
+    // the sweep can drop it instead of silently leaking the paused download.
+    return Array.isArray(value) ? value : [value];
+  }
+
+  // An empty list is the "no pending record" state, written through the same
+  // storage.set path the settings cache already uses: one proven adapter call
+  // instead of a second one that could behave differently per browser.
+  async function writePendingRecords(records) {
+    await API.storage.set({ [PENDING_CAPTURE_KEY]: Array.isArray(records) ? records : [] });
+    return true;
+  }
+
+  /** Accepts only a well-formed record; anything else is healed by the sweep. */
+  function parsePendingRecord(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      return { ok: false, downloadId: null };
+    }
+    const downloadId = Number(raw.downloadId);
+    if (!Number.isInteger(downloadId) || downloadId < 0) {
+      return { ok: false, downloadId: null };
+    }
+    const deadline = Number(raw.deadline);
+    const windowId = Number(raw.windowId);
+    const windowIsKnown = raw.windowId === null || raw.windowId === undefined || Number.isInteger(windowId);
+    const valid = Number(raw.v) === PENDING_CAPTURE_SCHEMA
+      && Number.isFinite(deadline)
+      && deadline > 0
+      && typeof raw.url === 'string'
+      && raw.url.length > 0
+      && windowIsKnown;
+    if (!valid) {
+      return { ok: false, downloadId: downloadId };
+    }
+    return {
+      ok: true,
+      downloadId: downloadId,
+      record: {
+        v: PENDING_CAPTURE_SCHEMA,
+        downloadId: downloadId,
+        url: raw.url,
+        filename: typeof raw.filename === 'string' ? raw.filename : '',
+        referrer: typeof raw.referrer === 'string' ? raw.referrer : '',
+        windowId: Number.isInteger(windowId) ? windowId : null,
+        deadline: deadline,
+      },
+    };
+  }
+
+  async function createCaptureWatchdogAlarm() {
+    if (!API.alarms || typeof API.alarms.create !== 'function') {
+      throw new Error('segmenta: alarms api unavailable');
+    }
+    await API.alarms.create(CAPTURE_WATCHDOG_ALARM, {
+      delayInMinutes: CAPTURE_WATCHDOG_PERIOD_MINUTES,
+      periodInMinutes: CAPTURE_WATCHDOG_PERIOD_MINUTES,
+    });
+    return true;
+  }
+
+  async function clearCaptureWatchdogAlarm() {
+    if (!API.alarms || typeof API.alarms.clear !== 'function') {
+      return false;
+    }
+    try {
+      await API.alarms.clear(CAPTURE_WATCHDOG_ALARM);
+      return true;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  /**
+   * Persists the pending capture and arms the watchdog before anything is paused.
+   * False means "do not pause": without a record and a live alarm the download must
+   * stay untouched in the browser, even at the cost of skipping the capture.
+   */
+  async function armPendingCapture(entry) {
+    const record = {
+      v: PENDING_CAPTURE_SCHEMA,
+      downloadId: entry.downloadId,
+      url: entry.url,
+      filename: entry.filename || '',
+      referrer: entry.referrer || '',
+      windowId: null,
+      deadline: Date.now() + confirmTimeoutMs,
+    };
+    try {
+      await withPendingStore(async () => {
+        const records = (await readPendingRecords()).filter(
+          (candidate) => parsePendingRecord(candidate).downloadId !== record.downloadId,
+        );
+        records.push(record);
+        await writePendingRecords(records);
+      });
+    } catch (err) {
+      return false;
+    }
+    try {
+      await createCaptureWatchdogAlarm();
+    } catch (err) {
+      // No watchdog means no pause: undo the record we just wrote.
+      await resolvePendingCapture(entry.downloadId);
+      return false;
+    }
+    entry.deadline = record.deadline;
+    return true;
+  }
+
+  /** Records the confirmation window so a fresh worker can check it still exists. */
+  async function rememberPendingWindow(downloadId, windowId) {
+    if (!Number.isInteger(windowId)) {
+      return false;
+    }
+    try {
+      await withPendingStore(async () => {
+        const records = await readPendingRecords();
+        let changed = false;
+        const updated = records.map((candidate) => {
+          const parsed = parsePendingRecord(candidate);
+          if (!parsed.ok || parsed.record.downloadId !== downloadId) {
+            return candidate;
+          }
+          changed = true;
+          return Object.assign({}, parsed.record, { windowId: windowId });
+        });
+        if (changed) {
+          await writePendingRecords(updated);
+        }
+      });
+      return true;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  /**
+   * Removes one pending record and clears the alarm when nothing is left. The
+   * browser copy is resumed first when asked, so a crash in between still leaves the
+   * watchdog in place instead of an orphan paused download.
+   */
+  async function resolvePendingCapture(downloadId, options) {
+    if (options && options.resume) {
+      await resumeDownload(downloadId);
+    }
+    let remaining = null;
+    try {
+      remaining = await withPendingStore(async () => {
+        const records = await readPendingRecords();
+        const kept = records.filter(
+          (candidate) => parsePendingRecord(candidate).downloadId !== downloadId,
+        );
+        await writePendingRecords(kept);
+        return kept;
+      });
+    } catch (err) {
+      return -1;
+    }
+    if (remaining.length === 0) {
+      await clearCaptureWatchdogAlarm();
+    }
+    return remaining.length;
+  }
+
+  /** True when the confirmation window still exists; unknown means "leave it alone". */
+  async function confirmWindowStillOpen(windowId) {
+    if (!Number.isInteger(windowId)) {
+      return true;
+    }
+    const windows = API && API.windows ? API.windows : null;
+    if (!windows || typeof windows.get !== 'function') {
+      return true;
+    }
+    try {
+      const found = await windows.get(windowId);
+      return !!found;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  /**
+   * Rehydrates every pending record and finishes the job: an expired deadline, a
+   * vanished confirmation window or an unreadable payload resumes the browser
+   * download; a record whose window is still open is kept and the alarm re-armed.
+   */
+  async function sweepPendingCaptures() {
+    const summary = { resumed: [], kept: 0, dropped: 0 };
+    let records;
+    try {
+      records = await withPendingStore(readPendingRecords);
+    } catch (err) {
+      // Storage unreadable: the in-memory timers remain, nothing is resumed blind.
+      return summary;
+    }
+    if (records.length === 0) {
+      await clearCaptureWatchdogAlarm();
+      return summary;
+    }
+    const now = Date.now();
+    const keep = [];
+    for (const raw of records) {
+      const parsed = parsePendingRecord(raw);
+      if (!parsed.ok) {
+        if (parsed.downloadId !== null) {
+          await resumeDownload(parsed.downloadId);
+          summary.resumed.push(parsed.downloadId);
+        }
+        summary.dropped += 1;
+        continue;
+      }
+      const record = parsed.record;
+      if (record.deadline <= now) {
+        await resumeDownload(record.downloadId);
+        summary.resumed.push(record.downloadId);
+        continue;
+      }
+      if (!(await confirmWindowStillOpen(record.windowId))) {
+        await resumeDownload(record.downloadId);
+        summary.resumed.push(record.downloadId);
+        continue;
+      }
+      keep.push(record);
+    }
+    try {
+      await withPendingStore(() => writePendingRecords(keep));
+    } catch (err) {}
+    summary.kept = keep.length;
+    if (keep.length === 0) {
+      await clearCaptureWatchdogAlarm();
+    } else {
+      try {
+        await createCaptureWatchdogAlarm();
+      } catch (err) {}
+    }
+    return summary;
+  }
+
+  function onCaptureWatchdogAlarm(alarm) {
+    if (!alarm || alarm.name !== CAPTURE_WATCHDOG_ALARM) {
+      return false;
+    }
+    return sweepPendingCaptures();
+  }
+
+  if (API && API.alarms && API.alarms.onAlarm && typeof API.alarms.onAlarm.addListener === 'function') {
+    API.alarms.onAlarm.addListener(onCaptureWatchdogAlarm);
+  }
+
+  // A fresh browser run starts with no windows, so any leftover record is healed
+  // by the same sweep instead of waiting for the first alarm.
+  if (API && API.runtime && API.runtime.onStartup && typeof API.runtime.onStartup.addListener === 'function') {
+    API.runtime.onStartup.addListener(() => sweepPendingCaptures());
+  }
+
   function addCapturedDownload(entry) {
     if (PROTOCOL.parseTorrentUrl(entry.url)) {
       return callHost(() => PROTOCOL.buildTorrentAdd({ url: entry.url }));
@@ -597,7 +889,9 @@ if (typeof importScripts === 'function') {
     }
     trackDecidedId(downloadId);
     await closeConfirmWindow(pending.windowId);
-    await resumeDownload(downloadId);
+    // Resume first, then drop the record: a crash in between still leaves the
+    // watchdog, never an orphan paused download.
+    await resolvePendingCapture(downloadId, { resume: true });
     return true;
   }
 
@@ -644,10 +938,14 @@ if (typeof importScripts === 'function') {
       return false;
     }
     const windowId = created && typeof created.id === 'number' ? created.id : null;
+    // The record already bounds the wait with the persisted deadline; this timer is
+    // only the fast path while the worker is still alive.
+    const deadline = Number.isFinite(entry.deadline) ? entry.deadline : Date.now() + confirmTimeoutMs;
     const timer = setTimeout(() => {
       abandonConfirm(entry.downloadId);
-    }, confirmTimeoutMs);
-    pendingConfirms.set(entry.downloadId, { windowId: windowId, timer: timer });
+    }, Math.max(0, deadline - Date.now()));
+    pendingConfirms.set(entry.downloadId, { windowId: windowId, deadline: deadline, timer: timer });
+    await rememberPendingWindow(entry.downloadId, windowId);
     return true;
   }
 
@@ -658,6 +956,9 @@ if (typeof importScripts === 'function') {
         return;
       }
     }
+    // A worker that was suspended lost the in-memory map, so the sweep is the only
+    // way to notice that a paused download has no window left to decide on it.
+    return sweepPendingCaptures();
   }
 
   /** Handles the answer coming back from confirm.html. */
@@ -670,7 +971,7 @@ if (typeof importScripts === 'function') {
     forgetConfirm(downloadId);
 
     if (value.decision !== 'accept') {
-      await resumeDownload(downloadId);
+      await resolvePendingCapture(downloadId, { resume: true });
       return { ok: true, data: { accepted: false, download_id: downloadId } };
     }
 
@@ -681,7 +982,16 @@ if (typeof importScripts === 'function') {
       referrer: value.referrer || '',
       folder: '',
     };
-    const reply = await completeCapture(entry);
+    let reply;
+    let settled = false;
+    try {
+      reply = await completeCapture(entry);
+      settled = true;
+    } finally {
+      // Every exit clears the record: a completed capture, a kept browser copy or an
+      // unexpected failure (which then resumes the download before dropping it).
+      await resolvePendingCapture(downloadId, { resume: !settled });
+    }
     if (!reply.ok) {
       return reply;
     }
@@ -764,13 +1074,9 @@ if (typeof importScripts === 'function') {
       }
     }
 
-    // Pause first: an erased download cannot be resumed, so the browser copy must
-    // survive until the daemon owns the task.
-    const paused = await pauseDownload(downloadItem.id);
-    if (!paused) {
-      return;
-    }
-
+    // Persist the pending capture and arm the watchdog before anything is paused:
+    // an erased download cannot be resumed, and a paused one may outlive this
+    // worker. Without a record and a live alarm the download stays untouched.
     const confirm = captureConfirmEnabled(settings);
     const entry = {
       downloadId: downloadItem.id,
@@ -783,12 +1089,33 @@ if (typeof importScripts === 'function') {
       inform: !confirm,
     };
 
-    if (!confirm) {
-      await completeCapture(entry);
+    if (!(await armPendingCapture(entry))) {
       return;
     }
 
-    await openConfirmWindow(entry);
+    // Pause second: an erased download cannot be resumed, so the browser copy must
+    // survive until the daemon owns the task.
+    const paused = await pauseDownload(downloadItem.id);
+    if (!paused) {
+      await resolvePendingCapture(downloadItem.id);
+      return;
+    }
+
+    if (!confirm) {
+      let settled = false;
+      try {
+        await completeCapture(entry);
+        settled = true;
+      } finally {
+        await resolvePendingCapture(downloadItem.id, { resume: !settled });
+      }
+      return;
+    }
+
+    const opened = await openConfirmWindow(entry);
+    if (!opened) {
+      await resolvePendingCapture(downloadItem.id);
+    }
   }
 
   if (API && API.downloads && API.downloads.onCreated && typeof API.downloads.onCreated.addListener === 'function') {
@@ -911,6 +1238,10 @@ if (typeof importScripts === 'function') {
     TASK_OWNERSHIP_TIMEOUT_MS: TASK_OWNERSHIP_TIMEOUT_MS,
     TASK_POLL_INTERVAL_MS: TASK_POLL_INTERVAL_MS,
     CONFIRM_WINDOW_TIMEOUT_MS: CONFIRM_WINDOW_TIMEOUT_MS,
+    PENDING_CAPTURE_SCHEMA: PENDING_CAPTURE_SCHEMA,
+    PENDING_CAPTURE_KEY: PENDING_CAPTURE_KEY,
+    CAPTURE_WATCHDOG_ALARM: CAPTURE_WATCHDOG_ALARM,
+    CAPTURE_WATCHDOG_PERIOD_MINUTES: CAPTURE_WATCHDOG_PERIOD_MINUTES,
     CAPTURE_KEPT_NOTIFICATION_ID: CAPTURE_KEPT_NOTIFICATION_ID,
     handle: handle,
     hostFailure: hostFailure,
@@ -935,6 +1266,14 @@ if (typeof importScripts === 'function') {
     dropCapturedTask: dropCapturedTask,
     decideCapture: decideCapture,
     onWindowRemoved: onWindowRemoved,
+    armPendingCapture: armPendingCapture,
+    resolvePendingCapture: resolvePendingCapture,
+    sweepPendingCaptures: sweepPendingCaptures,
+    onCaptureWatchdogAlarm: onCaptureWatchdogAlarm,
+    parsePendingRecord: parsePendingRecord,
+    confirmWindowStillOpen: confirmWindowStillOpen,
+    createCaptureWatchdogAlarm: createCaptureWatchdogAlarm,
+    clearCaptureWatchdogAlarm: clearCaptureWatchdogAlarm,
     setConfirmTimeoutMs: setConfirmTimeoutMs,
     setCaptureTiming: setCaptureTiming,
   };

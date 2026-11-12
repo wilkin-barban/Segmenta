@@ -39,7 +39,8 @@
     "activeTab",
     "downloads",
     "contextMenus",
-    "notifications"
+    "notifications",
+    "alarms"
   ],
   "host_permissions": ["https://www.youtube.com/*"],
   "optional_host_permissions": ["https://*/*"],

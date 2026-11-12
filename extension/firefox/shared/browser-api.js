@@ -101,6 +101,50 @@
   }
 
   /**
+   * Wraps a fire-and-forget call (`alarms.create` and friends). Some browsers
+   * answer through a callback, some return an ignored promise and some return
+   * nothing at all, so every one of those settles here instead of hanging.
+   */
+  function invokeVoid(target, method, args) {
+    const owner = target || resolveRuntime();
+    const fn = owner ? owner[method] : null;
+    if (typeof fn !== 'function') {
+      return Promise.reject(new Error('segmenta: browser api unavailable: ' + method));
+    }
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (err) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve(undefined);
+      };
+      let returned;
+      try {
+        returned = fn.apply(owner, args.concat([() => {
+          const error = lastError(owner);
+          finish(error ? new Error(error.message || 'segmenta: browser api error') : null);
+        }]));
+      } catch (err) {
+        finish(err);
+        return;
+      }
+      if (returned && typeof returned.then === 'function') {
+        returned.then(() => finish(null), (err) => finish(err || new Error('segmenta: browser api error')));
+        return;
+      }
+      // Firefox returns undefined from alarms.create/clear: the call already landed.
+      const error = lastError(owner);
+      finish(error ? new Error(error.message || 'segmenta: browser api error') : null);
+    });
+  }
+
+  /**
    * Sends a message to the background service worker.
    * The background answers with {ok:true, data} or {ok:false, error}.
    */
@@ -208,10 +252,34 @@
       const ns = resolveNamespace(null, 'windows');
       return invoke(resolveRuntime(), ns, 'create', [createData]);
     },
+    /** Existence check for the capture watchdog: a recycled id resolves as gone. */
+    get(windowId) {
+      const ns = resolveNamespace(null, 'windows');
+      return invoke(resolveRuntime(), ns, 'get', [windowId]);
+    },
     remove(windowId) {
       const ns = resolveNamespace(null, 'windows');
       return invoke(resolveRuntime(), ns, 'remove', [windowId]);
     },
+  };
+
+  // `alarms` is the only timer that survives MV3 service-worker suspension, so a
+  // paused browser download is always guarded by one.
+  const alarms = {
+    onAlarm: createEventWrapper('alarms', 'onAlarm'),
+    create(name, alarmInfo) {
+      const ns = resolveNamespace(null, 'alarms');
+      return invokeVoid(ns, 'create', [name, alarmInfo]);
+    },
+    clear(name) {
+      const ns = resolveNamespace(null, 'alarms');
+      return invoke(resolveRuntime(), ns, 'clear', [name]);
+    },
+  };
+
+  // Runtime lifecycle events the background needs after a suspension or a restart.
+  const runtime = {
+    onStartup: createEventWrapper('runtime', 'onStartup'),
   };
 
   const contextMenus = {
@@ -243,6 +311,8 @@
     resolveRuntime: resolveRuntime,
     downloads: downloads,
     windows: windows,
+    alarms: alarms,
+    runtime: runtime,
     contextMenus: contextMenus,
     storage: storage,
   };

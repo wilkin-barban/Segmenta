@@ -63,8 +63,11 @@ export default function suite({ test }) {
       // for nothing.
       const exposed = entries.some((entry) => Array.isArray(entry.resources) && entry.resources.includes('confirm.html'));
       assert.equal(exposed, false, `${target.name}/manifest.json must not expose confirm.html`);
+      // `alarms` is the only timer that survives a suspended MV3 worker, so the
+      // capture watchdog cannot be built without it.
       assert.deepEqual(manifest.permissions.slice().sort(), [
         'activeTab',
+        'alarms',
         'contextMenus',
         'downloads',
         'nativeMessaging',

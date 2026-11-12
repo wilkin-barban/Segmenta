@@ -394,3 +394,52 @@ Un archivo v1 migra en una transacción sin perder filas.
 El host nativo sólo reenvía `media.*`, `system.*`, `download.*` y `settings.*`; cualquier otro método
 responde `-32601` sin tocar el daemon. El daemon valida URL, host y límites antes de crear la tarea y
 nunca registra query strings ni cabeceras sensibles.
+
+---
+
+## 10. Captura de archivos: perro guardián de la pausa (0.1.2)
+
+La captura de archivos (`S10`) nunca cancela la descarga antes de confirmar y nunca deja una descarga
+del navegador pausada sin un vigilante que sobreviva a la suspensión del service worker de MV3.
+
+### 10.1. Orden obligatorio
+
+1. `downloads.onCreated` valida extensión, host y settings (`capture_enabled`, `capture_torrents`,
+   `capture_magnet`, `capture_extensions`, `domain_denylist`).
+2. **Antes de pausar**, la extensión escribe el registro pendiente en `storage.local` y crea la alarma
+   periódica. Si cualquiera de las dos cosas falla, **no se pausa**: la descarga del navegador queda
+   intacta y la captura se omite (regla a prueba de fallos). Nunca se pausa sin vigilante vivo.
+3. `downloads.pause` y, con `capture_confirm: true`, `windows.create` sobre `confirm.html` con nombre,
+   host y carpeta efectiva.
+4. Aceptar: `download.add`/`torrent.add`, espera acotada a que la tarea demuestre bytes y sólo entonces
+   `downloads.cancel` + `downloads.erase`; después se enfoca la tarea. Rechazar, timeout, cierre de la
+   ventana o fallo del host: `downloads.resume` y la copia del navegador se conserva.
+5. Toda salida (aceptar, rechazar, cierre, timeout, fallo del host) borra el registro pendiente y, si no
+   queda ninguno, borra la alarma: no hay registros ni alarmas huérfanas.
+
+### 10.2. Registro pendiente
+
+Clave versionada `segmenta_pending_captures_v1` con un array de registros; cada registro lleva su propio
+esquema (`v: 1`) además de `downloadId`, `url`, `filename`, `referrer`, `windowId` y `deadline`
+(milisegundos epoch). La versión del esquema se declara en una constante explícita del `background`;
+un registro con otra versión, sin `deadline` válido o con un `downloadId` que no es entero se considera
+ilegible y se repara igual que uno expirado.
+
+### 10.3. Vigilante (`alarms`)
+
+* Permiso nuevo en ambos manifiestos: **`alarms`** (Chromium y Firefox). Es el único temporizador que el
+  navegador conserva cuando suspende el worker.
+* Alarma única `segmenta-capture-watchdog` con `delayInMinutes: 1` y `periodInMinutes: 1` (mínimo de
+  producción de Chrome). El timeout de decisión de ~120 s sigue siendo el `deadline` que viaja en el
+  registro, no el único temporizador.
+* `alarms.onAlarm` rehidrata los registros y cierra el trabajo de cada uno: si la ventana sigue existiendo
+  y el `deadline` no venció, no toca nada; si el `deadline` venció, la ventana ya no existe o el registro
+  es ilegible, reanuda la descarga y limpia. Si quedan registros, vuelve a crear la alarma.
+* `runtime.onStartup` ejecuta el mismo barrido, para que un arranque nuevo del navegador cure cualquier
+  registro que haya quedado de la sesión anterior.
+* Una versión nueva de la caché de settings (`segmenta_settings_version`) obliga a releer
+  `settings.get` en vez de responder con los valores de la versión anterior.
+
+Consecuencia aceptada: entre el vencimiento del `deadline` y el siguiente tick de la alarma (hasta un
+minuto), la descarga puede seguir pausada. Nunca se pierde el archivo: la copia del navegador se reanuda
+en el primer tick que la alarma tenga ocasión de ejecutar.
