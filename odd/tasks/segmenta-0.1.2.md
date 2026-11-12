@@ -24,7 +24,7 @@ Sin tag ni Release hasta el QA real del usuario en Ubuntu. Rama `main`, commits 
 | T2 | S1, S3, S6 | Estado real por navegador, XDG/0644/validación y refresco tras instalar | inline | `08d112f`, `999a422` | hecho |
 | T3 | S4, S5, S6 | `extension.prepare`/`open`, status ampliado, CLI y página Navegadores | inline | `1187023` | hecho |
 | T4 | S7, S8 | Orden de la lista, `focus_task`, `system.open`, `--show-task` y toast | inline + worker | `c0bfd60`, `763726b`, `1d15188` | hecho |
-| T5 | S9 | Panel de calidades agrupado, default 720p y handoff | pendiente | — | pendiente |
+| T5 | S9 | Panel de calidades agrupado, default 720p y handoff | worker | `1b60ef0`, `3375948`, `599ed3c`, `cd4c3a5` | hecho |
 | T6 | S10, S11 | Confirmación de captura y carpeta destino | pendiente | — | pendiente |
 | T7 | todas | Gates, `.deb` 0.1.2 y QA en Ubuntu | pendiente | — | pendiente |
 
@@ -70,3 +70,5 @@ Sin tag ni Release hasta el QA real del usuario en Ubuntu. Rama `main`, commits 
 - L4: el plan `/home/wilkin/.commandcode/plans/segmenta-0.1.2.md` no existe en este equipo; la especificación vigente es este documento.
 - L5: T4 partido en dos unidades. `1d15188` entrega el daemon (`system.open`, argv fijo sin shell, 1001 si la tarea no existe, `ERR_GUI_NOT_FOUND`) y la GUI (`--show-task` consumido antes de GLib, foco con reintento acotado). RED observado: con el brazo RPC renombrado, los dos tests nuevos fallan (-32601 en vez de éxito y de 1001).
 - L6 (bloqueo de revisión nativa): el linaje `review-916de24d72c08cc8` (target `sha256:d648df92…`, base `7f470c5`, medio, 3 lentes) capturó `review-risk` y `review-readability`, pero `review-reliability` es imposible de enviar: el `subject-hash` que emite STATUS tiene 61 caracteres hex en lugar de 64, así que ningún binding reproducido byte a byte coincide («collectBinding is missing or stale for current STATUS»). No se reintenta a ciegas ni se inventa el valor; queda como decisión del usuario. La revisión nunca autoriza entrega y el QA en Ubuntu sigue siendo la puerta real.
+- L7: T5 cerrado en cuatro cortes. `1b60ef0` (daemon: escalera `qualities`/`default_quality`, dedupe por altura, vídeo por `height`, `add_stream_task` respeta la altura), `3375948` (panel: solo la escalera agrupada, 720p preseleccionado, tarjeta "Enviado a Segmenta" con sus dos acciones), `599ed3c` (`segmenta.open` valida el id y llega a `system.open` con `callHost` puro, sin notificar ni re-añadir), `cd4c3a5` (contrato en `docs/openspec/07` §9.1/§9.2). RED real en ambas mitades: 7 formatos crudos frente a 5 y 1080p frente a 360p en el daemon; lista cruda, default 1080 con `formatId` y `setSent` inexistente en la extensión. Gates: `cargo test --workspace` 265, `node extension/tests/run.mjs` 99, `sync-shared --check` en verde.
+
