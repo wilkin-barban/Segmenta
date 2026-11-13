@@ -40,6 +40,9 @@ Correcciones de interfaz y gestión segura de descargas. Sin publicar: falta el 
   rechazados.
 - **Extensión / allowlist de streams**: con `allowStreams` activo y allowlist vacía se aceptaba
   cualquier host; ahora es deny-by-default y sólo YouTube exacto o el host listado pasan.
+- **Extensión / instalación real**: Chrome cargaba una copia 0.1.1 desde
+  `~/.local/share/segmenta/extension/chromium`; el contrato de mensajes actual no coincide y el
+  panel falla con el mismo texto. La copia se actualizó a 0.2.1 con backup de la anterior.
 
 ## [0.2.0] - 2026-11-12
 

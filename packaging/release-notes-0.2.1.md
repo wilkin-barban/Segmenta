@@ -28,9 +28,22 @@ publica sólo cuando el QA real en Ubuntu cierre y exista el `.deb` 0.2.1.
   `1048 ERR_FILE_DELETE_FAILED` y su ruta aparece en el informe.
 - Una tarea activa se detiene y se espera al motor antes de tocar su archivo.
 
+## Extensión
+
+- **YouTube tras navegación SPA**: el content script podía reportar `/` o el origen y
+  `validateSender` lo rechazaba con `ERR_INVALID_SENDER`, que la interfaz muestra como «La
+  solicitud no es válida para la extensión». Ahora se acepta el origen exacto
+  `https://www.youtube.com` y el URL del payload se sigue validando por separado.
+- **Allowlist de streams**: con `allowStreams` activo y allowlist vacía se aceptaba cualquier
+  host; ahora una allowlist vacía es deny-by-default.
+- **Instalación real**: el perfil de Chrome tenía cargada una copia **0.1.1** desde
+  `~/.local/share/segmenta/extension/chromium`, no la 0.2.x versionada. Esa copia antigua no
+  entiende el contrato de mensajes actual y produce el mismo error. La carpeta se actualizó a
+  0.2.1 con backup de la 0.1.1; hay que pulsar **Recargar** en `chrome://extensions`.
+
 ## Límites conocidos
 
 - La captura de archivos depende del navegador: Chrome estable no instala la extensión sin
   tienda ni política, y Firefox snap no puede ejecutar el host nativo.
-- El error de mensajería de la extensión visto en un perfil real todavía está en investigación;
-  no se publica 0.2.1 con ese punto abierto.
+- La confirmación visual del fix de sender en Chrome real queda pendiente de la recarga de la
+  extensión; el panel de Firefox y el cold-start ya tienen capturas reales de `agy`.
