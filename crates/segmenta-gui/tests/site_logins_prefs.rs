@@ -134,6 +134,7 @@ fn the_site_logins_page_keeps_the_password_write_only() {
     let page = site_logins_page(&[entry("https://files.example", "ana")], call);
 
     page.removals
+        .borrow()
         .first()
         .expect("one remove button per origin")
         .emit_clicked();
@@ -142,4 +143,43 @@ fn the_site_logins_page_keeps_the_password_write_only() {
     assert_eq!(sent.len(), 1, "expected one call, got {sent:?}");
     assert_eq!(sent[0].0, "site_login.remove");
     assert_eq!(sent[0].1["origin"], "https://files.example");
+
+    // L21: a login the daemon already had appears when the page loads, and the password
+    // never reaches the widget tree because the daemon does not send one.
+    let client: std::sync::Arc<dyn segmenta_gui::client::Client> = std::sync::Arc::new(
+        segmenta_gui::client::DemoClient::with_site_logins(vec![
+            serde_json::json!({ "origin": "https://files.example", "username": "ana", "has_password": true }),
+        ]),
+    );
+    let (_, reload_call) = recorder();
+    let loaded = site_logins_page(&[], reload_call);
+    segmenta_gui::prefs::load_site_logins(
+        &loaded.list,
+        std::sync::Arc::clone(&client),
+        std::rc::Rc::new(|_: &str, _: Value| {}),
+    );
+    let context = segmenta_gui::glib::MainContext::default();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        while context.iteration(false) {}
+        let titles: Vec<String> = loaded
+            .list
+            .observe_children()
+            .into_iter()
+            .filter_map(|child| child.ok().and_then(|c| c.downcast::<adw::ActionRow>().ok()))
+            .map(|row| row.title().to_string())
+            .collect();
+        if titles.iter().any(|title| title == "https://files.example") {
+            assert!(
+                !titles.iter().any(|title| title.contains("s3cr3t")),
+                "the loaded list leaked a password: {titles:?}"
+            );
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the stored login never appeared: {titles:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
 }

@@ -94,6 +94,8 @@ struct DemoState {
     settings: Option<Value>,
     /// Queues answered by `queue.list`, in daemon order.
     queues: Vec<String>,
+    /// Site logins answered by `site_login.list`, never carrying a password.
+    site_logins: Vec<Value>,
     list_calls: usize,
 }
 
@@ -122,6 +124,13 @@ impl DemoClient {
     pub fn with_downloads(rows: Vec<Value>) -> DemoClient {
         let client = DemoClient::empty();
         client.state.lock().unwrap().rows = rows;
+        client
+    }
+
+    /// Site logins the fake daemon reports, so a page can load them.
+    pub fn with_site_logins(entries: Vec<Value>) -> DemoClient {
+        let client = DemoClient::empty();
+        client.state.lock().unwrap().site_logins = entries;
         client
     }
 
@@ -372,6 +381,40 @@ impl Client for DemoClient {
                 "errors": []
             })),
             "extension.open" => Ok(json!({ "opened": true })),
+            "site_login.list" => Ok(Value::Array(state.site_logins.clone())),
+            "site_login.remove" => {
+                let origin = params
+                    .get("origin")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let before = state.site_logins.len();
+                state.site_logins.retain(|entry| {
+                    entry.get("origin").and_then(Value::as_str) != Some(origin.as_str())
+                });
+                Ok(json!({ "origin": origin, "removed": state.site_logins.len() < before }))
+            }
+            "site_login.set" => {
+                let origin = params
+                    .get("origin")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let username = params
+                    .get("username")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                state.site_logins.retain(|entry| {
+                    entry.get("origin").and_then(Value::as_str) != Some(origin.as_str())
+                });
+                state.site_logins.push(json!({
+                    "origin": origin,
+                    "username": username,
+                    "has_password": true,
+                }));
+                Ok(json!({ "origin": origin, "username": username }))
+            }
             "settings.update" => {
                 let mut settings = state.settings.clone().unwrap_or_else(default_settings);
                 if let (Some(target), Some(patch)) = (settings.as_object_mut(), params.as_object())
