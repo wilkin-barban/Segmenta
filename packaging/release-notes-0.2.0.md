@@ -13,7 +13,7 @@ Construida y verificada con QA real en Ubuntu; **el tag y la publicación están
 QA real en Ubuntu: `docs/qa/segmenta-0.2-live.md`. Sin probar en navegador real: cold-start de captura (el perfil de Chrome for Testing ya no estaba en el equipo) y la extensión de Firefox.
 
 
-**En preparación.** Este documento describe lo aprobado para 0.2.0, no lo publicado: todavía no
+**Sin publicar.** Este documento describe lo aprobado para 0.2.0, no lo publicado: todavía no
 hay tag `v0.2.0`, ni Release, ni `.deb` `dist/segmenta_0.2.0-1_amd64.deb`. Nada de lo que sigue
 debe presentarse como comportamiento disponible hasta que Q1 cierre los gates y el QA real en
 Ubuntu. La última release publicada es 0.1.2.
