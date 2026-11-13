@@ -243,6 +243,21 @@ queue.list   queue.create   queue.remove   queue.schedule
   el snapshot de progreso, y opcionalmente el archivo. Respuesta:
   `{"task_id": "...", "deleted": <bool>}` (si la fila existía).
 
+### 3.6.1. `download.clean_completed` y `download.delete_many` — (0.2.1)
+* **`download.clean_completed`** — `{}`. Borra **sólo** filas con estado exactamente
+  `completed`. **No toca el sistema de ficheros**: ningún archivo se borra ni se mueve, y
+  eso es contrato, no una omisión. Respuesta:
+  `{"removed": <n>, "failed": [{"task_id": "...", "error": "..."}]}`; una fila que falla no
+  aborta el resto.
+* **`download.delete_many`** — `{"task_ids": ["..."], "delete_files": <bool, defecto false>}`.
+  Un lote vacío es `-32602`. Procesa id a id: una tarea activa se detiene y se espera al
+  motor **antes** de tocar su ruta; `delete_files: false` deja los archivos en su sitio.
+  Desconocidos y duplicados se informan sin abortar el lote. Respuesta:
+  `{"results": [{"task_id": "...", "ok": <bool>, "error": "..."}], "removed": <n>,
+  "files_deleted": <n>, "files_failed": [{"task_id": "...", "path": "...", "error": "..."}]}`.
+  Un archivo que no se puede borrar **no** se reporta como éxito: la fila queda `failed`
+  con `1048 ERR_FILE_DELETE_FAILED` y su entrada en `files_failed`.
+
 ### 3.7. `media.probe`, `media.add` y `media.status`
 Contrato detallado en §9. Resumen de parámetros:
 * `media.probe`: `{"url", "kind"?: "video"|"playlist"|"stream", "limit"?}`.
