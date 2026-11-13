@@ -177,8 +177,10 @@
       return false;
     }
     const allowed = allowlistSet(opts.allowlist);
+    // An empty allowlist allows nothing: it used to allow every https host, which turned
+    // "streams are opt-in per site" into "any site may ask for a stream".
     if (!allowed || allowed.size === 0) {
-      return true;
+      return false;
     }
     return allowed.has(host);
   }

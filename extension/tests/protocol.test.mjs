@@ -53,10 +53,12 @@ export default function suite({ test }) {
     }
   });
 
-  test('isAllowedUrl allows https streams with an optional host allowlist', async () => {
+  test('isAllowedUrl allows https streams only for an allowlisted host', async () => {
     const P = await loadShared('SegmentaProtocol', 'protocol.js');
     const stream = 'https://cdn.example.com/hls/master.m3u8';
-    assert.equal(P.isAllowedUrl(stream, { allowStreams: true }), true);
+    // An empty allowlist is a deny-by-default list, not "any host".
+    assert.equal(P.isAllowedUrl(stream, { allowStreams: true }), false);
+    assert.equal(P.isAllowedUrl(stream, { allowStreams: true, allowlist: [] }), false);
     assert.equal(P.isAllowedUrl(stream, { allowStreams: true, allowlist: ['cdn.example.com'] }), true);
     assert.equal(P.isAllowedUrl(stream, { allowStreams: true, allowlist: ['other.example.com'] }), false);
     assert.equal(P.isAllowedUrl(stream, { allowStreams: false }), false);
@@ -131,8 +133,21 @@ export default function suite({ test }) {
     assert.equal(typeof generated.id, 'number');
     assert.deepEqual(generated.params, { url: PLAYLIST, kind: 'playlist', limit: 250 });
 
-    const stream = P.buildProbe({ url: 'https://cdn.example.com/master.m3u8', kind: 'stream', id: 9 });
+    // A stream needs its host in the allowlist: an empty list allows nothing.
+    const stream = P.buildProbe({
+      url: 'https://cdn.example.com/master.m3u8',
+      kind: 'stream',
+      id: 9,
+      allowlist: ['cdn.example.com'],
+    });
     assert.deepEqual(stream.params, { url: 'https://cdn.example.com/master.m3u8', kind: 'stream' });
+    // The bypass is gone: no allowlist entry, no stream, and an arbitrary host is refused.
+    assert.throws(() => P.buildProbe({ url: 'https://cdn.example.com/master.m3u8', kind: 'stream' }), /url/i);
+    assert.throws(
+      () => P.buildProbe({ url: 'https://evil.example/watch?v=1', kind: 'stream', allowlist: ['cdn.example.com'] }),
+      /url/i,
+    );
+    assert.throws(() => P.buildAdd({ url: 'https://evil.example/watch?v=1', mode: 'video' }), /url/i);
   });
 
   test('buildProbe rejects invalid kinds and urls', async () => {

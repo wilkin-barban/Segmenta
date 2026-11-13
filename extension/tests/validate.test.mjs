@@ -126,12 +126,39 @@ export default function suite({ test }) {
   test('validateMessage accepts https streams only when enabled', async () => {
     const V = await loadShared('SegmentaValidate', 'validate.js');
     const stream = 'https://cdn.example.com/master.m3u8';
-    const enabled = { extensionId: EXTENSION_ID, allowStreams: true };
+    const enabled = {
+      extensionId: EXTENSION_ID,
+      allowStreams: true,
+      allowlist: ['cdn.example.com'],
+    };
     const disabled = { extensionId: EXTENSION_ID, allowStreams: false };
 
     assert.equal(
       V.validateMessage({ type: 'segmenta.probe', url: stream, kind: 'stream' }, enabled).ok,
       true,
+    );
+    // Without an allowlist entry the stream is refused, and an arbitrary host is refused
+    // even when streams are enabled: this used to accept any https host.
+    assert.equal(
+      V.validateMessage({ type: 'segmenta.probe', url: stream, kind: 'stream' }, {
+        extensionId: EXTENSION_ID,
+        allowStreams: true,
+      }).error.code,
+      'ERR_INVALID_URL',
+    );
+    assert.equal(
+      V.validateMessage(
+        { type: 'segmenta.probe', url: 'https://evil.example/watch?v=1', kind: 'stream' },
+        enabled,
+      ).error.code,
+      'ERR_INVALID_URL',
+    );
+    assert.equal(
+      V.validateMessage(
+        { type: 'segmenta.add', url: 'https://evil.example/watch?v=1', mode: 'video' },
+        enabled,
+      ).error.code,
+      'ERR_INVALID_URL',
     );
     assert.equal(
       V.validateMessage({ type: 'segmenta.probe', url: stream, kind: 'video' }, disabled).error.code,
