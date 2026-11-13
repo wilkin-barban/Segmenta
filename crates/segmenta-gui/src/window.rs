@@ -1896,6 +1896,12 @@ impl Inner {
         if !matches!(state, ViewState::Loading) || !self.store.borrow().is_empty() {
             self.stop_loading();
         }
+        // Belt and braces: if any path left the glyph visible with data on screen, hide
+        // it here. The X11 capture kept showing it after the stack had switched.
+        if !self.store.borrow().is_empty() && self.loading_spinner.is_visible() {
+            self.loading_spinner.stop();
+            self.loading_spinner.set_visible(false);
+        }
         *self.view_state.borrow_mut() = state;
     }
 

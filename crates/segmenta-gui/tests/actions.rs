@@ -526,3 +526,27 @@ fn a_reload_with_rows_on_screen_never_paints_the_loading_spinner() {
         assert!(!window.loading_page_attached());
     });
 }
+
+/// A second activation must not stack a fresh, still-loading window over the list.
+///
+/// The X11 capture kept showing a spinner over a fully loaded list; a second `activate`
+/// builds another window in the Loading state, and its spinner is what paints there.
+#[test]
+fn a_second_activation_reuses_the_existing_window() {
+    run_gui("second_activation", || {
+        let application = app("io.github.wilkin.Segmenta.SecondActivate");
+        let before = segmenta_gui::app::open_window_count();
+        segmenta_gui::app::build_window_for_client(&application);
+        let after = segmenta_gui::app::open_window_count();
+        assert!(
+            after <= before + 1,
+            "the factory created more than one window: {before} -> {after}"
+        );
+        segmenta_gui::app::build_window_for_client(&application);
+        assert_eq!(
+            segmenta_gui::app::open_window_count(),
+            after,
+            "a second activation stacked another window"
+        );
+    });
+}
