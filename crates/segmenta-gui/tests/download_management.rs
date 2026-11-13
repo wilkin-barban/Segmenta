@@ -280,6 +280,12 @@ fn cleaning_completed_reports_the_count_and_keeps_the_files() {
             !window.confirm_dialog_open(),
             "the confirmation must close once the answer is known"
         );
+        // ...and it must not leave the button frozen: the Ubuntu QA showed "Limpiando…"
+        // disabled forever because `can_close(false)` also blocked the programmatic close.
+        assert!(
+            !window.confirm_waiting(),
+            "the dialog was left in its pending state after the answer"
+        );
 
         // The list was refreshed: only the running task remains.
         assert!(

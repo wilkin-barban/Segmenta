@@ -34,7 +34,7 @@ pub fn present(
         // switcher that clips tabs and squeezes row titles to one character per line.
         .content_width(960)
         .content_height(760)
-        .search_enabled(true)
+        .search_enabled(false)
         .build();
 
     let bus = Rc::new(RequestBus::new());
@@ -289,6 +289,16 @@ pub fn present(
         Arc::clone(&site_login_client),
         Rc::clone(&site_login_call),
     );
+
+    // The compact layout puts the page switcher at the bottom, over the content: every
+    // page carries an inset as tall as that bar so its last row stays reachable.
+    add_bottom_inset(&general);
+    add_bottom_inset(&network);
+    add_bottom_inset(&capture);
+    add_bottom_inset(&browsers_page_widget);
+    add_bottom_inset(&antivirus.page);
+    add_bottom_inset(&site_logins.page);
+    add_bottom_inset(&about);
 
     dialog.add(&general);
     dialog.add(&network);
@@ -577,6 +587,23 @@ pub fn present(
 
     dialog.present(Some(parent));
     dialog
+}
+
+/// Height of the compact page switcher at the bottom of the dialog.
+///
+/// Adw draws it over the content, so a page without this inset ends with its last row
+/// hidden behind the bar — the QA captures showed the Navegadores steps cut in half.
+const BOTTOM_SWITCHER_INSET: i32 = 72;
+
+/// Adds a real spacer at the end of a page so its content can scroll clear of the bottom
+/// switcher instead of ending behind it.
+fn add_bottom_inset(page: &adw::PreferencesPage) {
+    let spacer = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    spacer.set_height_request(BOTTOM_SWITCHER_INSET);
+    spacer.add_css_class("prefs-bottom-inset");
+    let group = adw::PreferencesGroup::new();
+    group.add(&spacer);
+    page.add(&group);
 }
 
 /// Split a free-form list into trimmed tokens, dropping empties and duplicates.
@@ -893,7 +920,7 @@ pub fn fill_browser_rows(
         // a minimum keeps the browser name readable.
         row.set_size_request(320, -1);
         row.set_title_lines(1);
-        row.set_subtitle_lines(2);
+        row.set_subtitle_lines(0);
         if let Some(version) = &data.version {
             row.add_suffix(
                 &gtk::Label::builder()

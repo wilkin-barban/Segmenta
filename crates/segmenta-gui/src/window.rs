@@ -561,6 +561,16 @@ impl SegmentaWindow {
     }
 
     /// Whether the batch confirmation dialog is open (clean or delete).
+    /// Whether the confirmation is still waiting for its answer.
+    pub fn confirm_waiting(&self) -> bool {
+        self.0
+            .batch_dialog
+            .borrow()
+            .as_ref()
+            .map(|dialog| dialog.waiting.get())
+            .unwrap_or(false)
+    }
+
     pub fn confirm_dialog_open(&self) -> bool {
         self.0
             .batch_dialog
@@ -2715,6 +2725,12 @@ impl Inner {
         let Some(dialog) = taken else {
             return;
         };
+        // `can_close(false)` also blocks the programmatic close: without restoring it the
+        // dialog stays on screen with its button frozen once the answer arrives, which is
+        // exactly what the Ubuntu QA saw with "Limpiando…" disabled forever.
+        dialog.waiting.set(false);
+        dialog.dialog.set_can_close(true);
+        dialog.accept.set_sensitive(true);
         dialog.dialog.close();
     }
 
