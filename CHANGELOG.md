@@ -33,6 +33,13 @@ Correcciones de interfaz y gestión segura de descargas. Sin publicar: falta el 
   estado en éxito y en error.
 - Preferencias: inset inferior para que el contenido no quede detrás de la barra de pestañas,
   buscador del diálogo retirado y descripciones de navegador con wrap.
+- **Extensión / YouTube**: tras una navegación SPA el content script reporta `/` o el origen y
+  `validateSender` lo rechazaba con `ERR_INVALID_SENDER`, mostrado como “La solicitud no es válida
+  para la extensión”. Ahora acepta el origen exacto `https://www.youtube.com` y sigue validando el
+  URL del payload por separado; `m.youtube.com`, HTTP, otros hosts y sufijos maliciosos siguen
+  rechazados.
+- **Extensión / allowlist de streams**: con `allowStreams` activo y allowlist vacía se aceptaba
+  cualquier host; ahora es deny-by-default y sólo YouTube exacto o el host listado pasan.
 
 ## [0.2.0] - 2026-11-12
 

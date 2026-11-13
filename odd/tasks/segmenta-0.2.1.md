@@ -5,7 +5,7 @@
 La Release 0.2.0 está publicada, pero el usuario encontró dos regresiones al probarla en Ubuntu:
 
 1. **Preferencias con layout roto**: el diálogo sí renderiza, pero deja un spinner persistente sobre la lista/diálogo, solapa y recorta las etiquetas del tab bar inferior, muestra la página Navegadores con texto vertical de ~1 carácter y columnas vacías, recorta “Guardar login” y los controles +/-, y no incluye la página Antivirus. La captura negra inicial era un artefacto de Wayland/Xvfb; las capturas X11 reales son `/tmp/seg-main-x11.png`, `/tmp/seg-prefs-x11.png`, `/tmp/seg-prefs-conexiones-y-limites.png`, `/tmp/seg-prefs-navegadores.png` y `/tmp/seg-prefs-contraseñas-de-sitios.png`.
-2. **Extensión en YouTube**: el usuario ve el texto “La solicitud no es válida para la extensión.” Ese texto corresponde a `errorInvalidMessage` en `_locales/es`, usado para `ERR_INVALID_MESSAGE`, `ERR_INVALID_TYPE`, `ERR_INVALID_PARAMS` o `ERR_MESSAGE_TOO_LARGE`. No se reprodujo con Chrome for Testing 157 + `chromium-0.2.0`: el panel abrió y mostró calidades. Hay que reproducirlo con el perfil/instalación reales y corregir la causa, no ocultar el error.
+2. **Extensión en YouTube**: el usuario ve el texto “La solicitud no es válida para la extensión.” Ese texto corresponde a `errorInvalidMessage` en `_locales/es`. La causa real es `ERR_INVALID_SENDER`: `validateSender` exigía que `sender.url` fuera `/watch` o `/playlist`, pero tras una navegación SPA el content script puede reportar `/` o el origen. Corregido en `7dfda2c`; la confirmación en un navegador real sigue pendiente.
 
 Además, se pide una función nueva de gestión segura de descargas.
 
@@ -24,6 +24,8 @@ Además, se pide una función nueva de gestión segura de descargas.
 - Revisar `validateSender`/`validateProbe` y la construcción del mensaje del panel; no relajar la validación para “hacerlo pasar”.
 - Agregar diagnóstico seguro (sin URL con credenciales ni secretos) si hace falta.
 - Tests Node para el caso exacto; prueba real en Chrome normal/CFT y Firefox oficial.
+
+**Estado:** causa reproducida sin navegador con `sender.url = https://www.youtube.com/` y payload válido: `ERR_INVALID_SENDER`. `7dfda2c` acepta el origen exacto y conserva la validación del payload; `944782a` cierra el bypass de allowlist. 168 tests Node verdes. Falta la confirmación visual en Chrome real/CFT; el panel de Firefox ya se capturó con `agy`.
 
 ## Feature — Gestión segura de descargas
 
@@ -57,8 +59,11 @@ Además, se pide una función nueva de gestión segura de descargas.
 
 ## Evidencia actual
 
-- Screenshot de Preferencias en Xvfb: `/tmp/seg-prefs.png` (negro con spinner).
-- CFT 157 con `chromium-0.2.0`: panel de YouTube abrió correctamente; no se reprodujo el error de extensión.
+- Preferencias X11 antes/después: `/tmp/seg-0215-prefs.png` … `/tmp/seg-0216-nav-bottom.png`.
+- Feature en la app instalada: `/tmp/seg-0216-clean-confirm.png`, `/tmp/seg-0216-cleaned.png`,
+  `/tmp/seg-0216-deleted.png` y `/tmp/seg-0216-deleted-files.png`.
+- Cold-start Chromium y panel de Firefox capturados por `agy` en
+  `docs/qa/screenshots/cold-start-confirm-run{1,2,3}.png` y `firefox-youtube-panel.png`.
 - La Release 0.2.0 está publicada; cualquier corrección va a 0.2.1.
 
 ## Estado
@@ -73,10 +78,11 @@ Además, se pide una función nueva de gestión segura de descargas.
 | Bloqueo del diálogo tras la respuesta | `b75d39b` | confirmado: sin deadlock |
 | Preferencias: inset inferior, búsqueda negra, descripciones cortadas | `71e39bfe` (build) | confirmado por captura |
 | Documentación | `13eca06` | — |
-| P0 extensión `ERR_INVALID_SENDER` | `extension/shared/validate.js` | reproducido en Node y corregido; falta confirmación en navegador |
+| P0 extensión `ERR_INVALID_SENDER` | `7dfda2c` | reproducido en Node y corregido; falta confirmación en navegador real |
+| Bypass de allowlist de streams | `944782a` | tests negativos de probe/add con host ajeno |
 
 Artefacto final: `segmenta_0.2.1-1_amd64.deb`, sha256
-`71e39bfecf25d6a36739f82694488cb6f1579e90f525788a9a5f508c49d05adf`; `check-package` 22/22.
+`57fa7a195c1ed9320a742f0412f5fff1bdb8d1f7bcb7fbb52f9457cd8fe00ffb`; `check-package` 22/22.
 Sin tag y sin Release.
 
 ## Log
@@ -97,15 +103,6 @@ Sin tag y sin Release.
   casilla marcada borró el `.zip` e informó "se borraron 1 archivo(s)"; sin deadlock. Preferencias:
   búsqueda negra eliminada, descripciones con wrap y scroll hasta el final por encima de la tab bar.
 
-## Defectos restantes
-
-1. **`ERR_INVALID_MESSAGE` en la extensión**: no reproducido. No hay navegador en el equipo de
-   desarrollo (ni Chrome for Testing, ni Firefox, ni `/tmp/chrome-testing`), y la directiva prohíbe
-   relajar `validateInbound` para que el mensaje pase. Necesita un perfil real o la consola del
-   service worker con el `code` exacto.
-2. **Cold-start de captura**: sigue sin probarse en navegador real; la reconciliación tiene tests
-   con worker reiniciado y `downloads.search` falso, que no es evidencia de navegador.
-3. **Extensión de Firefox**: no ejercitada en navegador en ninguna de las dos sesiones de QA.
 - L5: `ERR_INVALID_MESSAGE` era `ERR_INVALID_SENDER`. Reproducido sin navegador: con
   `sender.url = "https://www.youtube.com/"` —lo que reporta el content script tras una navegación
   SPA— `validateInbound` devolvía `ERR_INVALID_SENDER`, y el content script lo traduce al mismo
@@ -119,5 +116,11 @@ Sin tag y sin Release.
   y `segmenta.add`. Ahora una allowlist vacía es **deny-by-default**: sólo YouTube exacto, o el host
   explícitamente listado. Tests negativos para probe stream y add con host ajeno, y los positivos
   pasan con el host en la allowlist.
+
+## Pendiente
+
+1. **Confirmación visual del fix de sender en Chrome real/CFT.** El panel de Firefox y el cold-start
+   tienen capturas de `agy`; el caso `/` tras SPA está probado en Node, no todavía en el navegador.
+2. **Commit e informe final de `agy`** con sus capturas y comandos; no publicar hasta integrarlo.
 
 
