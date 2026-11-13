@@ -415,6 +415,24 @@ pub struct TaskIdParams {
     pub task_id: String,
 }
 
+/// Parameters of `site_login.set` (0.2): the login belongs to one exact origin.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SiteLoginSetParams {
+    /// `scheme://host[:port]`, or a URL whose origin is taken.
+    pub origin: String,
+    /// User name stored next to the origin.
+    pub username: String,
+    /// Password; it only ever travels to the keyring.
+    pub password: String,
+}
+
+/// Parameters of `site_login.remove`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SiteLoginOriginParams {
+    /// `scheme://host[:port]`, or a URL whose origin is taken.
+    pub origin: String,
+}
+
 /// Parameters of `download.cancel`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CancelParams {
