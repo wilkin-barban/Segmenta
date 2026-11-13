@@ -257,10 +257,22 @@ pub fn present(
     info.add(&daemon_row);
     about.add(&info);
 
+    // Site logins: the page renders the entries it is given and sends changes through the
+    // dialog's request bus. Loading the stored list on open is the remaining stitch.
+    let site_login_bus = Rc::clone(&bus);
+    let site_login_client = Arc::clone(&client);
+    let site_logins = site_logins_page(
+        &[],
+        Rc::new(move |method: &str, params: Value| {
+            site_login_bus.spawn(&site_login_client, method, params);
+        }),
+    );
+
     dialog.add(&general);
     dialog.add(&network);
     dialog.add(&capture);
     dialog.add(&browsers_page_widget);
+    dialog.add(&site_logins.page);
     dialog.add(&about);
 
     // ------------------------------------------------------------ Save helpers
