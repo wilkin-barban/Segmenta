@@ -229,6 +229,10 @@ impl SegmentaWindow {
         loading_label.add_css_class("dim-label");
         loading.append(&loading_label);
 
+        // Nothing in this app sets a busy cursor; an inherited one from the session would
+        // paint a ring at the pointer, which is what the X11 capture showed.
+        window.set_cursor_from_name(Some("default"));
+
         let truncation_label = gtk::Label::new(None);
         truncation_label.set_xalign(0.0);
         truncation_label.set_wrap(true);
