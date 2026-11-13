@@ -455,6 +455,20 @@ pub struct DeleteParams {
     pub delete_file: bool,
 }
 
+/// Parameters of `download.delete_many`.
+///
+/// One result per requested id, never a silent partial deletion: an empty batch is
+/// rejected as invalid params instead of being reported as a successful no-op.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeleteManyParams {
+    /// Tasks to delete, in the order the caller sent them.
+    #[serde(default)]
+    pub task_ids: Vec<String>,
+    /// Delete the files on disk too; `false` keeps them (the default).
+    #[serde(default)]
+    pub delete_files: bool,
+}
+
 /// Parameters of `download.list`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ListParams {
