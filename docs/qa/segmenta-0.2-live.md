@@ -53,4 +53,5 @@ declaradas así.
 3. **0.2.0**: `error_message` repetía el código y `quarantine_path` no se exponía
    (corregido en `bd0c53a`).
 
-Sin tag, sin Release y sin push: la publicación sigue siendo una decisión posterior a este informe.
+Publicada como Release `v0.2.0` con el `.deb` y los ZIP verificados; los dos huecos de arriba
+quedan como límites explícitos de esta pasada de QA, no como pruebas aprobadas.

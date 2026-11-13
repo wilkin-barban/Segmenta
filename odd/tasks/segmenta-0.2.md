@@ -1,7 +1,8 @@
 # Segmenta 0.2.0 — scheduler, antivirus, site logins, hardening y documentación
 
 Plan aprobado: `/home/wilkin/.commandcode/plans/segmenta-0.2.md`.
-Sin tag ni Release hasta que el QA real en Ubuntu y la matriz de pulido estén verdes.
+Release **v0.2.0 publicada** con los artefactos `d633e3e0…` y el QA real documentado; cold-start
+y Firefox quedan como límites explícitos de la pasada.
 
 ## Decisiones cerradas
 
@@ -45,7 +46,7 @@ Ciclo: agente implementa → yo verifico y hago QA real → error exacto vuelve 
 | U1 | UI: site logins, antivirus, retirar categorías, respetar `clip_monitor_enabled` | `prefs.rs`, `add_dialog.rs`, `model.rs` | U1a1 `c6b735a`, U1a2 `b8f2732` y antivirus `f9c3980` hechos; falta la página de site logins (depende de L1) |
 | E1 | Extensión manual + GUI; límites documentados | `browsers.rs`, `prefs.rs`, docs | hecho (`0d92384`) |
 | Q1 | Gates completos, `.deb` 0.2.0, QA Ubuntu y artefactos | `packaging/`, `dist/`, QA docs | hecho: artefactos `d633e3e0…` y QA real en `docs/qa/segmenta-0.2-live.md` |
-| REL | Tag/Release 0.2.0 sólo con Q1 verde | git/GitHub | pendiente por decisión del usuario; nada publicado |
+| REL | Tag/Release 0.2.0 sólo con Q1 verde | git/GitHub | hecho: v0.2.0 publicada con límites de QA declarados |
 
 ## Gates por unidad
 
@@ -122,4 +123,5 @@ Verificada contra el código durante D1a2; ninguna de estas contradicciones es u
 - L25 (artefacto final de 0.2.0, `job-6`): `segmenta_0.2.0-1_amd64.deb` 7.240.668 B sha256 `d633e3e06e0604d60e9162fb1a8aca02d95308c6d65fbcedf55665ff80742eab`; `segmenta-extension-0.2.0.zip` 57.159 B `f11a128fa1d31740c65c81dd176251c2631d85ffab309e851e82d058d7e2452e`; `segmenta-firefox-0.2.0.zip` 56.871 B `7ce34d9a3173dc62ade4281962d501b24df171fa18e4a7decf6c4beaab0e835c`. `check-package.sh` 22/22, `desktop-file-validate` y `appstreamcli` ok, `lintian` no instalado. Nota de entorno: el disco llegó al 100% y el linker abortó con `Bus error`; se liberó espacio borrando `target/debug/incremental` (26 GB de `target/debug`). Sin tag, sin Release, sin push: la publicación espera el QA real del usuario.
 - L26 (QA real de 0.2.0, registrado en `docs/qa/segmenta-0.2-live.md` y `5ff0752`): verificado sobre el paquete `d633e3e0…` instalado en Ubuntu — panel de calidades con 720p por defecto, captura con confirmación (aceptar/rechazar), EICAR con `failed` 1046, `error_message` de un solo prefijo y `quarantine_path` visible, site login Basic 401/200 contra servidor local, scheduler `pending→completed` con `max_active`, y torrent multiarchivo 30 B / 2 archivos. **No probado y declarado como límite**: cold-start de captura, porque el perfil de Chrome for Testing (`/tmp/chrome-testing`) ya no existe en el equipo, y la extensión de Firefox en navegador real. Ninguno de los dos se presenta como aprobado; la reconciliación está cubierta por tests con trabajador reiniciado y `downloads.search` falso, que no es evidencia de navegador real.
 - L27: README, CHANGELOG y `packaging/release-notes-0.2.0.md` quedan en 0.2.0 «construida y verificada, pendiente de publicación», con los tres SHA-256 y el puntero al informe de QA. **Sin tag, sin Release y sin push**: la publicación segue siendo decisión del usuario.
+- L28 (decisión y publicación): el usuario aprobó publicar aun con los dos límites de QA declarados. Release `v0.2.0` con `.deb` `d633e3e0…`, ZIPs `f11a128f…`/`7ce34d9a…`, `SHA256SUMS` y notas; QA y README actualizados de “pendiente” a “publicada”. Cold-start y Firefox siguen explícitamente no probados.
 

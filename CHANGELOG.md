@@ -7,11 +7,12 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 
 ## [0.2.0] - 2026-11-12
 
-0.2.0 construida y verificada con QA real en Ubuntu, pendiente de tag y Release: scheduler de colas nativo con ventanas horarias y `max_active` real,
+0.2.0 publicada con QA real en Ubuntu y dos límites declarados (cold-start de captura y extensión
+de Firefox no probados en navegador): scheduler de colas nativo con ventanas horarias y `max_active` real,
 post-procesamiento argv seguro y ClamAV integrado con cuarentena, site logins Basic con GNOME
 Keyring (sin Digest), sin categorías automáticas, extensión de instalación manual asistida por
 la GUI, reconciliación de capturas al arrancar en frío, probe multiarchivo de torrents, ayuda CLI
-con `extension` y documentación alineada. Sin tag ni Release hasta el QA real en Ubuntu. Ver
+con `extension` y documentación alineada. Ver
 [`packaging/release-notes-0.2.0.md`](packaging/release-notes-0.2.0.md).
 
 ## [0.1.2] - 2026-11-12

@@ -1,6 +1,7 @@
 # Segmenta 0.2.0
 
-Construida y verificada con QA real en Ubuntu; **el tag y la publicación están pendientes**.
+Publicada con QA real en Ubuntu y con dos límites de esa pasada declarados: cold-start de captura
+(no había Chrome for Testing en el equipo) y extensión de Firefox (no se ejercitó en navegador).
 
 ## Artefactos
 
@@ -12,11 +13,8 @@ Construida y verificada con QA real en Ubuntu; **el tag y la publicación están
 
 QA real en Ubuntu: `docs/qa/segmenta-0.2-live.md`. Sin probar en navegador real: cold-start de captura (el perfil de Chrome for Testing ya no estaba en el equipo) y la extensión de Firefox.
 
-
-**Sin publicar.** Este documento describe lo aprobado para 0.2.0, no lo publicado: todavía no
-hay tag `v0.2.0`, ni Release, ni `.deb` `dist/segmenta_0.2.0-1_amd64.deb`. Nada de lo que sigue
-debe presentarse como comportamiento disponible hasta que Q1 cierre los gates y el QA real en
-Ubuntu. La última release publicada es 0.1.2.
+Publicada como Release `v0.2.0` con los tres artefactos y sus hashes. Los dos huecos de QA quedan
+declarados como límites de esta pasada, no como comportamiento verificado.
 
 0.2.0 cierra los gaps de confiabilidad del daemon y agrega las funciones aprobadas en el plan
 `segmenta-0.2`: scheduler de colas nativo, `max_active` real, post-procesamiento seguro con
