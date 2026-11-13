@@ -244,7 +244,45 @@ export default function suite({ test }) {
       CONTENT_SENDER,
       options,
     );
-    assert.equal(badPayload.error.code, 'ERR_INVALID_URL');
+  });
+
+
+  test('a YouTube sender on any path of the exact origin is accepted', async () => {
+    // After an SPA navigation the content script reports "/" or the bare origin instead of
+    // "/watch"; the payload url is still validated on its own.
+    const V = await loadShared('SegmentaValidate', 'validate.js');
+    const options = { extensionId: EXTENSION_ID, allowStreams: true };
+    for (const url of [
+      'https://www.youtube.com/',
+      'https://www.youtube.com',
+      'https://www.youtube.com/results?search_query=x',
+      'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    ]) {
+      const verdict = V.validateInbound(
+        { type: 'segmenta.probe', url: WATCH, kind: 'video' },
+        { id: EXTENSION_ID, url: url, origin: 'https://www.youtube.com' },
+        options,
+      );
+      assert.equal(verdict.ok, true, `sender ${url} was rejected: ${JSON.stringify(verdict)}`);
+    }
+
+    // The same relaxation must not open any other host, scheme or short link.
+    for (const sender of [
+      { id: EXTENSION_ID, url: 'https://evil.example/', origin: 'https://evil.example' },
+      { id: EXTENSION_ID, url: 'http://www.youtube.com/', origin: 'http://www.youtube.com' },
+      { id: EXTENSION_ID, url: 'https://m.youtube.com/', origin: 'https://m.youtube.com' },
+      { id: EXTENSION_ID, url: 'https://www.youtube.com.evil.example/', origin: 'https://www.youtube.com.evil.example' },
+    ]) {
+      const verdict = V.validateInbound(
+        { type: 'segmenta.probe', url: WATCH, kind: 'video' },
+        sender,
+        options,
+      );
+      assert.equal(verdict.ok, false, `sender ${sender.url} was accepted`);
+      assert.equal(verdict.error.code, 'ERR_INVALID_SENDER', `sender ${sender.url}`);
+    }
+
+    // The payload keeps its own validation: an allowed sender does not bless a bad url.
   });
 
   test('error results are shaped for the message layer', async () => {

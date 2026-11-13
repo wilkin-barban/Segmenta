@@ -65,11 +65,32 @@
     if (originField.indexOf('moz-extension://') === 0 || urlField.indexOf('moz-extension://') === 0) {
       return ok(true);
     }
+    // Content scripts report the page url, and after an SPA navigation that url can be the
+    // bare origin or any other path of the same site. The origin is what identifies the
+    // page, so the exact YouTube origin is accepted here while the payload url keeps its
+    // own full validation below: no other host, no other scheme.
+    if (isYouTubeOrigin(urlField) || isYouTubeOrigin(originField)) {
+      return ok(true);
+    }
     // Content scripts report the page url; only allowed pages may talk to us.
     if (PROTOCOL.isAllowedUrl(urlField || anyOrigin)) {
       return ok(true);
     }
     return fail('ERR_INVALID_SENDER', 'sender origin is not allowed');
+  }
+
+  /// Exact `https://www.youtube.com` origin, without opening the door to any other host.
+  function isYouTubeOrigin(value) {
+    if (typeof value !== 'string' || value === '') {
+      return false;
+    }
+    let parsed;
+    try {
+      parsed = new URL(value);
+    } catch (err) {
+      return false;
+    }
+    return parsed.protocol === 'https:' && parsed.host === 'www.youtube.com';
   }
 
   function validateProbe(message, options) {
