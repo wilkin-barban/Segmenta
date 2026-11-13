@@ -209,6 +209,155 @@ pub struct DownloadItem {
     pub playlist_title: Option<String>,
 }
 
+/// Answer of `download.clean_completed`.
+///
+/// The operation never deletes files: the payload has no file count at all, and the
+/// GUI must not invent one.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct CleanCompletedReport {
+    #[serde(default)]
+    pub removed: usize,
+    #[serde(default)]
+    pub failed: Vec<CleanCompletedFailure>,
+}
+
+/// One task `download.clean_completed` could not remove.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct CleanCompletedFailure {
+    #[serde(default)]
+    pub task_id: String,
+    #[serde(default)]
+    pub error: String,
+}
+
+impl CleanCompletedReport {
+    /// Human summary of the clean run: the count plus every failure by name.
+    pub fn summary(&self, locale: segmenta_i18n::Locale) -> String {
+        use segmenta_i18n::{tr, Msg};
+        if self.failed.is_empty() {
+            return tr(locale, Msg::CleanCompletedDone)
+                .replace("{count}", &self.removed.to_string());
+        }
+        let details = self
+            .failed
+            .iter()
+            .map(|failure| {
+                tr(locale, Msg::DeleteTaskFailed)
+                    .replace("{task}", &failure.task_id)
+                    .replace("{error}", &failure.error)
+            })
+            .collect::<Vec<String>>()
+            .join("; ");
+        tr(locale, Msg::CleanCompletedPartial)
+            .replace("{count}", &self.removed.to_string())
+            .replace("{failed}", &self.failed.len().to_string())
+            .replace("{details}", &details)
+    }
+}
+
+/// Answer of `download.delete_many`: one result per requested task.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct BatchDeleteReport {
+    #[serde(default)]
+    pub results: Vec<BatchDeleteResult>,
+    #[serde(default)]
+    pub removed: usize,
+    #[serde(default)]
+    pub files_deleted: usize,
+    #[serde(default)]
+    pub files_failed: Vec<BatchFileFailure>,
+}
+
+/// Result of deleting one task in a batch.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct BatchDeleteResult {
+    #[serde(default)]
+    pub task_id: String,
+    #[serde(default)]
+    pub ok: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// A file the batch could not delete.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct BatchFileFailure {
+    #[serde(default)]
+    pub task_id: String,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub error: String,
+}
+
+impl BatchDeleteReport {
+    /// Every task the daemon could not remove.
+    pub fn failed_tasks(&self) -> Vec<&BatchDeleteResult> {
+        self.results.iter().filter(|result| !result.ok).collect()
+    }
+
+    /// `true` only when no task and no file failed: a partial batch is never success.
+    pub fn is_full_success(&self) -> bool {
+        self.failed_tasks().is_empty() && self.files_failed.is_empty()
+    }
+
+    /// Human summary: how many rows and files went away, then every failure by name.
+    pub fn summary(&self, locale: segmenta_i18n::Locale) -> String {
+        use segmenta_i18n::{tr, Msg};
+        let mut text = tr(locale, Msg::DeleteSummary)
+            .replace("{removed}", &self.removed.to_string())
+            .replace("{files}", &self.files_deleted.to_string());
+        for failure in self.failed_tasks() {
+            let error = failure.error.as_deref().unwrap_or_default();
+            text.push_str(" · ");
+            text.push_str(
+                &tr(locale, Msg::DeleteTaskFailed)
+                    .replace("{task}", &failure.task_id)
+                    .replace("{error}", error),
+            );
+        }
+        for failure in &self.files_failed {
+            text.push_str(" · ");
+            text.push_str(
+                &tr(locale, Msg::DeleteFileFailed)
+                    .replace("{task}", &failure.task_id)
+                    .replace("{path}", &failure.path)
+                    .replace("{error}", &failure.error),
+            );
+        }
+        text
+    }
+}
+
+/// What a batch delete would touch, shown in the confirmation dialog.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DeleteSelectionSummary {
+    /// Tasks in the selection.
+    pub tasks: usize,
+    /// Tasks that report a downloaded file.
+    pub files: usize,
+    /// Tasks the daemon has to stop first.
+    pub active: usize,
+}
+
+impl DeleteSelectionSummary {
+    /// Body of the confirmation dialog: the counts plus the active-task notice.
+    pub fn body(&self, locale: segmenta_i18n::Locale) -> String {
+        use segmenta_i18n::{tr, Msg};
+        let mut text = tr(locale, Msg::DeleteSelectionBody)
+            .replace("{tasks}", &self.tasks.to_string())
+            .replace("{files}", &self.files.to_string());
+        if self.active > 0 {
+            text.push('\n');
+            text.push_str(
+                &tr(locale, Msg::DeleteSelectionActive)
+                    .replace("{count}", &self.active.to_string()),
+            );
+        }
+        text
+    }
+}
+
 /// The daemon quarantined the file: it is no longer in the downloads folder.
 pub const ERR_ANTIVIRUS_FOUND: i64 = 1046;
 /// The scan was requested but neither `clamdscan` nor `clamscan` is usable.
@@ -225,6 +374,14 @@ impl DownloadItem {
                 .quarantine_path
                 .as_deref()
                 .is_some_and(|path| !path.trim().is_empty())
+    }
+
+    /// Whether the daemon reports a downloaded file for this task.
+    ///
+    /// The confirmation dialog counts files from this: a task without a path has
+    /// nothing to delete, so claiming a file would overstate the damage.
+    pub fn has_file(&self) -> bool {
+        !self.final_path.trim().is_empty()
     }
 
     /// Path to show for this task: the quarantine copy when there is one.
@@ -479,6 +636,40 @@ impl DownloadStore {
         let before = self.items.len();
         self.items.retain(|item| item.task_id != task_id);
         before != self.items.len()
+    }
+
+    /// Removes several rows at once, returning how many actually went away.
+    pub fn remove_many(&mut self, task_ids: &[String]) -> usize {
+        let before = self.items.len();
+        self.items.retain(|item| !task_ids.contains(&item.task_id));
+        before - self.items.len()
+    }
+
+    /// Ids of every `completed` row, the only tasks `download.clean_completed` touches.
+    pub fn completed_ids(&self) -> Vec<String> {
+        self.items
+            .iter()
+            .filter(|item| item.status == DownloadStatus::Completed)
+            .map(|item| item.task_id.clone())
+            .collect()
+    }
+
+    /// Counts for the delete confirmation of `task_ids` (unknown ids are ignored).
+    pub fn selection_summary(&self, task_ids: &[String]) -> DeleteSelectionSummary {
+        let mut summary = DeleteSelectionSummary::default();
+        for task_id in task_ids {
+            let Some(item) = self.get(task_id) else {
+                continue;
+            };
+            summary.tasks += 1;
+            if item.has_file() {
+                summary.files += 1;
+            }
+            if item.status.is_active() {
+                summary.active += 1;
+            }
+        }
+        summary
     }
 
     /// Applies a `task_progress` payload. Unknown tasks are ignored so a stale

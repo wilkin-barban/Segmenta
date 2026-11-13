@@ -97,6 +97,12 @@ struct DemoState {
     /// Site logins answered by `site_login.list`, never carrying a password.
     site_logins: Vec<Value>,
     list_calls: usize,
+    /// Every served request with its exact params, for contract assertions.
+    calls: Vec<(String, Value)>,
+    /// Files the batch delete really removed, so a test can prove clean never does.
+    files_deleted: usize,
+    /// Tasks that answer `ok: false` in `clean_completed` / `delete_many`.
+    failing: Vec<(String, String)>,
 }
 
 impl DemoClient {
@@ -170,6 +176,47 @@ impl DemoClient {
         self.state.lock().unwrap().list_calls
     }
 
+    /// Every served request in order: `(method, params)`.
+    ///
+    /// The GUI contract includes the exact params (`delete_files` in particular), so
+    /// tests assert what the window sent instead of what it meant to send.
+    pub fn calls(&self) -> Vec<(String, Value)> {
+        self.state.lock().unwrap().calls.clone()
+    }
+
+    /// Params of every call to `method`, in order.
+    pub fn calls_to(&self, method: &str) -> Vec<Value> {
+        self.calls()
+            .into_iter()
+            .filter(|(called, _)| called == method)
+            .map(|(_, params)| params)
+            .collect()
+    }
+
+    /// Files this fake daemon deleted from disk (only `download.delete_many` does).
+    pub fn deleted_files(&self) -> usize {
+        self.state.lock().unwrap().files_deleted
+    }
+
+    /// Makes `task_id` fail in `download.clean_completed` and `download.delete_many`
+    /// with `error`, so a partial batch has a realistic per-task result.
+    pub fn fail_task(&self, task_id: &str, error: &str) {
+        self.state
+            .lock()
+            .unwrap()
+            .failing
+            .push((task_id.to_string(), error.to_string()));
+    }
+
+    /// The scripted failure of `task_id`, if any.
+    fn failure_of(state: &DemoState, task_id: &str) -> Option<String> {
+        state
+            .failing
+            .iter()
+            .find(|(task, _)| task == task_id)
+            .map(|(_, error)| error.clone())
+    }
+
     pub fn set_settings(&self, settings: Value) {
         self.state.lock().unwrap().settings = Some(settings);
     }
@@ -202,6 +249,7 @@ impl Client for DemoClient {
         if let Some(error) = state.error.clone() {
             return Err(error);
         }
+        state.calls.push((method.to_string(), params.clone()));
         match method {
             "system.hello" => Ok(json!({
                 "protocol_version": 1,
@@ -285,6 +333,89 @@ impl Client for DemoClient {
                     .rows
                     .retain(|row| row["task_id"].as_str() != Some(&task_id));
                 Ok(json!({ "task_id": task_id, "deleted": true }))
+            }
+            // Only `completed` tasks, and never a file: the payload has no file
+            // count because nothing is deleted from disk.
+            "download.clean_completed" => {
+                let completed: Vec<String> = state
+                    .rows
+                    .iter()
+                    .filter(|row| row["status"].as_str() == Some("completed"))
+                    .filter_map(|row| row["task_id"].as_str().map(str::to_string))
+                    .collect();
+                let mut failed = Vec::new();
+                let mut removed = 0usize;
+                for task_id in completed {
+                    if let Some(error) = Self::failure_of(&state, &task_id) {
+                        failed.push(json!({ "task_id": task_id, "error": error }));
+                        continue;
+                    }
+                    state
+                        .rows
+                        .retain(|row| row["task_id"].as_str() != Some(task_id.as_str()));
+                    removed += 1;
+                }
+                Ok(json!({ "removed": removed, "failed": failed }))
+            }
+            "download.delete_many" => {
+                let task_ids: Vec<String> = params
+                    .get("task_ids")
+                    .and_then(Value::as_array)
+                    .map(|ids| {
+                        ids.iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let delete_files = params
+                    .get("delete_files")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let mut results = Vec::new();
+                let mut removed = 0usize;
+                let mut files_deleted = 0usize;
+                let mut files_failed = Vec::new();
+                for task_id in &task_ids {
+                    if let Some(error) = Self::failure_of(&state, task_id) {
+                        results.push(json!({ "task_id": task_id, "ok": false, "error": error }));
+                        continue;
+                    }
+                    let Some(position) = state
+                        .rows
+                        .iter()
+                        .position(|row| row["task_id"].as_str() == Some(task_id.as_str()))
+                    else {
+                        results.push(json!({
+                            "task_id": task_id,
+                            "ok": false,
+                            "error": format!("no task `{task_id}`")
+                        }));
+                        continue;
+                    };
+                    let row = state.rows.remove(position);
+                    removed += 1;
+                    if delete_files {
+                        let path = row["final_path"].as_str().unwrap_or_default();
+                        if path.is_empty() {
+                            files_failed.push(json!({
+                                "task_id": task_id,
+                                "path": "",
+                                "error": "the task has no downloaded file"
+                            }));
+                        } else {
+                            files_deleted += 1;
+                            state.files_deleted += 1;
+                        }
+                    }
+                    results.push(json!({ "task_id": task_id, "ok": true }));
+                }
+                Ok(json!({
+                    "results": results,
+                    "removed": removed,
+                    "files_deleted": files_deleted,
+                    "files_failed": files_failed
+                }))
             }
             "download.add" => {
                 let url = params

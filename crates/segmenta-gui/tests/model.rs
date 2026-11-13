@@ -5,10 +5,11 @@
 use serde_json::json;
 
 use segmenta_gui::model::{
-    format_bytes, format_eta, format_speed, Counts, DownloadItem, DownloadStatus, DownloadStore,
-    Filter, ProgressUpdate, SegmentItem, SeqStatus, Settings,
+    format_bytes, format_eta, format_speed, BatchDeleteReport, CleanCompletedReport, Counts,
+    DownloadItem, DownloadStatus, DownloadStore, Filter, ProgressUpdate, SegmentItem, SeqStatus,
+    Settings,
 };
-use segmenta_i18n::Locale;
+use segmenta_i18n::{tr, Locale, Msg};
 
 fn row(task_id: &str, status: &str) -> DownloadItem {
     serde_json::from_value(json!({
@@ -375,4 +376,104 @@ fn settings_round_trip_and_speed_limit_conversion() {
     assert_eq!(limited.speed_limit_kib(), 5120);
     // Files are not downloaded from loopback by default in this release either.
     assert!(!settings.allow_local_downloads);
+}
+
+// Safe download management (0.2.1): the daemon payloads that drive the clean and
+// batch-delete dialogs are parsed here, without a display and without a daemon.
+
+#[test]
+fn clean_completed_answer_parses_the_contract_shape() {
+    let report: CleanCompletedReport = serde_json::from_value(json!({
+        "removed": 3,
+        "failed": [{ "task_id": "b", "error": "database is locked" }]
+    }))
+    .expect("clean_completed payload parses");
+    assert_eq!(report.removed, 3);
+    assert_eq!(report.failed.len(), 1);
+    assert_eq!(report.failed[0].task_id, "b");
+    // The payload has no file count at all: cleaning never deletes files.
+    let text = report.summary(Locale::Es);
+    assert!(text.contains('3'), "{text}");
+    assert!(text.contains('b'), "{text}");
+    assert!(text.contains("database is locked"), "{text}");
+}
+
+#[test]
+fn batch_delete_answer_names_every_failure() {
+    let report: BatchDeleteReport = serde_json::from_value(json!({
+        "results": [
+            { "task_id": "a", "ok": true },
+            { "task_id": "b", "ok": false, "error": "no such task" }
+        ],
+        "removed": 1,
+        "files_deleted": 1,
+        "files_failed": [
+            { "task_id": "a", "path": "/home/user/Descargas/a.iso", "error": "permission denied" }
+        ]
+    }))
+    .expect("delete_many payload parses");
+    assert_eq!(report.removed, 1);
+    assert_eq!(report.files_deleted, 1);
+    assert!(!report.is_full_success(), "a failed file is not success");
+    assert_eq!(report.failed_tasks().len(), 1);
+    let text = report.summary(Locale::En);
+    assert!(
+        text.contains('b') && text.contains("no such task"),
+        "{text}"
+    );
+    assert!(
+        text.contains("/home/user/Descargas/a.iso") && text.contains("permission denied"),
+        "{text}"
+    );
+
+    let clean: BatchDeleteReport = serde_json::from_value(
+        json!({ "results": [{ "task_id": "a", "ok": true }], "removed": 1 }),
+    )
+    .expect("minimal payload parses");
+    assert_eq!(clean.files_deleted, 0);
+    assert!(clean.is_full_success());
+}
+
+#[test]
+fn a_selection_summary_counts_files_and_active_tasks() {
+    let mut store = DownloadStore::default();
+    store.reload(vec![
+        row("done", "completed"),
+        row("run", "downloading"),
+        row("nofile", "failed"),
+    ]);
+    // A task without a path has nothing to delete.
+    let mut no_file = store.get("nofile").cloned().expect("row");
+    no_file.final_path = String::new();
+    store.upsert(no_file);
+
+    let ids = vec![
+        "done".to_string(),
+        "run".to_string(),
+        "nofile".to_string(),
+        "ghost".to_string(),
+    ];
+    let summary = store.selection_summary(&ids);
+    assert_eq!(summary.tasks, 3, "unknown ids are not counted");
+    assert_eq!(summary.files, 2);
+    assert_eq!(summary.active, 1);
+    let body = summary.body(Locale::Es);
+    assert!(body.contains('3') && body.contains('2'), "{body}");
+    assert!(body.contains(&tr(Locale::Es, Msg::DeleteSelectionActive).replace("{count}", "1")));
+}
+
+#[test]
+fn remove_many_removes_only_the_named_rows() {
+    let mut store = DownloadStore::default();
+    store.reload(vec![
+        row("a", "completed"),
+        row("b", "completed"),
+        row("c", "failed"),
+    ]);
+    let removed = store.remove_many(&["a".to_string(), "ghost".to_string()]);
+    assert_eq!(removed, 1, "an unknown id removes nothing");
+    assert_eq!(store.len(), 2);
+    assert!(store.get("a").is_none());
+    assert!(store.get("c").is_some());
+    assert_eq!(store.completed_ids(), vec!["b".to_string()]);
 }
