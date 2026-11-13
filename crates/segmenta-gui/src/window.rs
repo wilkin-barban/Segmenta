@@ -99,7 +99,6 @@ struct Inner {
     rebuilding_queues: Cell<bool>,
     view_state: RefCell<ViewState>,
     loading_page: gtk::Box,
-    loading_spinner: gtk::Spinner,
     add_dialog: RefCell<Option<adw::Dialog>>,
     confirm_dialog: RefCell<Option<adw::AlertDialog>>,
     /// The batch confirmation dialog: clean completed or delete the selection.
@@ -220,11 +219,12 @@ impl SegmentaWindow {
         let list_view =
             gtk::ListView::new(Some(selection.clone()), None::<gtk::SignalListItemFactory>);
 
-        let spinner = gtk::Spinner::new();
+        // No spinner widget at all: the X11 captures kept showing a spinning glyph over a
+        // fully loaded list, and a widget that does not exist cannot paint. The state is
+        // carried by the label, which is honest and testable.
         let loading = gtk::Box::new(gtk::Orientation::Vertical, 12);
         loading.set_valign(gtk::Align::Center);
         loading.set_halign(gtk::Align::Center);
-        loading.append(&spinner);
         let loading_label = gtk::Label::new(Some(tr(locale(), Msg::Loading)));
         loading_label.add_css_class("dim-label");
         loading.append(&loading_label);
@@ -279,7 +279,6 @@ impl SegmentaWindow {
             rebuilding_queues: Cell::new(false),
             view_state: RefCell::new(ViewState::Loading),
             loading_page: loading.clone(),
-            loading_spinner: spinner.clone(),
             add_dialog: RefCell::new(None),
             confirm_dialog: RefCell::new(None),
             batch_dialog: RefCell::new(None),
@@ -476,14 +475,6 @@ impl SegmentaWindow {
     pub fn toggle_search(&self) {
         let visible = !self.0.search_bar.is_search_mode();
         self.0.search_bar.set_search_mode(visible);
-    }
-
-    /// Whether the loading spinner is still painting (regression for the stuck
-    /// "Conectando…" glyph).
-    pub fn loading_spinner_visible(&self) -> bool {
-        // `is_spinning()` turns false when stopped even though GTK still paints the
-        // static glyph, so visibility is the honest signal.
-        self.0.loading_spinner.is_visible()
     }
 
     /// Whether the loading page is still part of the stack (it is detached once the
@@ -1753,25 +1744,18 @@ impl Inner {
         if self.stack.child_by_name("loading").is_none() {
             self.stack.add_named(&self.loading_page, Some("loading"));
         }
-        self.loading_spinner.set_visible(true);
-        self.loading_spinner.start();
         self.stack.set_visible_child_name("loading");
     }
 
-    /// Stop the spinner and hide the loading page; a hidden page must not keep an
-    /// animation ticking behind the list.
+    /// Detach the loading page; a widget that is not in the stack cannot paint.
     fn stop_loading(&self) {
         if crate::client::trace_enabled() {
             eprintln!(
-                "segmenta-gui: stop_loading (spinner visible={} spinning={})",
-                self.loading_spinner.is_visible(),
-                self.loading_spinner.is_spinning()
+                "segmenta-gui: stop_loading (page attached={})",
+                self.stack.child_by_name("loading").is_some()
             );
         }
-        // Detach the page from the stack: a hidden widget cannot be painted, and this
-        // removes any chance of GTK keeping the stopped spinner glyph behind the list.
-        self.loading_spinner.stop();
-        self.loading_spinner.set_visible(false);
+        // Detach the page from the stack: a hidden widget cannot be painted.
         if let Some(child) = self.stack.child_by_name("loading") {
             self.stack.remove(&child);
         }
@@ -1824,6 +1808,39 @@ impl Inner {
     }
 
     /// Rebuilds the visible list from the snapshot.
+    /// Dumps every spinner-ish widget with its visibility, mapping and parent chain.
+    ///
+    /// Opt-in with `SEGMENTA_DEBUG_TREE=1`: a painted spinner that no field of this module
+    /// claims to own is otherwise invisible to the tests. Prints widget types and nothing
+    /// else, so it never leaks a URL or a path.
+    fn dump_spinner_tree(&self) {
+        if std::env::var_os("SEGMENTA_DEBUG_TREE").is_none() {
+            return;
+        }
+        fn walk(widget: &gtk::Widget, depth: usize) {
+            let name = widget.type_().name();
+            if name.contains("Spinner") {
+                let mut chain = Vec::new();
+                let mut current = widget.parent();
+                while let Some(parent) = current {
+                    chain.push(parent.type_().name().to_string());
+                    current = parent.parent();
+                }
+                eprintln!(
+                    "segmenta-gui: spinner {name} visible={} mapped={} depth={depth} parents={chain:?}",
+                    widget.is_visible(),
+                    widget.is_mapped()
+                );
+            }
+            let mut next = widget.first_child();
+            while let Some(child) = next {
+                walk(&child, depth + 1);
+                next = child.next_sibling();
+            }
+        }
+        walk(self.window.upcast_ref::<gtk::Widget>(), 0);
+    }
+
     fn refill(&self) {
         let filter = self.filter.get();
         let query = self.query.borrow().clone();
@@ -1896,13 +1913,8 @@ impl Inner {
         if !matches!(state, ViewState::Loading) || !self.store.borrow().is_empty() {
             self.stop_loading();
         }
-        // Belt and braces: if any path left the glyph visible with data on screen, hide
-        // it here. The X11 capture kept showing it after the stack had switched.
-        if !self.store.borrow().is_empty() && self.loading_spinner.is_visible() {
-            self.loading_spinner.stop();
-            self.loading_spinner.set_visible(false);
-        }
         *self.view_state.borrow_mut() = state;
+        self.dump_spinner_tree();
     }
 
     /// Replaces one row in place when it stays visible, else rebuilds.
