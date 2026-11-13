@@ -24,13 +24,14 @@ use crate::postprocess::{HookOptions, HookRun, HookTarget};
 use crate::rpc::{
     AddDownloadParams, CancelParams, ChecksumParam, DeleteParams, DownloadView, ListParams,
     MediaAddParams, MediaProbeParams, MediaStatusParams, QueueCreateParams, QueueRemoveParams,
-    QueueScheduleParams, RpcError, SegmentView, TaskIdParams,
+    QueueScheduleParams, RpcError, SegmentView, SiteLoginOriginParams, SiteLoginSetParams,
+    TaskIdParams,
 };
 use crate::scheduler::{resolve_schedule, Clock, LocalClock, QueueSchedule};
 use crate::secrets::SecretStore;
 use crate::store::{
-    Checkpoint, DownloadRecord, DownloadStatus, PostprocessRecord, SegmentRow, Settings, Store,
-    StoreError, TorrentFileInsert,
+    Checkpoint, DownloadRecord, DownloadStatus, PostprocessRecord, SegmentRow, Settings,
+    SiteLoginRow, Store, StoreError, TorrentFileInsert,
 };
 
 /// Live numbers of a running task, kept out of the database until a checkpoint.
@@ -733,7 +734,97 @@ impl Manager {
                 apply_secret(&secret, &mut sensitive);
             }
         }
+        // A site login fills the gap only when the task carries no explicit credentials.
+        // It is resolved by the exact origin of the URL that will be requested, never by a
+        // host alone: another port or scheme is a different origin and gets nothing.
+        if !headers.contains_key(reqwest::header::AUTHORIZATION)
+            && !sensitive.contains_key(reqwest::header::AUTHORIZATION)
+        {
+            if let Ok(Some(record)) = self.store.get(task_id) {
+                let request_url = record
+                    .final_url
+                    .as_deref()
+                    .filter(|final_url| origin_key(final_url) == origin_key(&record.url))
+                    .unwrap_or(&record.url);
+                if let Some(value) = self.site_login_header(request_url) {
+                    sensitive.insert(reqwest::header::AUTHORIZATION, value);
+                }
+            }
+        }
         Ok((headers, sensitive))
+    }
+
+    /// `Authorization: Basic` for the login stored for this URL's exact origin.
+    ///
+    /// `None` for a different port or scheme, for a legacy row without an origin and for
+    /// anything that is not `http`/`https`: the password belongs to one origin only.
+    pub fn site_login_header(&self, url: &str) -> Option<HeaderValue> {
+        let origin = origin_key(url)?;
+        let login = self.store.site_login_for_origin(&origin).ok().flatten()?;
+        let password = self.secrets.lookup(&login.alias).ok().flatten()?;
+        basic_header(&login.username, &password)
+    }
+
+    /// `site_login.list`: origin and user name, never the password.
+    fn site_login_list(&self) -> Result<Value, RpcError> {
+        let rows = self.store.site_logins().map_err(store_error)?;
+        let list: Vec<Value> = rows
+            .into_iter()
+            .map(|row| {
+                json!({
+                    "origin": row.origin,
+                    "domain": row.domain,
+                    "username": row.username,
+                    "has_password": !row.alias.is_empty(),
+                })
+            })
+            .collect();
+        Ok(Value::Array(list))
+    }
+
+    /// `site_login.set`: password to the keyring first, row to SQLite only after it lands.
+    fn site_login_set(&self, params: SiteLoginSetParams) -> Result<Value, RpcError> {
+        let origin = normalize_origin(&params.origin)?;
+        let username = params.username.trim().to_string();
+        if username.is_empty() {
+            return Err(RpcError::invalid_params("username must not be empty"));
+        }
+        if params.password.is_empty() {
+            return Err(RpcError::invalid_params("password must not be empty"));
+        }
+        let alias = format!("site/{origin}");
+        if self.secrets.store(&alias, &params.password).is_err() {
+            return Err(RpcError::new(
+                1031,
+                "ERR_KEYRING_UNAVAILABLE",
+                "the password cannot be stored without a keyring",
+            ));
+        }
+        let host = origin
+            .split_once("://")
+            .map(|(_, rest)| rest)
+            .unwrap_or(&origin)
+            .split(':')
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        self.store
+            .upsert_site_login(&SiteLoginRow {
+                domain: host,
+                username: username.clone(),
+                alias,
+                origin: origin.clone(),
+            })
+            .map_err(store_error)?;
+        Ok(json!({ "origin": origin, "username": username }))
+    }
+
+    /// `site_login.remove`: the keyring entry and the row go together.
+    fn site_login_remove(&self, params: SiteLoginOriginParams) -> Result<Value, RpcError> {
+        let origin = normalize_origin(&params.origin)?;
+        let _ = self.secrets.delete(&format!("site/{origin}"));
+        let removed = self.store.remove_site_login(&origin).map_err(store_error)?;
+        Ok(json!({ "origin": origin, "removed": removed }))
     }
 
     async fn pause_task(&self, task_id: &str) -> Result<Value, RpcError> {
@@ -1041,6 +1132,86 @@ fn memory_bytes() -> u64 {
         .and_then(|value| value.parse().ok())
         .unwrap_or(0);
     pages.saturating_mul(4096)
+}
+
+/// `scheme://host[:port]` with the default port removed, or `None` when the URL cannot
+/// become an origin (no scheme, not http/https, credentials embedded).
+fn origin_key(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return None;
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return None;
+    }
+    let host = parsed.host_str()?.to_ascii_lowercase();
+    let default_port = if parsed.scheme() == "https" { 443 } else { 80 };
+    match parsed.port() {
+        Some(port) if port != default_port => Some(format!("{}://{host}:{port}", parsed.scheme())),
+        _ => Some(format!("{}://{host}", parsed.scheme())),
+    }
+}
+
+/// Normalize a user-supplied origin, rejecting anything that is not a bare origin.
+fn normalize_origin(input: &str) -> Result<String, RpcError> {
+    let raw = input.trim();
+    let candidate = if raw.contains("://") {
+        raw.to_string()
+    } else {
+        format!("https://{raw}")
+    };
+    let parsed = url::Url::parse(&candidate)
+        .map_err(|err| RpcError::invalid_params(format!("invalid origin: {err}")))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(RpcError::invalid_params("origin must use http or https"));
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(RpcError::invalid_params(
+            "an origin must not embed credentials; use site_login.set",
+        ));
+    }
+    if parsed.path() != "/" || parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err(RpcError::invalid_params(
+            "an origin has no path, query or fragment",
+        ));
+    }
+    origin_key(&candidate).ok_or_else(|| RpcError::invalid_params("origin has no host"))
+}
+
+/// `Basic` credentials header for one user name and password.
+fn basic_header(username: &str, password: &str) -> Option<HeaderValue> {
+    let token = base64_encode(format!("{username}:{password}").as_bytes());
+    HeaderValue::from_str(&format!("Basic {token}")).ok()
+}
+
+/// Standard base64 (RFC 4648) with padding.
+///
+/// The daemon needs exactly one encoding for an `Authorization: Basic` value, and pulling
+/// a crate for ten lines would add a dependency to the `.deb`.
+fn base64_encode(input: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        out.push(ALPHABET[(n >> 18) as usize & 63] as char);
+        out.push(ALPHABET[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
 }
 
 fn store_error(err: StoreError) -> RpcError {
@@ -2703,6 +2874,17 @@ impl RpcHandler for Manager {
                 "torrent.status" => {
                     let parsed = parse(params)?;
                     self.torrent_status(parsed)
+                }
+                "site_login.list" => self.site_login_list(),
+                "site_login.set" => {
+                    let parsed: SiteLoginSetParams = serde_json::from_value(parse(params)?)
+                        .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                    self.site_login_set(parsed)
+                }
+                "site_login.remove" => {
+                    let parsed: SiteLoginOriginParams = serde_json::from_value(parse(params)?)
+                        .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                    self.site_login_remove(parsed)
                 }
                 "settings.get" => self.settings_get(),
                 "settings.update" => self.settings_update(params),
