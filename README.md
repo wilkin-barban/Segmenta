@@ -6,8 +6,10 @@
 
 **Estado: 0.2.0 construida y verificada, pendiente de publicación.** El `.deb` y los dos ZIP están
 en `dist/` con sus SHA-256 y pasaron el QA real en Ubuntu (`docs/qa/segmenta-0.2-live.md`); el tag
-`v0.2.0` todavía no existe. La última release publicada sigue siendo **0.1.2** (tag `v0.1.2`). 0.2.0
-todavía no tiene tag, Release ni `.deb` construido. Lo que sigue describe el comportamiento real
+`v0.2.0` todavía no existe. La última release publicada sigue siendo **0.1.2** (tag `v0.1.2`). El
+`.deb` 0.2.0 y los dos ZIP **sí están construidos y verificados** en `dist/` (con sus SHA-256 y el
+QA real de `docs/qa/segmenta-0.2-live.md`); lo que falta es el tag y la Release, no el paquete. Lo
+que sigue describe el comportamiento real
 de 0.1.2 y separa explícitamente lo que entra en 0.2.0 cuando el QA en Ubuntu cierre.
 
 ### Novedades de 0.1.2
@@ -35,13 +37,13 @@ de 0.1.2 y separa explícitamente lo que entra en 0.2.0 cuando el QA en Ubuntu c
 torrents (`librqbit`). 0.1.0 sumó YouTube, HLS/DASH públicos y el panel flotante. El detalle
 completo está en [`CHANGELOG.md`](CHANGELOG.md).
 
-### Qué entra en 0.2.0 (en preparación)
+### Qué entra en 0.2.0
 
-Estas funciones están aprobadas pero **todavía no están implementadas** en el código de este
-repositorio; no las uses como si existieran:
+Estas funciones ya están en el código de este repositorio y pasaron el QA real registrado en
+`docs/qa/segmenta-0.2-live.md`; lo que sigue pendiente es la publicación (tag y Release):
 
 - **Scheduler de colas nativo**: ventanas horarias por cola y `max_active` real aplicado por el
-  daemon (hoy `queue.schedule` y `max_active` se persisten, pero nada los obedece).
+  daemon.
 - **Post-procesamiento argv seguro y ClamAV integrado**: hook sin shell, escaneo opcional con
   `clamdscan`/`clamscan`, cuarentena y `ERR_ANTIVIRUS_FOUND`.
 - **Site logins Basic** por dominio con GNOME Keyring (sin Digest).
@@ -111,8 +113,9 @@ systemctl --user enable --now segmenta.socket
 ```
 
 El flujo apunta a `dist/segmenta_0.2.0-1_amd64.deb` con
-`packaging/check-package.sh dist/segmenta_0.2.0-1_amd64.deb 0.2.0`, que valida 22/22 rutas. Ese archivo **todavía no
-existe**: no hay tag `v0.2.0`, ni Release, ni asset que descargar.
+`packaging/check-package.sh dist/segmenta_0.2.0-1_amd64.deb 0.2.0`, que valida 22/22 rutas. El
+archivo existe en `dist/` con su SHA-256, pero no hay tag `v0.2.0`, ni Release, ni asset que
+descargar todavía.
 
 El paquete instala `/usr/bin/segmenta-daemon`, `/usr/bin/segmenta-cli`, `/usr/bin/segmenta-gui`,
 `/usr/bin/segmenta-host`, el enlace `/usr/bin/segmenta`, las unidades de usuario
@@ -278,8 +281,8 @@ segmenta --json list | jq '.[] | {id: .task_id, status, pct: (.downloaded_bytes 
 
 Códigos de salida: `0` éxito, `1` error del daemon o del protocolo, `2` uso inválido.
 
-`extension` funciona como subcomando desde 0.1.2, pero el texto de `--help` todavía no lo lista
-(lo corrige R3 en 0.2.0); `segmenta extension --help` sí muestra sus acciones.
+`extension` aparece en `segmenta --help` desde 0.2.0; `segmenta extension --help` muestra sus
+cuatro acciones.
 
 ### Límite de velocidad
 
