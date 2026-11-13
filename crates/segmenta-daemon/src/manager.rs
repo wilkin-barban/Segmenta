@@ -1,7 +1,7 @@
 //! Task orchestration: turns JSON-RPC calls into engine runs, bridges engine events to
 //! the event bus and persists checkpoints in the order OpenSpec 08 mandates.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -22,10 +22,10 @@ use crate::events::EventBus;
 use crate::ipc::{hello_result, RpcHandler};
 use crate::postprocess::{HookOptions, HookRun, HookTarget};
 use crate::rpc::{
-    AddDownloadParams, CancelParams, ChecksumParam, DeleteParams, DownloadView, ListParams,
-    MediaAddParams, MediaProbeParams, MediaStatusParams, QueueCreateParams, QueueRemoveParams,
-    QueueScheduleParams, RpcError, SegmentView, SiteLoginOriginParams, SiteLoginSetParams,
-    TaskIdParams,
+    AddDownloadParams, CancelParams, ChecksumParam, DeleteManyParams, DeleteParams, DownloadView,
+    ListParams, MediaAddParams, MediaProbeParams, MediaStatusParams, QueueCreateParams,
+    QueueRemoveParams, QueueScheduleParams, RpcError, SegmentView, SiteLoginOriginParams,
+    SiteLoginSetParams, TaskIdParams,
 };
 use crate::scheduler::{resolve_schedule, Clock, LocalClock, QueueSchedule};
 use crate::secrets::SecretStore;
@@ -33,6 +33,12 @@ use crate::store::{
     Checkpoint, DownloadRecord, DownloadStatus, PostprocessRecord, SegmentRow, Settings,
     SiteLoginRow, Store, StoreError, TorrentFileInsert,
 };
+
+/// Error stored on a task whose file a batch delete could not remove.
+///
+/// New in 0.2.1: the row stays with `status = failed` and this code, so a half deletion
+/// is visible in the list instead of looking like a successful one.
+const ERR_FILE_DELETE_FAILED: i64 = 1048;
 
 /// Live numbers of a running task, kept out of the database until a checkpoint.
 #[derive(Debug, Clone, Default)]
@@ -977,6 +983,171 @@ impl Manager {
         Ok(json!({ "task_id": params.task_id, "deleted": deleted }))
     }
 
+    /// `download.clean_completed`: drop the rows of finished tasks, never their files.
+    ///
+    /// The housekeeping path is deliberately filesystem-free: OpenSpec 12 forbids deleting
+    /// a downloaded file from "limpiar terminadas", so this function must never call
+    /// `remove_file` on the stored path. A row that cannot be removed is reported and the
+    /// loop continues with the rest of the batch.
+    fn clean_completed(&self) -> Result<Value, RpcError> {
+        let ids = self
+            .store
+            .ids_in_status(DownloadStatus::Completed)
+            .map_err(store_error)?;
+        let mut removed = 0u64;
+        let mut failed: Vec<Value> = Vec::new();
+        for id in ids {
+            match self.store.delete(&id) {
+                Ok(true) => {
+                    removed += 1;
+                    self.cleanup_secret(&id);
+                    self.progress
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .remove(&id);
+                }
+                Ok(false) => failed.push(json!({
+                    "task_id": id,
+                    "error": "the row was already gone when it was removed",
+                })),
+                Err(err) => failed.push(json!({ "task_id": id, "error": err.to_string() })),
+            }
+        }
+        Ok(json!({ "removed": removed, "failed": failed }))
+    }
+
+    /// `download.delete_many`: one result per requested id, never aborting the batch.
+    ///
+    /// The order of a single entry is the one the contract fixes: stop the task with the
+    /// same cancellation `download.cancel` performs and wait for it, then touch the paths
+    /// it owns, and only then remove the row. A file that cannot be removed keeps the row
+    /// with a visible failure instead of leaving a silent half-deletion behind.
+    async fn delete_many(&self, params: DeleteManyParams) -> Result<Value, RpcError> {
+        if params.task_ids.is_empty() {
+            return Err(RpcError::invalid_params("task_ids must not be empty"));
+        }
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut results: Vec<Value> = Vec::with_capacity(params.task_ids.len());
+        let mut removed = 0u64;
+        let mut files_deleted = 0u64;
+        let mut files_failed: Vec<Value> = Vec::new();
+        for task_id in params.task_ids {
+            if !seen.insert(task_id.clone()) {
+                results.push(json!({
+                    "task_id": task_id,
+                    "ok": false,
+                    "error": format!("duplicate task id `{task_id}` in the batch"),
+                }));
+                continue;
+            }
+            let record = match self.store.get(&task_id) {
+                Ok(Some(record)) => record,
+                Ok(None) => {
+                    results.push(json!({
+                        "task_id": task_id,
+                        "ok": false,
+                        "error": format!("no task `{task_id}`"),
+                    }));
+                    continue;
+                }
+                Err(err) => {
+                    results.push(json!({
+                        "task_id": task_id,
+                        "ok": false,
+                        "error": store_error(err).message,
+                    }));
+                    continue;
+                }
+            };
+            // Bind first: a temporary guard in an `if let` scrutinee would live across await.
+            let running_task = self
+                .running
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .remove(&task_id);
+            if let Some(task) = running_task {
+                // Same stop as `download.cancel`: the engine checkpoints and exits, and the
+                // join is awaited so no writer is left holding the file below.
+                task.cancel.cancel();
+                let _ = task.handle.await;
+            }
+            if params.delete_files {
+                let mut targets = vec![PathBuf::from(&record.final_path)];
+                if let Some(temp) = record.temp_path.as_deref().filter(|path| !path.is_empty()) {
+                    let temp = PathBuf::from(temp);
+                    if temp != targets[0] {
+                        targets.push(temp);
+                    }
+                }
+                let mut deleted_here = 0u64;
+                let mut errors: Vec<(PathBuf, String)> = Vec::new();
+                for path in targets {
+                    match remove_task_file(&path) {
+                        Ok(true) => deleted_here += 1,
+                        // Already gone: nothing to delete, and not a failure either.
+                        Ok(false) => {}
+                        Err(error) => errors.push((path, error)),
+                    }
+                }
+                files_deleted += deleted_here;
+                if let Some((path, error)) = errors.first().cloned() {
+                    let message = format!("cannot delete {}: {error}", path.display());
+                    // The row stays, with a visible failure: a half deletion must never
+                    // look like a successful one.
+                    if let Err(err) = self.store.set_status(
+                        &task_id,
+                        DownloadStatus::Failed,
+                        Some((ERR_FILE_DELETE_FAILED, message.clone())),
+                    ) {
+                        tracing::warn!(
+                            task_id = %task_id,
+                            error = %err,
+                            "cannot persist the failed file deletion"
+                        );
+                    }
+                    for (path, error) in errors {
+                        files_failed.push(json!({
+                            "task_id": task_id,
+                            "path": path.display().to_string(),
+                            "error": error,
+                        }));
+                    }
+                    results.push(json!({ "task_id": task_id, "ok": false, "error": message }));
+                    continue;
+                }
+            }
+            match self.store.delete(&task_id) {
+                Ok(true) => {
+                    removed += 1;
+                    self.cleanup_secret(&task_id);
+                    self.progress
+                        .lock()
+                        .unwrap_or_else(|err| err.into_inner())
+                        .remove(&task_id);
+                    results.push(json!({ "task_id": task_id, "ok": true }));
+                }
+                Ok(false) => results.push(json!({
+                    "task_id": task_id,
+                    "ok": false,
+                    "error": "the row was already gone when it was removed",
+                })),
+                Err(err) => results.push(json!({
+                    "task_id": task_id,
+                    "ok": false,
+                    "error": err.to_string(),
+                })),
+            }
+        }
+        // Every stopped task freed its queue slot, exactly like a single cancel.
+        self.notify_scheduler();
+        Ok(json!({
+            "results": results,
+            "removed": removed,
+            "files_deleted": files_deleted,
+            "files_failed": files_failed,
+        }))
+    }
+
     fn cleanup_secret(&self, task_id: &str) {
         if let Ok(Some(alias)) = self.store.secret_alias(task_id) {
             if let Err(err) = self.secrets.delete(&alias) {
@@ -1213,6 +1384,19 @@ fn base64_encode(input: &[u8]) -> String {
         });
     }
     out
+}
+
+/// Remove one file a task owns.
+///
+/// `Ok(false)` means the path was already gone, which is not a failure: a row whose file
+/// the user removed by hand can still be deleted from the history. Any other error is
+/// returned as text so the caller can report it per task.
+fn remove_task_file(path: &Path) -> Result<bool, String> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err.to_string()),
+    }
 }
 
 fn store_error(err: StoreError) -> RpcError {
@@ -2914,6 +3098,16 @@ impl RpcHandler for Manager {
                     let parsed: DeleteParams = serde_json::from_value(parse(params)?)
                         .map_err(|err| RpcError::invalid_params(err.to_string()))?;
                     self.delete_task(parsed).await
+                }
+                "download.clean_completed" => {
+                    // `{}` is the whole contract: no filter, no file deletion.
+                    let _ = parse(params)?;
+                    self.clean_completed()
+                }
+                "download.delete_many" => {
+                    let parsed: DeleteManyParams = serde_json::from_value(parse(params)?)
+                        .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                    self.delete_many(parsed).await
                 }
                 "system.open" => {
                     let parsed: TaskIdParams = serde_json::from_value(parse(params)?)

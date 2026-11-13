@@ -1412,6 +1412,24 @@ impl Store {
         Ok(rows)
     }
 
+    /// Ids of every task in exactly one lifecycle state, oldest first.
+    ///
+    /// Used by `download.clean_completed`, which must reach every finished row and not
+    /// just a page of them.
+    pub fn ids_in_status(&self, status: DownloadStatus) -> Result<Vec<String>> {
+        let conn = self.lock();
+        let mut statement = conn.prepare(
+            "SELECT id FROM downloads WHERE status = ?1 ORDER BY created_at ASC, rowid ASC",
+        )?;
+        let mapped =
+            statement.query_map(params![status.as_str()], |row| row.get::<_, String>(0))?;
+        let mut rows = Vec::new();
+        for row in mapped {
+            rows.push(row?);
+        }
+        Ok(rows)
+    }
+
     /// Delete a task and everything that cascades from it.
     pub fn delete(&self, id: &str) -> Result<bool> {
         let affected = {
