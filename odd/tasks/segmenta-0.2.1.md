@@ -60,3 +60,50 @@ Además, se pide una función nueva de gestión segura de descargas.
 - Screenshot de Preferencias en Xvfb: `/tmp/seg-prefs.png` (negro con spinner).
 - CFT 157 con `chromium-0.2.0`: panel de YouTube abrió correctamente; no se reprodujo el error de extensión.
 - La Release 0.2.0 está publicada; cualquier corrección va a 0.2.1.
+
+## Estado
+
+| Unidad | Commits | QA real |
+| --- | --- | --- |
+| P0 Preferencias: página Antivirus ausente | `15aa668` | confirmado por captura |
+| P0 Preferencias: ancho, títulos verticales, controles recortados | `82832cf`, `787b8bc` | confirmado por captura |
+| P0 spinner central | `82832cf`, `d2dd04e`, `326a754`, `8477503` | confirmado: flecha normal, sin glifo |
+| Feature daemon: limpiar completadas y borrado por lote | `763bf14`, `fb1992b` | — |
+| Feature GUI: menú, selección múltiple, diálogo, i18n | `976bf70` | confirmado |
+| Bloqueo del diálogo tras la respuesta | `b75d39b` | confirmado: sin deadlock |
+| Preferencias: inset inferior, búsqueda negra, descripciones cortadas | `71e39bfe` (build) | confirmado por captura |
+| Documentación | `13eca06` | — |
+| P0 extensión `ERR_INVALID_MESSAGE` | — | **bloqueado**: sin navegador en el equipo de desarrollo |
+
+Artefacto final: `segmenta_0.2.1-1_amd64.deb`, sha256
+`71e39bfecf25d6a36739f82694488cb6f1579e90f525788a9a5f508c49d05adf`; `check-package` 22/22.
+Sin tag y sin Release.
+
+## Log
+
+- L1: la captura negra de Preferencias era Wayland/Xvfb, no un diálogo vacío. Con capturas X11
+  reales los defectos fueron otros: faltaba la página Antivirus (existía sin añadirse), el
+  diálogo a 640 px colapsaba a la barra inferior de pestañas y aplastaba los títulos de fila, y
+  el spinner central seguía pintándose.
+- L2: el spinner no era estado de `refill` ni una segunda ventana: seguía al puntero. El binario
+  no contenía ningún `GtkSpinner` tras `326a754`, y el glifo era el cursor heredado de la sesión.
+  `8477503` fija el cursor por defecto y `SEGMENTA_DEBUG_TREE=1` quedó como diagnóstico para
+  nombrar cualquier widget que se pinte en el centro.
+- L3: el bloqueo tras "Limpiar completadas" no era deadlock del worker: `can_close(false)` también
+  bloquea el `close()` programático, así que el diálogo sobrevivía con el estado ya tomado y sus
+  handlers hacían `return`. `b75d39b` resetea el pendiente y restaura `can_close` antes de cerrar.
+- L4 (QA real del usuario sobre `71e39bfe`): limpiar completadas con 1 tarea cerró el diálogo y
+  conservó el archivo; multi-delete de 2 tareas conservó archivos; delete de 1 tarea con la
+  casilla marcada borró el `.zip` e informó "se borraron 1 archivo(s)"; sin deadlock. Preferencias:
+  búsqueda negra eliminada, descripciones con wrap y scroll hasta el final por encima de la tab bar.
+
+## Defectos restantes
+
+1. **`ERR_INVALID_MESSAGE` en la extensión**: no reproducido. No hay navegador en el equipo de
+   desarrollo (ni Chrome for Testing, ni Firefox, ni `/tmp/chrome-testing`), y la directiva prohíbe
+   relajar `validateInbound` para que el mensaje pase. Necesita un perfil real o la consola del
+   service worker con el `code` exacto.
+2. **Cold-start de captura**: sigue sin probarse en navegador real; la reconciliación tiene tests
+   con worker reiniciado y `downloads.search` falso, que no es evidencia de navegador.
+3. **Extensión de Firefox**: no ejercitada en navegador en ninguna de las dos sesiones de QA.
+

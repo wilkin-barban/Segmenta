@@ -5,6 +5,35 @@ Todos los cambios notables de Segmenta se documentan en este archivo.
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el proyecto usa
 [Versionado semántico](https://semver.org/lang/es/).
 
+## [0.2.1] - 2026-11-13
+
+Correcciones de interfaz y gestión segura de descargas. Sin publicar: falta el tag y el Release.
+
+### Added
+
+- **Limpiar completadas**: acción de menú que borra sólo filas `completed` y no toca ningún
+  archivo; con cero completadas avisa y no hace nada.
+- **Eliminar seleccionadas** (una o varias): selección múltiple con casilla por fila, diálogo que
+  indica cuántas tareas y archivos se verán afectados y casilla «Eliminar también los archivos
+  descargados» desmarcada por defecto. El diálogo no se cierra hasta conocer el resultado e informa
+  filas borradas, archivos borrados y cada fallo por nombre.
+- RPC `download.clean_completed` y `download.delete_many` con resultado por tarea; una tarea activa
+  se detiene antes de tocar su archivo y un borrado imposible deja la fila `failed` con
+  `1048 ERR_FILE_DELETE_FAILED`.
+
+### Fixed
+
+- **Preferencias** vuelve a mostrar sus siete páginas: la de Antivirus existía desde 0.2.0 pero
+  nunca se añadía al diálogo. El diálogo abre a 960×760 y los títulos de fila ya no se convierten en
+  una columna vertical de una letra por línea.
+- El **spinner de carga** ya no aparece sobre la lista: la página de carga dejó de tener spinner y
+  la ventana fija el cursor por defecto.
+- **Diálogo de confirmación**: cerraba en falso al recibir la respuesta (`can_close(false)` también
+  bloquea el `close()` programático) y dejaba la ventana sin responder; ahora se cierra y resetea su
+  estado en éxito y en error.
+- Preferencias: inset inferior para que el contenido no quede detrás de la barra de pestañas,
+  buscador del diálogo retirado y descripciones de navegador con wrap.
+
 ## [0.2.0] - 2026-11-12
 
 0.2.0 publicada con QA real en Ubuntu y dos límites declarados (cold-start de captura y extensión
