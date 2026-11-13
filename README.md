@@ -4,7 +4,9 @@
 > **Ubuntu 26.04 LTS (GNOME 50 / Wayland)**, con daemon propio, CLI, GUI nativa GTK4 +
 > Libadwaita y extensión de navegador.
 
-**Estado: 0.2.0 en preparación.** La última release publicada es **0.1.2** (tag `v0.1.2`); 0.2.0
+**Estado: 0.2.0 construida y verificada, pendiente de publicación.** El `.deb` y los dos ZIP están
+en `dist/` con sus SHA-256 y pasaron el QA real en Ubuntu (`docs/qa/segmenta-0.2-live.md`); el tag
+`v0.2.0` todavía no existe. La última release publicada sigue siendo **0.1.2** (tag `v0.1.2`). 0.2.0
 todavía no tiene tag, Release ni `.deb` construido. Lo que sigue describe el comportamiento real
 de 0.1.2 y separa explícitamente lo que entra en 0.2.0 cuando el QA en Ubuntu cierre.
 
@@ -94,7 +96,7 @@ ni otro canal de distribución.
 git clone https://github.com/wilkin-barban/Segmenta.git
 cd Segmenta
 
-# Construir el .deb de la versión del workspace (hoy 0.1.2; Q1 lo hará 0.2.0)
+# Construir el .deb de la versión del workspace (0.2.0)
 cargo build --release --workspace
 cargo deb -p segmenta-gui --no-build -o dist/
 
@@ -108,8 +110,8 @@ systemctl --user daemon-reload
 systemctl --user enable --now segmenta.socket
 ```
 
-Cuando Q1 cierre la release, el mismo flujo apunta a `dist/segmenta_0.2.0-1_amd64.deb` con
-`packaging/check-package.sh dist/segmenta_0.2.0-1_amd64.deb 0.2.0`. Ese archivo **todavía no
+El flujo apunta a `dist/segmenta_0.2.0-1_amd64.deb` con
+`packaging/check-package.sh dist/segmenta_0.2.0-1_amd64.deb 0.2.0`, que valida 22/22 rutas. Ese archivo **todavía no
 existe**: no hay tag `v0.2.0`, ni Release, ni asset que descargar.
 
 El paquete instala `/usr/bin/segmenta-daemon`, `/usr/bin/segmenta-cli`, `/usr/bin/segmenta-gui`,

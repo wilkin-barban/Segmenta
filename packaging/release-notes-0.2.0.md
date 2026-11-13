@@ -1,5 +1,18 @@
 # Segmenta 0.2.0
 
+Construida y verificada con QA real en Ubuntu; **el tag y la publicación están pendientes**.
+
+## Artefactos
+
+| Archivo | Tamaño | SHA-256 |
+| --- | --- | --- |
+| `segmenta_0.2.0-1_amd64.deb` | 7.240.668 B | `d633e3e06e0604d60e9162fb1a8aca02d95308c6d65fbcedf55665ff80742eab` |
+| `segmenta-extension-0.2.0.zip` | 57.159 B | `f11a128fa1d31740c65c81dd176251c2631d85ffab309e851e82d058d7e2452e` |
+| `segmenta-firefox-0.2.0.zip` | 56.871 B | `7ce34d9a3173dc62ade4281962d501b24df171fa18e4a7decf6c4beaab0e835c` |
+
+QA real en Ubuntu: `docs/qa/segmenta-0.2-live.md`. Sin probar en navegador real: cold-start de captura (el perfil de Chrome for Testing ya no estaba en el equipo) y la extensión de Firefox.
+
+
 **En preparación.** Este documento describe lo aprobado para 0.2.0, no lo publicado: todavía no
 hay tag `v0.2.0`, ni Release, ni `.deb` `dist/segmenta_0.2.0-1_amd64.deb`. Nada de lo que sigue
 debe presentarse como comportamiento disponible hasta que Q1 cierre los gates y el QA real en
