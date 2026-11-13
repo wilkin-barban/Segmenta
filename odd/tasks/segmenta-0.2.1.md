@@ -113,9 +113,11 @@ Sin tag y sin Release.
   (comprobado con `new URL`: scheme `https` y host exacto) y sigue validando el `url` del payload
   por su cuenta. Tests: `/`, origen sin barra, `/results` y `/watch` aceptados; `evil.example`,
   `http://`, `m.youtube.com` y `www.youtube.com.evil.example` rechazados.
-- L6 (hallazgo abierto, **no corregido**): `isAllowedUrl` acepta **cualquier host** cuando
-  `allowStreams` está activo y la allowlist está vacía (`extension/shared/protocol.js:180-181`), y
-  el background pasa `allowStreams: true`. Un payload `https://evil.example/watch?v=1` pasa la
-  validación. Es comportamiento previo, no de esta unidad, y tocarlo cambia el contrato de probing
-  de streams; queda registrado para una decisión explícita.
+- L6 (corregido en la misma unidad): `isAllowedUrl` aceptaba **cualquier host** cuando
+  `allowStreams` estaba activo y la allowlist vacía (`protocol.js:180-181`), y el background pasa
+  `allowStreams: true`, así que `https://evil.example/watch?v=1` pasaba `segmenta.probe kind=stream`
+  y `segmenta.add`. Ahora una allowlist vacía es **deny-by-default**: sólo YouTube exacto, o el host
+  explícitamente listado. Tests negativos para probe stream y add con host ajeno, y los positivos
+  pasan con el host en la allowlist.
+
 
