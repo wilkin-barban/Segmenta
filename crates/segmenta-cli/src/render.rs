@@ -197,6 +197,10 @@ pub fn render_status(locale: Locale, view: &DownloadView) -> String {
         };
         out.push_str(&format!("error:     {text}\n"));
     }
+    if let Some(path) = &view.quarantine_path {
+        // The file is not in the downloads folder any more: say where it is.
+        out.push_str(&format!("quarantine: {path}\n"));
+    }
     if !view.segments.is_empty() {
         out.push_str(&label(locale, Msg::Segments));
         for segment in &view.segments {
@@ -355,6 +359,7 @@ mod tests {
             completed_at: None,
             error_code: None,
             error_message: None,
+            quarantine_path: None,
             media_kind: None,
             playlist_title: None,
             segments: vec![SegmentView {

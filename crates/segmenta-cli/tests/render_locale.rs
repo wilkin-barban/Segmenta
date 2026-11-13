@@ -32,6 +32,7 @@ fn view() -> DownloadView {
         completed_at: None,
         error_code: None,
         error_message: None,
+        quarantine_path: None,
         segments: vec![SegmentView {
             id: 1,
             start_offset: 0,
