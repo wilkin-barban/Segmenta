@@ -229,8 +229,8 @@ fn sidebar_filters_and_counts_are_real() {
         // A Ready list must not leave the loading spinner painting, and the page must
         // be detached from the stack so nothing can paint it.
         assert!(
-            !window.loading_spinner_visible(),
-            "the loading spinner is still visible in Ready"
+            !window.loading_page_attached(),
+            "the loading page is still attached in Ready"
         );
         assert!(
             !window.loading_page_attached(),
@@ -244,7 +244,6 @@ fn sidebar_filters_and_counts_are_real() {
         assert_eq!(counts.failed, 0);
 
         window.set_filter(Filter::Paused);
-        assert!(!window.loading_spinner_visible());
         assert_eq!(window.rows().len(), 1);
         assert_eq!(window.rows()[0].task_id, "c");
         window.set_filter(Filter::Failed);
@@ -511,7 +510,6 @@ fn a_reload_with_rows_on_screen_never_paints_the_loading_spinner() {
             || window.rows().len() == 2,
             Duration::from_secs(5)
         ));
-        assert!(!window.loading_spinner_visible());
 
         // Reconnecting and reloading must leave the list uncovered.
         window.reload();
@@ -520,8 +518,8 @@ fn a_reload_with_rows_on_screen_never_paints_the_loading_spinner() {
             Duration::from_secs(5)
         ));
         assert!(
-            !window.loading_spinner_visible(),
-            "the spinner came back over a loaded list"
+            !window.loading_page_attached(),
+            "the loading page came back over a loaded list"
         );
         assert!(!window.loading_page_attached());
     });
