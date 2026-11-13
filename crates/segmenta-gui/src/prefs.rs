@@ -892,6 +892,8 @@ pub fn fill_browser_rows(
         // Two or three suffixes on a squeezed row wrap the title one character per line;
         // a minimum keeps the browser name readable.
         row.set_size_request(320, -1);
+        row.set_title_lines(1);
+        row.set_subtitle_lines(2);
         if let Some(version) = &data.version {
             row.add_suffix(
                 &gtk::Label::builder()
@@ -903,7 +905,8 @@ pub fn fill_browser_rows(
 
         let mut prepare = None;
         if data.actions.prepare {
-            let button = gtk::Button::with_label(tr(locale, Msg::ExtensionPrepare));
+            let button = gtk::Button::with_label(tr(locale, Msg::ExtensionPrepareShort));
+            button.set_tooltip_text(Some(tr(locale, Msg::ExtensionPrepare)));
             let handler = Rc::clone(&handlers.prepare);
             let family = data.family.clone();
             button.connect_clicked(move |_| handler(&family));
@@ -913,7 +916,8 @@ pub fn fill_browser_rows(
 
         let mut open = None;
         if data.actions.open {
-            let button = gtk::Button::with_label(tr(locale, Msg::ExtensionOpen));
+            let button = gtk::Button::with_label(tr(locale, Msg::ExtensionOpenShort));
+            button.set_tooltip_text(Some(tr(locale, Msg::ExtensionOpen)));
             let handler = Rc::clone(&handlers.open);
             let browser_id = data.id.clone();
             button.connect_clicked(move |_| handler(&browser_id));
