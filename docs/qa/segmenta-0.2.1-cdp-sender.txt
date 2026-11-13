@@ -1,0 +1,27 @@
+Segmenta 0.2.1 — prueba real del sender en Chrome for Testing 157
+Fecha: 2026-11-13
+
+Navegador: /home/wilkin/.local/opt/chrome-linux64/chrome 157.0.8103.78
+Perfil: /tmp/seg-cft-sender (limpio)
+Extensión: /home/wilkin/.local/share/segmenta/extension/chromium (0.2.1)
+Página: https://www.youtube.com/
+
+Contexto aislado del content script:
+  context 2 "Segmenta" runtime_id kdeldnifdbpemnhfpmhonlnibbhnoaan
+
+Mensaje enviado desde ese contexto:
+  {"type":"segmenta.probe","url":"https://www.youtube.com/watch?v=dQw4w9WgXcQ","kind":"video"}
+
+sender.url en ese contexto: https://www.youtube.com/ (no /watch)
+
+Respuesta:
+  {"ok":false,"error":{"code":"ERR_HOST_UNAVAILABLE","message":"native host is not available"}}
+
+Conclusión: el sender fue aceptado. El error es del host nativo ausente en el perfil CFT, no
+ERR_INVALID_SENDER. Antes del fix este caso devolvía ERR_INVALID_SENDER, que la UI traduce como
+"La solicitud no es válida para la extensión."
+
+El perfil real de Chrome además tenía cargada una copia 0.1.1 desde
+~/.local/share/segmenta/extension/chromium; esa carpeta ya fue reemplazada por 0.2.1 con backup de
+la 0.1.1. Falta pulsar Recargar en chrome://extensions para que el Chrome del usuario use la copia
+nueva.
