@@ -480,6 +480,9 @@ las capas de medios/extensión. `data.code` lleva siempre el nombre.
 | **`1052`** | `ERR_EXTENSION_OPEN` | No se pudo abrir el navegador. |
 | **`1053`** | `ERR_GUI_NOT_FOUND` | `system.open` sin GUI ejecutable. |
 
+**(0.2.1)** `1048 ERR_FILE_DELETE_FAILED`: `download.delete_many` borró la fila pero no el
+archivo; la tarea queda `failed` con ese código y la ruta en el resultado del lote.
+
 **(implementado en `main`, entra en 0.2.0)** `1046 ERR_ANTIVIRUS_FOUND` y
 `1047 ERR_ANTIVIRUS_UNAVAILABLE`, documentados en 12. El escaneo, la cuarentena y la migración
 v4 ya existen en el árbol; la release sigue sin publicarse.
