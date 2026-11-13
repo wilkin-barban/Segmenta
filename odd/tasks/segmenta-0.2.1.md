@@ -64,6 +64,7 @@ Además, se pide una función nueva de gestión segura de descargas.
   `/tmp/seg-0216-deleted.png` y `/tmp/seg-0216-deleted-files.png`.
 - Cold-start Chromium y panel de Firefox capturados por `agy` en
   `docs/qa/screenshots/cold-start-confirm-run{1,2,3}.png` y `firefox-youtube-panel.png`.
+- Informe consolidado: `docs/qa/segmenta-0.2.1-live.md`.
 - La Release 0.2.0 está publicada; cualquier corrección va a 0.2.1.
 
 ## Estado
@@ -117,10 +118,17 @@ Sin tag y sin Release.
   explícitamente listado. Tests negativos para probe stream y add con host ajeno, y los positivos
   pasan con el host en la allowlist.
 
+- L7 (causa de la instalación real): el perfil de Chrome cargaba la extensión **0.1.1** desde
+  `~/.local/share/segmenta/extension/chromium`, no la versión 0.2.x. Esa copia antigua no entiende
+  el contrato actual, y produce el mismo texto de error. La carpeta se reemplazó por 0.2.1 con
+  backup en `chromium-0.1.1-backup-20261113`; falta pulsar **Recargar** en `chrome://extensions`
+  y repetir el panel.
+
 ## Pendiente
 
-1. **Confirmación visual del fix de sender en Chrome real/CFT.** El panel de Firefox y el cold-start
-   tienen capturas de `agy`; el caso `/` tras SPA está probado en Node, no todavía en el navegador.
-2. **Commit e informe final de `agy`** con sus capturas y comandos; no publicar hasta integrarlo.
+1. **Recargar la extensión en el Chrome real y verificar el panel de YouTube.** La carpeta ya es
+   0.2.1 y el fix de sender está dentro; la confirmación visual sigue pendiente.
+2. El informe y las capturas de `agy` están en su commit `1ac4799`; las capturas también se
+   guardaron en `docs/qa/screenshots/`.
 
 
