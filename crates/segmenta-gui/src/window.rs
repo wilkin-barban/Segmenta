@@ -5,6 +5,7 @@
 //! GTK main loop never blocks.
 
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,7 +18,8 @@ use crate::client::{Client, ClientError, ClientEvent, RequestBus};
 use segmenta_i18n::{tr, Msg};
 
 use crate::model::{
-    DownloadItem, DownloadStatus, Filter, ProgressUpdate, SegmentItem, SeqStatus, Settings,
+    BatchDeleteReport, CleanCompletedReport, DeleteSelectionSummary, DownloadItem, DownloadStatus,
+    Filter, ProgressUpdate, SegmentItem, SeqStatus, Settings,
 };
 use crate::segment_view::SegmentaSegmentView;
 use crate::{add_dialog, adw, gtk, prefs};
@@ -100,6 +102,21 @@ struct Inner {
     loading_spinner: gtk::Spinner,
     add_dialog: RefCell<Option<adw::Dialog>>,
     confirm_dialog: RefCell<Option<adw::AlertDialog>>,
+    /// The batch confirmation dialog: clean completed or delete the selection.
+    ///
+    /// It stays open while the request is in flight, so the user never sees the
+    /// destructive action close before its result is known.
+    batch_dialog: RefCell<Option<BatchDialog>>,
+    /// Ids checked in multi-selection mode, kept by task id so a refresh that keeps
+    /// the same tasks keeps the selection.
+    selected: RefCell<BTreeSet<String>>,
+    /// Explicit multi-selection mode (checkbox column), toggled from the menu.
+    multi_select: Cell<bool>,
+    clean_action: gtk::gio::SimpleAction,
+    delete_selection_action: gtk::gio::SimpleAction,
+    multi_select_action: gtk::gio::SimpleAction,
+    last_clean_report: RefCell<Option<CleanCompletedReport>>,
+    last_delete_report: RefCell<Option<BatchDeleteReport>>,
     last_error: RefCell<Option<String>>,
     settings: RefCell<Settings>,
     bus: RequestBus,
@@ -123,6 +140,10 @@ enum Pending {
     Resume(String),
     Cancel(String),
     Delete(String),
+    /// `download.clean_completed`: only `completed` rows, never a file.
+    CleanCompleted,
+    /// `download.delete_many`: one result per task of the batch.
+    DeleteMany,
     /// `queue.list`: the only source of queue names.
     Queues,
     /// Next page of the counting sweep: rows already known, pages served.
@@ -130,6 +151,34 @@ enum Pending {
         offset: usize,
         pages: usize,
     },
+}
+
+/// What the batch confirmation dialog is confirming.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BatchKind {
+    /// `download.clean_completed`: no checkbox, never touches a file.
+    CleanCompleted { count: usize },
+    /// `download.delete_many` over the checked tasks.
+    DeleteSelection {
+        task_ids: Vec<String>,
+        summary: DeleteSelectionSummary,
+    },
+}
+
+/// Widgets of the batch confirmation dialog.
+struct BatchDialog {
+    dialog: adw::Dialog,
+    body: gtk::Label,
+    error: gtk::Label,
+    accept: gtk::Button,
+    cancel: gtk::Button,
+    /// `None` for clean completed: that operation never deletes files.
+    delete_files: Option<gtk::CheckButton>,
+    checkbox_label: Option<String>,
+    kind: BatchKind,
+    /// The accept label before the request replaced it with "Deleting…".
+    accept_label: String,
+    waiting: Cell<bool>,
 }
 
 /// Widgets of the detail page of one download.
@@ -190,6 +239,18 @@ impl SegmentaWindow {
         truncation_label.add_css_class("dim-label");
         truncation_label.set_visible(false);
 
+        // Destructive actions start disabled: there is no completed task and no
+        // selection until the daemon answers.
+        let clean_action = gtk::gio::SimpleAction::new("clean-completed", None);
+        clean_action.set_enabled(false);
+        let delete_selection_action = gtk::gio::SimpleAction::new("delete-selected", None);
+        delete_selection_action.set_enabled(false);
+        let multi_select_action = gtk::gio::SimpleAction::new_stateful(
+            "multi-select",
+            None,
+            &gtk::glib::Variant::from(false),
+        );
+
         let inner = Rc::new(Inner {
             app: app.clone(),
             client,
@@ -221,6 +282,14 @@ impl SegmentaWindow {
             loading_spinner: spinner.clone(),
             add_dialog: RefCell::new(None),
             confirm_dialog: RefCell::new(None),
+            batch_dialog: RefCell::new(None),
+            selected: RefCell::new(BTreeSet::new()),
+            multi_select: Cell::new(false),
+            clean_action,
+            delete_selection_action,
+            multi_select_action,
+            last_clean_report: RefCell::new(None),
+            last_delete_report: RefCell::new(None),
             last_error: RefCell::new(None),
             settings: RefCell::new(Settings::default()),
             bus: RequestBus::new(),
@@ -483,6 +552,133 @@ impl SegmentaWindow {
         self.0.begin_delete_selected();
     }
 
+    /// Whether "Limpiar completadas" is offered right now.
+    ///
+    /// It mirrors the real action sensitivity, so a disabled menu entry can never be
+    /// reported as available.
+    pub fn clean_completed_enabled(&self) -> bool {
+        self.0.clean_action.is_enabled()
+    }
+
+    /// Ask for confirmation to clean the completed tasks (never deletes a file).
+    pub fn begin_clean_completed(&self) {
+        self.0.begin_clean_completed();
+    }
+
+    /// Whether the batch confirmation dialog is open (clean or delete).
+    pub fn confirm_dialog_open(&self) -> bool {
+        self.0
+            .batch_dialog
+            .borrow()
+            .as_ref()
+            .map(|dialog| dialog.dialog.is_visible())
+            .unwrap_or(false)
+    }
+
+    /// Body text of the open batch confirmation, for accessibility and tests.
+    pub fn confirm_body(&self) -> Option<String> {
+        self.0
+            .batch_dialog
+            .borrow()
+            .as_ref()
+            .map(|dialog| dialog.body.label().to_string())
+    }
+
+    /// Counts shown by the open delete confirmation.
+    pub fn confirm_summary(&self) -> Option<DeleteSelectionSummary> {
+        let dialog = self.0.batch_dialog.borrow();
+        match dialog.as_ref().map(|dialog| &dialog.kind) {
+            Some(BatchKind::DeleteSelection { summary, .. }) => Some(*summary),
+            _ => None,
+        }
+    }
+
+    /// State of the "delete the files too" checkbox, or `None` when the operation
+    /// has no such checkbox (cleaning completed tasks never deletes files).
+    pub fn confirm_delete_files(&self) -> Option<bool> {
+        let dialog = self.0.batch_dialog.borrow();
+        dialog
+            .as_ref()
+            .and_then(|dialog| dialog.delete_files.as_ref())
+            .map(|check| check.is_active())
+    }
+
+    /// Checks or unchecks the "delete the files too" checkbox.
+    pub fn set_confirm_delete_files(&self, active: bool) {
+        let dialog = self.0.batch_dialog.borrow();
+        if let Some(check) = dialog
+            .as_ref()
+            .and_then(|dialog| dialog.delete_files.as_ref())
+        {
+            check.set_active(active);
+        }
+    }
+
+    /// Label of the "delete the files too" checkbox.
+    pub fn confirm_checkbox_label(&self) -> Option<String> {
+        self.0
+            .batch_dialog
+            .borrow()
+            .as_ref()
+            .and_then(|dialog| dialog.checkbox_label.clone())
+    }
+
+    /// Answers the open batch confirmation with its accept action.
+    ///
+    /// Returns `false` when no dialog is open or a request is already in flight.
+    pub fn accept_confirmation(&self) -> bool {
+        self.0.accept_batch_dialog()
+    }
+
+    /// What the keyboard default does: the safe answer, cancelling the dialog.
+    pub fn press_confirm_default(&self) {
+        self.0.dismiss_batch_dialog();
+    }
+
+    /// Whether multi-selection mode is on.
+    pub fn multi_select_enabled(&self) -> bool {
+        self.0.multi_select.get()
+    }
+
+    /// Turns the explicit multi-selection mode on or off.
+    pub fn set_multi_select(&self, enabled: bool) {
+        self.0.set_multi_select(enabled);
+    }
+
+    /// Checks or unchecks one task. Returns `false` for a task that is not listed.
+    pub fn set_task_selected(&self, task_id: &str, selected: bool) -> bool {
+        self.0.set_task_selected(task_id, selected)
+    }
+
+    /// Checked task ids in list order.
+    pub fn selected_task_ids(&self) -> Vec<String> {
+        self.0.selected_task_ids()
+    }
+
+    /// Number of files the selection would touch.
+    pub fn selection_file_count(&self) -> usize {
+        self.0
+            .store
+            .borrow()
+            .selection_summary(&self.0.selected_task_ids())
+            .files
+    }
+
+    /// Ask for confirmation to delete every checked task.
+    pub fn begin_delete_selection(&self) {
+        self.0.begin_delete_selection();
+    }
+
+    /// Last answer of `download.clean_completed`.
+    pub fn last_clean_report(&self) -> Option<CleanCompletedReport> {
+        self.0.last_clean_report.borrow().clone()
+    }
+
+    /// Last answer of `download.delete_many`.
+    pub fn last_delete_report(&self) -> Option<BatchDeleteReport> {
+        self.0.last_delete_report.borrow().clone()
+    }
+
     /// Whether a confirmation dialog is waiting for an answer.
     pub fn confirmation_pending(&self) -> bool {
         self.0
@@ -577,6 +773,18 @@ impl Inner {
         menu.append(Some(tr(locale(), Msg::AddUrl)), Some("win.add"));
         menu.append(Some(tr(locale(), Msg::Reload)), Some("win.reload"));
         menu.append(Some(tr(locale(), Msg::Search)), Some("win.search"));
+        menu.append(
+            Some(tr(locale(), Msg::CleanCompleted)),
+            Some("win.clean-completed"),
+        );
+        menu.append(
+            Some(tr(locale(), Msg::MultiSelect)),
+            Some("win.multi-select"),
+        );
+        menu.append(
+            Some(tr(locale(), Msg::DeleteSelection)),
+            Some("win.delete-selected"),
+        );
         menu.append(
             Some(tr(locale(), Msg::Preferences)),
             Some("win.preferences"),
@@ -747,6 +955,7 @@ impl Inner {
 
     fn build_list_page(self: &Rc<Self>) -> gtk::Widget {
         let factory = gtk::SignalListItemFactory::new();
+        let bind_handle = Rc::downgrade(self);
         factory.connect_setup(|_, object| {
             let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
                 return;
@@ -755,7 +964,7 @@ impl Inner {
             list_item.set_child(Some(&placeholder));
             list_item.set_activatable(true);
         });
-        factory.connect_bind(|_, object| {
+        factory.connect_bind(move |_, object| {
             let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
                 return;
             };
@@ -771,8 +980,11 @@ impl Inner {
             else {
                 return;
             };
-            if let Some(child) = list_item.child() {
-                fill_row(&child, &item);
+            let Some(child) = list_item.child() else {
+                return;
+            };
+            if let Some(inner) = bind_handle.upgrade() {
+                inner.fill_row(&child, &item);
             }
         });
         factory.connect_unbind(|_, object| {
@@ -967,6 +1179,37 @@ impl Inner {
             app.quit();
         });
         self.app.add_action(&quit);
+
+        let clean = self.clean_action.clone();
+        let handle = Rc::downgrade(self);
+        clean.connect_activate(move |_, _| {
+            if let Some(inner) = handle.upgrade() {
+                SegmentaWindow(inner).begin_clean_completed();
+            }
+        });
+        self.window.add_action(&self.clean_action);
+
+        let delete_selection = self.delete_selection_action.clone();
+        let handle = Rc::downgrade(self);
+        delete_selection.connect_activate(move |_, _| {
+            if let Some(inner) = handle.upgrade() {
+                SegmentaWindow(inner).begin_delete_selection();
+            }
+        });
+        self.window.add_action(&self.delete_selection_action);
+
+        let multi_select = self.multi_select_action.clone();
+        let handle = Rc::downgrade(self);
+        multi_select.connect_activate(move |action, _| {
+            let current = action
+                .state()
+                .and_then(|value| value.get::<bool>())
+                .unwrap_or(false);
+            if let Some(inner) = handle.upgrade() {
+                inner.set_multi_select(!current);
+            }
+        });
+        self.window.add_action(&self.multi_select_action);
     }
 
     fn install_shortcuts(self: &Rc<Self>) {
@@ -975,6 +1218,8 @@ impl Inner {
             .set_accels_for_action("win.search", &["<Control>f"]);
         self.app
             .set_accels_for_action("win.preferences", &["<Control>comma"]);
+        self.app
+            .set_accels_for_action("win.delete-selected", &["<Control>Delete"]);
         self.app.set_accels_for_action("app.quit", &["<Control>q"]);
     }
 
@@ -1276,6 +1521,7 @@ impl Inner {
             | Pending::Delete(task_id) => match result {
                 Ok(_) => {
                     self.store.borrow_mut().remove(&task_id);
+                    self.selected.borrow_mut().remove(&task_id);
                     if self
                         .detail
                         .borrow()
@@ -1288,6 +1534,56 @@ impl Inner {
                     self.reload_all();
                 }
                 Err(err) => self.toast(&err.ui_message()),
+            },
+            Pending::CleanCompleted => match result {
+                Ok(value) => match serde_json::from_value::<CleanCompletedReport>(value) {
+                    Ok(report) => {
+                        // The answer is known: only now does the dialog go away.
+                        self.close_batch_dialog();
+                        self.toast(&report.summary(locale()));
+                        *self.last_clean_report.borrow_mut() = Some(report);
+                        self.reload_all();
+                    }
+                    Err(err) => self.fail_batch_dialog(
+                        &tr(locale(), Msg::InvalidDaemonResponse)
+                            .replace("{error}", &err.to_string()),
+                    ),
+                },
+                Err(err) => self.fail_batch_dialog(&err.ui_message()),
+            },
+            Pending::DeleteMany => match result {
+                Ok(value) => match serde_json::from_value::<BatchDeleteReport>(value) {
+                    Ok(report) => {
+                        // Only the tasks the daemon removed leave the list: a failed
+                        // one has to stay visible with its error.
+                        let removed: Vec<String> = report
+                            .results
+                            .iter()
+                            .filter(|entry| entry.ok)
+                            .map(|entry| entry.task_id.clone())
+                            .collect();
+                        self.store.borrow_mut().remove_many(&removed);
+                        {
+                            let mut selected = self.selected.borrow_mut();
+                            for task_id in &removed {
+                                selected.remove(task_id);
+                            }
+                        }
+                        // Repaint before the reload answers: the removed rows must be
+                        // gone as soon as the result is known, not a tick later.
+                        self.refill();
+                        self.update_detail();
+                        self.close_batch_dialog();
+                        self.toast(&report.summary(locale()));
+                        *self.last_delete_report.borrow_mut() = Some(report);
+                        self.reload_all();
+                    }
+                    Err(err) => self.fail_batch_dialog(
+                        &tr(locale(), Msg::InvalidDaemonResponse)
+                            .replace("{error}", &err.to_string()),
+                    ),
+                },
+                Err(err) => self.fail_batch_dialog(&err.ui_message()),
             },
         }
     }
@@ -1551,10 +1847,20 @@ impl Inner {
         let existing = self.list_store.n_items();
         self.list_store.splice(0, existing, &objects);
 
+        // A refresh keeps the selection of every task the daemon still lists and
+        // drops the ones it no longer knows; a checked row can never act on a ghost.
+        {
+            let store = self.store.borrow();
+            self.selected
+                .borrow_mut()
+                .retain(|task_id| store.get(task_id).is_some());
+        }
+
         let counts = self.store.borrow().counts();
         for (filter, label) in self.count_labels.borrow().iter() {
             label.set_label(&counts.of(*filter).to_string());
         }
+        self.refresh_actions();
         self.refresh_queues();
         self.refresh_truncation();
 
@@ -1625,6 +1931,7 @@ impl Inner {
             }
             _ => self.refill(),
         }
+        self.refresh_actions();
     }
 
     fn refresh_queues(&self) {
@@ -2014,6 +2321,376 @@ impl Inner {
             }),
         );
     }
+    fn fill_row(self: &Rc<Self>, widget: &gtk::Widget, item: &DownloadItem) {
+        let Some(row) = widget.downcast_ref::<gtk::Box>() else {
+            return;
+        };
+        while let Some(child) = row.first_child() {
+            row.remove(&child);
+        }
+        row.set_spacing(10);
+        row.set_margin_top(10);
+        row.set_margin_bottom(10);
+        row.set_margin_start(12);
+        row.set_margin_end(12);
+
+        let body = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        body.set_hexpand(true);
+
+        let title = gtk::Label::new(Some(&item.filename));
+        title.set_xalign(0.0);
+        title.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+        title.set_tooltip_text(Some(&item.filename));
+        title.add_css_class("heading");
+
+        let status = gtk::Label::new(Some(item.status.label(locale())));
+        status.set_xalign(0.0);
+        status.add_css_class("caption");
+        status.add_css_class("dim-label");
+
+        let bar = gtk::ProgressBar::new();
+        bar.set_fraction(item.progress());
+        bar.set_show_text(false);
+        bar.update_property(&[gtk::accessible::Property::Label(&format!(
+            "Progreso de {}: {:.0} %",
+            item.filename,
+            item.progress() * 100.0
+        ))]);
+
+        // Media tasks carry a localized badge in front of the progress line.
+        let badge = item.media_badge();
+        let meta_text = if badge.is_empty() {
+            item.progress_line()
+        } else {
+            format!("{badge} · {}", item.progress_line())
+        };
+        let meta = gtk::Label::new(Some(&meta_text));
+        meta.set_xalign(0.0);
+        meta.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        meta.add_css_class("caption");
+        meta.add_css_class("dim-label");
+
+        body.append(&title);
+        body.append(&status);
+        body.append(&bar);
+        body.append(&meta);
+
+        if self.multi_select.get() {
+            // Explicit, discoverable selection: a checkbox per row instead of a
+            // hidden ctrl-click, which no menu entry could ever explain.
+            row.set_orientation(gtk::Orientation::Horizontal);
+            let check = gtk::CheckButton::new();
+            check.set_active(self.selected.borrow().contains(&item.task_id));
+            check.set_valign(gtk::Align::Center);
+            check.set_tooltip_text(Some(tr(locale(), Msg::MultiSelectHint)));
+            check.update_property(&[gtk::accessible::Property::Label(&format!(
+                "{}: {}",
+                tr(locale(), Msg::MultiSelectHint),
+                item.filename
+            ))]);
+            let handle = Rc::downgrade(self);
+            let task_id = item.task_id.clone();
+            check.connect_toggled(move |check| {
+                if let Some(inner) = handle.upgrade() {
+                    inner.set_task_selected(&task_id, check.is_active());
+                }
+            });
+            row.append(&check);
+        } else {
+            row.set_orientation(gtk::Orientation::Vertical);
+        }
+        row.append(&body);
+    }
+
+    fn set_multi_select(self: &Rc<Self>, enabled: bool) {
+        self.multi_select.set(enabled);
+        self.multi_select_action
+            .set_state(&gtk::glib::Variant::from(enabled));
+        // Repaint so the checkbox column appears or disappears; the selection is kept
+        // by task id, so toggling the mode never loses it.
+        self.refill();
+    }
+
+    fn set_task_selected(&self, task_id: &str, selected: bool) -> bool {
+        if self.store.borrow().get(task_id).is_none() {
+            return false;
+        }
+        {
+            let mut ids = self.selected.borrow_mut();
+            if selected {
+                ids.insert(task_id.to_string());
+            } else {
+                ids.remove(task_id);
+            }
+        }
+        self.refresh_actions();
+        true
+    }
+
+    /// Checked ids in the order the list paints them.
+    fn selected_task_ids(&self) -> Vec<String> {
+        let selected = self.selected.borrow();
+        self.store
+            .borrow()
+            .items()
+            .iter()
+            .filter(|item| selected.contains(&item.task_id))
+            .map(|item| item.task_id.clone())
+            .collect()
+    }
+
+    /// Gates the destructive actions on real state: a completed row exists, a task is
+    /// checked. A disabled menu entry is a documented state, never a silent no-op.
+    fn refresh_actions(&self) {
+        let completed = self.store.borrow().counts().completed;
+        self.clean_action.set_enabled(completed > 0);
+        let has_selection = !self.selected.borrow().is_empty();
+        self.delete_selection_action.set_enabled(has_selection);
+    }
+
+    /// "Limpiar completadas": only `completed` rows, never a file.
+    fn begin_clean_completed(self: &Rc<Self>) {
+        let count = self.store.borrow().counts().completed;
+        if count == 0 {
+            self.toast(tr(locale(), Msg::CleanCompletedNone));
+            return;
+        }
+        let body = tr(locale(), Msg::CleanCompletedBody).replace("{count}", &count.to_string());
+        self.present_batch_dialog(
+            tr(locale(), Msg::CleanCompletedTitle),
+            body,
+            tr(locale(), Msg::CleanCompleted),
+            None,
+            BatchKind::CleanCompleted { count },
+        );
+    }
+
+    /// "Eliminar" over the checked tasks, with the file checkbox off by default.
+    fn begin_delete_selection(self: &Rc<Self>) {
+        let task_ids = self.selected_task_ids();
+        if task_ids.is_empty() {
+            self.toast(tr(locale(), Msg::DeleteSelectionNone));
+            return;
+        }
+        let summary = self.store.borrow().selection_summary(&task_ids);
+        self.present_batch_dialog(
+            tr(locale(), Msg::DeleteSelectionTitle),
+            summary.body(locale()),
+            tr(locale(), Msg::Delete),
+            Some((
+                tr(locale(), Msg::DeleteFilesCheckbox),
+                tr(locale(), Msg::DeleteFilesCheckboxHint),
+            )),
+            BatchKind::DeleteSelection { task_ids, summary },
+        );
+    }
+
+    fn present_batch_dialog(
+        self: &Rc<Self>,
+        heading: &str,
+        body: String,
+        accept_label: &str,
+        checkbox: Option<(&str, &str)>,
+        kind: BatchKind,
+    ) {
+        self.close_batch_dialog();
+        let dialog = adw::Dialog::builder()
+            .title(heading)
+            .content_width(460)
+            .follows_content_size(true)
+            .build();
+
+        let header = adw::HeaderBar::new();
+        let cancel = gtk::Button::with_label(tr(locale(), Msg::Cancel));
+        header.pack_start(&cancel);
+        let accept = gtk::Button::with_label(accept_label);
+        accept.add_css_class("destructive-action");
+        header.pack_end(&accept);
+
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+        content.set_margin_top(12);
+        content.set_margin_bottom(18);
+        content.set_margin_start(18);
+        content.set_margin_end(18);
+
+        let title = gtk::Label::new(Some(heading));
+        title.set_xalign(0.0);
+        title.set_wrap(true);
+        title.add_css_class("title-4");
+        let body_label = gtk::Label::new(Some(&body));
+        body_label.set_xalign(0.0);
+        body_label.set_wrap(true);
+        content.append(&title);
+        content.append(&body_label);
+
+        let delete_files = checkbox.map(|(label, hint)| {
+            let check = gtk::CheckButton::with_label(label);
+            // Destructive by nature: it always starts unchecked.
+            check.set_active(false);
+            check.set_tooltip_text(Some(hint));
+            content.append(&check);
+            let hint_label = gtk::Label::new(Some(hint));
+            hint_label.set_xalign(0.0);
+            hint_label.set_wrap(true);
+            hint_label.add_css_class("caption");
+            hint_label.add_css_class("dim-label");
+            content.append(&hint_label);
+            check
+        });
+
+        let error = gtk::Label::new(None);
+        error.set_xalign(0.0);
+        error.set_wrap(true);
+        error.set_selectable(true);
+        error.add_css_class("error");
+        error.set_visible(false);
+        content.append(&error);
+
+        // Keyboard: Enter is the safe answer, so it never confirms a destructive
+        // action; Escape closes the dialog through AdwDialog itself.
+        let keys = gtk::EventControllerKey::new();
+        let key_handle = Rc::downgrade(self);
+        keys.connect_key_pressed(move |_, keyval, _, _| {
+            if matches!(keyval, gtk::gdk::Key::Return | gtk::gdk::Key::KP_Enter) {
+                if let Some(inner) = key_handle.upgrade() {
+                    inner.dismiss_batch_dialog();
+                }
+                return gtk::glib::Propagation::Stop;
+            }
+            gtk::glib::Propagation::Proceed
+        });
+        content.add_controller(keys);
+
+        let toolbar = adw::ToolbarView::new();
+        toolbar.add_top_bar(&header);
+        toolbar.set_content(Some(&content));
+        dialog.set_child(Some(&toolbar));
+
+        let handle = Rc::downgrade(self);
+        cancel.connect_clicked(move |_| {
+            if let Some(inner) = handle.upgrade() {
+                inner.dismiss_batch_dialog();
+            }
+        });
+        let handle = Rc::downgrade(self);
+        accept.connect_clicked(move |_| {
+            if let Some(inner) = handle.upgrade() {
+                inner.accept_batch_dialog();
+            }
+        });
+        let handle = Rc::downgrade(self);
+        dialog.connect_closed(move |_| {
+            if let Some(inner) = handle.upgrade() {
+                inner.batch_dialog.borrow_mut().take();
+            }
+        });
+
+        let checkbox_label = checkbox.map(|(label, _)| label.to_string());
+        *self.batch_dialog.borrow_mut() = Some(BatchDialog {
+            dialog: dialog.clone(),
+            body: body_label,
+            error,
+            accept,
+            cancel,
+            delete_files,
+            checkbox_label,
+            kind,
+            accept_label: accept_label.to_string(),
+            waiting: Cell::new(false),
+        });
+        dialog.present(Some(&self.window));
+    }
+
+    /// Answers the open batch dialog with its accept action.
+    fn accept_batch_dialog(self: &Rc<Self>) -> bool {
+        let (kind, delete_files) = {
+            let open = self.batch_dialog.borrow();
+            let Some(dialog) = open.as_ref() else {
+                return false;
+            };
+            if dialog.waiting.get() {
+                return false;
+            }
+            let delete_files = dialog
+                .delete_files
+                .as_ref()
+                .is_some_and(|check| check.is_active());
+            (dialog.kind.clone(), delete_files)
+        };
+        if let Some(dialog) = self.batch_dialog.borrow().as_ref() {
+            dialog.waiting.set(true);
+            // Escape must not hide a destructive request whose outcome is unknown.
+            dialog.dialog.set_can_close(false);
+            dialog.accept.set_sensitive(false);
+            dialog.cancel.set_sensitive(false);
+            if let Some(check) = dialog.delete_files.as_ref() {
+                check.set_sensitive(false);
+            }
+            dialog.accept.set_label(match &dialog.kind {
+                BatchKind::CleanCompleted { .. } => tr(locale(), Msg::Cleaning),
+                BatchKind::DeleteSelection { .. } => tr(locale(), Msg::Deleting),
+            });
+        }
+        match kind {
+            BatchKind::CleanCompleted { .. } => {
+                self.request(
+                    "download.clean_completed",
+                    json!({}),
+                    Pending::CleanCompleted,
+                );
+            }
+            BatchKind::DeleteSelection { task_ids, .. } => {
+                self.request(
+                    "download.delete_many",
+                    json!({ "task_ids": task_ids, "delete_files": delete_files }),
+                    Pending::DeleteMany,
+                );
+            }
+        }
+        true
+    }
+
+    /// Closes the dialog as the safe answer (nothing is sent).
+    fn dismiss_batch_dialog(&self) {
+        // The borrow is scoped: `close()` re-enters the `closed` handler, which takes
+        // the same cell, and holding the `RefMut` across it aborts the process.
+        let taken = self.batch_dialog.borrow_mut().take();
+        let Some(dialog) = taken else {
+            return;
+        };
+        if dialog.waiting.get() {
+            // A destructive request is in flight: hiding the dialog would hide an
+            // outcome nobody knows yet.
+            *self.batch_dialog.borrow_mut() = Some(dialog);
+            return;
+        }
+        dialog.dialog.close();
+    }
+
+    fn close_batch_dialog(&self) {
+        let taken = self.batch_dialog.borrow_mut().take();
+        let Some(dialog) = taken else {
+            return;
+        };
+        dialog.dialog.close();
+    }
+
+    /// Keeps the dialog open on a failure so the error is readable and retryable.
+    fn fail_batch_dialog(&self, message: &str) {
+        if let Some(dialog) = self.batch_dialog.borrow().as_ref() {
+            dialog.error.set_label(message);
+            dialog.error.set_visible(true);
+            dialog.waiting.set(false);
+            dialog.dialog.set_can_close(true);
+            dialog.accept.set_sensitive(true);
+            dialog.cancel.set_sensitive(true);
+            dialog.accept.set_label(&dialog.accept_label);
+            if let Some(check) = dialog.delete_files.as_ref() {
+                check.set_sensitive(true);
+            }
+        }
+        self.toast(message);
+    }
 }
 
 /// Queue name painted by one sidebar row: the first label of its box.
@@ -2064,59 +2741,6 @@ fn update_detail_widgets(detail: &DetailPage, item: &DownloadItem) {
     detail.cancel.set_visible(item.status.can_cancel());
     detail.delete.set_visible(item.status.can_delete());
     detail.open_folder.set_visible(!item.final_path.is_empty());
-}
-
-fn fill_row(widget: &gtk::Widget, item: &DownloadItem) {
-    let Some(row) = widget.downcast_ref::<gtk::Box>() else {
-        return;
-    };
-    while let Some(child) = row.first_child() {
-        row.remove(&child);
-    }
-    row.set_orientation(gtk::Orientation::Vertical);
-    row.set_spacing(6);
-    row.set_margin_top(10);
-    row.set_margin_bottom(10);
-    row.set_margin_start(12);
-    row.set_margin_end(12);
-
-    let title = gtk::Label::new(Some(&item.filename));
-    title.set_xalign(0.0);
-    title.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
-    title.set_tooltip_text(Some(&item.filename));
-    title.add_css_class("heading");
-
-    let status = gtk::Label::new(Some(item.status.label(locale())));
-    status.set_xalign(0.0);
-    status.add_css_class("caption");
-    status.add_css_class("dim-label");
-
-    let bar = gtk::ProgressBar::new();
-    bar.set_fraction(item.progress());
-    bar.set_show_text(false);
-    bar.update_property(&[gtk::accessible::Property::Label(&format!(
-        "Progreso de {}: {:.0} %",
-        item.filename,
-        item.progress() * 100.0
-    ))]);
-
-    // Media tasks carry a localized badge in front of the progress line.
-    let badge = item.media_badge();
-    let meta_text = if badge.is_empty() {
-        item.progress_line()
-    } else {
-        format!("{badge} · {}", item.progress_line())
-    };
-    let meta = gtk::Label::new(Some(&meta_text));
-    meta.set_xalign(0.0);
-    meta.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    meta.add_css_class("caption");
-    meta.add_css_class("dim-label");
-
-    row.append(&title);
-    row.append(&status);
-    row.append(&bar);
-    row.append(&meta);
 }
 
 fn list_items(store: &gtk::gio::ListStore) -> Vec<DownloadItem> {
