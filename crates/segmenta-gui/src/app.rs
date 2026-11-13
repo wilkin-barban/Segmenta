@@ -119,6 +119,26 @@ thread_local! {
 
 /// Creates the main window for the default (socket) client and keeps it alive.
 pub fn build_window_for_client(app: &adw::Application) {
+    // `activate` can fire more than once (a desktop launch plus a second request). A new
+    // window per activation leaves a second, still-loading window stacked on the first:
+    // its spinner paints over the list of the one the user is looking at.
+    let reused = OPEN_WINDOWS.with(|windows| {
+        windows
+            .borrow()
+            .iter()
+            .find(|window| {
+                window
+                    .window()
+                    .application()
+                    .map(|candidate| candidate.application_id() == app.application_id())
+                    .unwrap_or(false)
+            })
+            .cloned()
+    });
+    if let Some(existing) = reused {
+        existing.window().present();
+        return;
+    }
     let client: Arc<dyn Client> = Arc::new(UnixClient::from_env());
     let window = build_window_with_client(app, client);
     if let Some(task_id) = take_pending_show_task() {
