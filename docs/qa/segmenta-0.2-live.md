@@ -26,9 +26,10 @@ aprobado.
 
 ## No verificado, y por qué
 
-- **Cold-start de captura**: no se pudo probar. El perfil de Chrome for Testing que se usaba en el
-  equipo (`/tmp/chrome-testing`) ya no existe, así que no había un navegador real con el que
-  arrancar el worker y observar la primera descarga. La reconciliación (`downloads.search` al
+- **Cold-start de captura: NO se probó**, y la causa es concreta: el perfil de Chrome for Testing
+  que se usaba en el equipo (`/tmp/chrome-testing`) ya no existe, así que no había ningún navegador
+  real con el que arrancar el worker y observar la primera descarga. No se reemplazó por una
+  suposición ni se marcó como aprobado. La reconciliación (`downloads.search` al
   arrancar, al instalarse y en un tick del watchdog) está cubierta por tests con un trabajador
   reiniciado y `downloads.search` falso, pero **eso no es evidencia de navegador real**. Queda
   pendiente para una sesión con Chrome for Testing o Firefox instalado.
