@@ -214,6 +214,22 @@ Ajustes del daemon sin control en la UI (comportamiento actual, no contrato aspi
 
 ---
 
+### 6.1. Gestión segura de descargas (0.2.1)
+
+Dos acciones en el menú principal, ambas con confirmación cuando son destructivas:
+
+* **Limpiar completadas**: habilitada sólo si hay filas `completed`. La confirmación nombra
+  la cantidad y la acción borra únicamente el historial; **los archivos descargados no se
+  tocan** y la interfaz no afirma lo contrario en ningún momento.
+* **Eliminar** sobre una selección múltiple: el modo de selección se activa desde el menú y
+  muestra una casilla por fila. La selección se guarda por identificador y sobrevive a un
+  refresco que conserve las tareas.
+* El diálogo de borrado dice cuántas tareas y cuántos archivos se verán afectados, avisa si
+  la selección contiene tareas activas y ofrece la casilla **«Eliminar también los archivos
+  descargados»**, desmarcada por defecto. No se cierra hasta conocer el resultado y después
+  informa filas borradas, archivos borrados y cada fallo por nombre. Enter es la acción
+  segura; Escape cierra.
+
 ## 7. Estados, accesibilidad y límites de la UI
 
 Cada lista y cada diálogo define, como mínimo, estos estados:
