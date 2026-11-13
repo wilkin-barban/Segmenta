@@ -549,7 +549,7 @@ async fn an_infected_download_fails_with_1046_and_leaves_downloads() {
         Some(1046),
         "the code names the infection"
     );
-    let quarantined = stored.quarantine_path.expect("the quarantine path");
+    let quarantined = stored.quarantine_path.clone().expect("the quarantine path");
     assert!(
         std::path::Path::new(&quarantined).exists(),
         "the file is in quarantine: {quarantined}"
@@ -557,6 +557,37 @@ async fn an_infected_download_fails_with_1046_and_leaves_downloads() {
     assert!(
         !std::path::Path::new(&task.final_path).exists(),
         "the infected file must not stay in the downloads folder"
+    );
+
+    // `download.status` must expose the quarantine path, and the code may appear once.
+    let view = h
+        .manager
+        .call(
+            "download.status",
+            Some(serde_json::json!({ "task_id": "infected" })),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        view["quarantine_path"],
+        stored.quarantine_path.clone().unwrap()
+    );
+    let message = view["error_message"].as_str().unwrap_or_default();
+    assert_eq!(
+        message.matches("ERR_ANTIVIRUS_FOUND").count(),
+        1,
+        "the code must appear exactly once: {message}"
+    );
+    let listed = h
+        .manager
+        .call("download.list", Some(serde_json::json!({})))
+        .await
+        .unwrap();
+    let row = listed.as_array().unwrap()[0].clone();
+    assert_eq!(
+        row["quarantine_path"],
+        stored.quarantine_path.clone().unwrap(),
+        "the list carries the quarantine path too"
     );
     server.shutdown().await;
     std::env::remove_var("SEGMENTA_ANTIVIRUS_PATH");

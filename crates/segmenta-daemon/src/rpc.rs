@@ -380,6 +380,9 @@ pub struct DownloadView {
     pub error_code: Option<i64>,
     /// Message of the last failure.
     pub error_message: Option<String>,
+    /// Where an infected file was moved, when the antivirus quarantined it.
+    #[serde(default)]
+    pub quarantine_path: Option<String>,
     /// Segments when the caller asked for them.
     #[serde(default)]
     pub segments: Vec<SegmentView>,

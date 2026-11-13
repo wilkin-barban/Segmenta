@@ -354,6 +354,7 @@ impl Manager {
             completed_at: record.completed_at.clone(),
             error_code: record.error_code,
             error_message: record.error_message.clone(),
+            quarantine_path: record.quarantine_path.clone(),
             segments,
             media_kind: record.media_kind.clone(),
             playlist_title: record.playlist_title.clone(),
@@ -1637,7 +1638,7 @@ async fn finish_task(
                     let _ = store.set_status(
                         task_id,
                         DownloadStatus::Failed,
-                        Some((1046, format!("ERR_ANTIVIRUS_FOUND: {message}"))),
+                        Some((1046, antivirus_message("ERR_ANTIVIRUS_FOUND", &message))),
                     );
                     tracing::warn!(task_id = %task_id, quarantine = %quarantine_path, "task failed: infected file quarantined");
                     bus.publish(
@@ -1655,7 +1656,10 @@ async fn finish_task(
                     let _ = store.set_status(
                         task_id,
                         DownloadStatus::Failed,
-                        Some((1047, format!("ERR_ANTIVIRUS_UNAVAILABLE: {message}"))),
+                        Some((
+                            1047,
+                            antivirus_message("ERR_ANTIVIRUS_UNAVAILABLE", &message),
+                        )),
                     );
                     tracing::warn!(task_id = %task_id, "task failed: no antivirus engine");
                     bus.publish(
@@ -1672,7 +1676,10 @@ async fn finish_task(
                     let _ = store.set_status(
                         task_id,
                         DownloadStatus::Failed,
-                        Some((1047, format!("ERR_ANTIVIRUS_UNAVAILABLE: {message}"))),
+                        Some((
+                            1047,
+                            antivirus_message("ERR_ANTIVIRUS_UNAVAILABLE", &message),
+                        )),
                     );
                     tracing::warn!(task_id = %task_id, message = %message, "task failed: the scan produced no verdict");
                     bus.publish(
@@ -1959,6 +1966,21 @@ async fn scan_final_file(
             message: report.message.clone(),
         },
     }
+}
+
+/// The message without the code it already carries.
+///
+/// `error_message` is read next to `error_code`, and the CLI/GUI print the name from the
+/// code, so a scanner message that repeats `ERR_ANTIVIRUS_FOUND: ` would show it twice.
+fn antivirus_message(name: &str, message: &str) -> String {
+    let mut text = message.trim();
+    for prefix in ["ERR_ANTIVIRUS_FOUND:", "ERR_ANTIVIRUS_UNAVAILABLE:"] {
+        if let Some(rest) = text.strip_prefix(prefix) {
+            text = rest.trim_start();
+            break;
+        }
+    }
+    format!("{name}: {text}")
 }
 
 /// Suffix used in messages when the hook also ran, so the log explains both steps.
