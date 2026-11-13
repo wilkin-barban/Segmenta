@@ -79,6 +79,13 @@ fn preferences_open_with_every_real_page_and_controls() {
         dialog.is_visible() || dialog.root().is_some(),
         "the dialog was not presented"
     );
+    // A narrow dialog collapses Adw into a bottom switcher that clips the last tabs and
+    // squeezes row titles, which is exactly what the X11 capture showed.
+    assert!(
+        dialog.content_width() >= 900,
+        "the dialog must be wide enough for seven pages, got {}",
+        dialog.content_width()
+    );
     let _ = window;
 }
 

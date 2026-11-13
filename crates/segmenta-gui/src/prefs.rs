@@ -30,8 +30,10 @@ pub fn present(
 ) -> adw::PreferencesDialog {
     let dialog = adw::PreferencesDialog::builder()
         .title(tr(locale(), Msg::Preferences))
-        .content_width(640)
-        .content_height(720)
+        // Seven pages with suffixes need room: at 640 Adw collapses to a bottom
+        // switcher that clips tabs and squeezes row titles to one character per line.
+        .content_width(960)
+        .content_height(760)
         .search_enabled(true)
         .build();
 
@@ -887,6 +889,9 @@ pub fn fill_browser_rows(
             .title(&data.name)
             .subtitle(&data.status)
             .build();
+        // Two or three suffixes on a squeezed row wrap the title one character per line;
+        // a minimum keeps the browser name readable.
+        row.set_size_request(320, -1);
         if let Some(version) = &data.version {
             row.add_suffix(
                 &gtk::Label::builder()

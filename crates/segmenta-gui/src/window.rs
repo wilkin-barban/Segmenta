@@ -1447,6 +1447,11 @@ impl Inner {
             eprintln!("segmenta-gui: view -> Loading");
         }
         *self.view_state.borrow_mut() = ViewState::Loading;
+        // A reconnect with data already on screen must not cover the list with the
+        // spinner: the loading page only belongs to a cold start or an empty list.
+        if !self.store.borrow().is_empty() {
+            return;
+        }
         // The loading page is detached once the first Ready arrives; put it back for a
         // retry or a reconnect.
         if self.stack.child_by_name("loading").is_none() {
