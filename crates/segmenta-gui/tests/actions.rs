@@ -492,3 +492,37 @@ fn focusing_a_task_clears_the_filter_and_the_search() {
         assert!(window.rows().iter().any(|row| row.task_id == "a"));
     });
 }
+
+/// A reconnect with data on screen must not put the spinner back over the list.
+///
+/// The X11 capture showed the loading spinner painted over a fully loaded list and over
+/// the preferences dialog, which is exactly what re-entering the Loading page does.
+#[test]
+fn a_reload_with_rows_on_screen_never_paints_the_loading_spinner() {
+    run_gui("reload_keeps_the_list", || {
+        let application = app("io.github.wilkin.Segmenta.Reload");
+        let fake = DemoClient::with_downloads(vec![
+            row("a", "downloading", "ubuntu.iso"),
+            row("b", "completed", "debian.iso"),
+        ]);
+        let client: Arc<dyn Client> = Arc::new(fake);
+        let window = SegmentaWindow::new(&application, client);
+        assert!(pump_until(
+            || window.rows().len() == 2,
+            Duration::from_secs(5)
+        ));
+        assert!(!window.loading_spinner_visible());
+
+        // Reconnecting and reloading must leave the list uncovered.
+        window.reload();
+        assert!(pump_until(
+            || window.rows().len() == 2,
+            Duration::from_secs(5)
+        ));
+        assert!(
+            !window.loading_spinner_visible(),
+            "the spinner came back over a loaded list"
+        );
+        assert!(!window.loading_page_attached());
+    });
+}
