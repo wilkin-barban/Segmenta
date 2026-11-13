@@ -126,8 +126,12 @@ fn migration_from_v3_adds_the_three_v4_columns_and_keeps_every_row() {
 
     let store = Store::open(&path).unwrap();
 
-    assert_eq!(SCHEMA_VERSION, 4, "A2 owns schema v4 (OpenSpec 08 §4.2.2)");
-    assert_eq!(store.schema_version().unwrap(), 4);
+    // A2 owns v4; v5 (site logins by origin) is already in the chain.
+    assert!(
+        SCHEMA_VERSION >= 4,
+        "A2 owns schema v4 (OpenSpec 08 §4.2.2)"
+    );
+    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
 
     // No row is added, lost or rewritten: the migration only widens the table.
     let rows = store.list(None, 10, 0).unwrap();
@@ -166,12 +170,12 @@ fn the_v4_migration_is_idempotent_on_reopen() {
 
     {
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 4);
+        assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     }
     // Reopening must not re-run the DDL: a second `ADD COLUMN` would fail outright and,
     // if it did not, would duplicate the columns.
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 4);
+    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     assert_eq!(store.list(None, 10, 0).unwrap().len(), 3);
     for (column, _) in V4_COLUMNS {
         assert_eq!(
