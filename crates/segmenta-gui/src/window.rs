@@ -1812,18 +1812,24 @@ impl Inner {
     }
 
     /// Rebuilds the visible list from the snapshot.
-    /// Dumps every spinner-ish widget with its visibility, mapping and parent chain.
+    /// Dumps the widgets painted at the centre of the window.
     ///
-    /// Opt-in with `SEGMENTA_DEBUG_TREE=1`: a painted spinner that no field of this module
-    /// claims to own is otherwise invisible to the tests. Prints widget types and nothing
-    /// else, so it never leaks a URL or a path.
+    /// Opt-in with `SEGMENTA_DEBUG_TREE=1`. Types, visibility and mapping only: a QA
+    /// capture showed a glyph that no field of this module owns, so the honest way to find
+    /// it is to list what is actually painted there.
     fn dump_spinner_tree(&self) {
         if std::env::var_os("SEGMENTA_DEBUG_TREE").is_none() {
             return;
         }
-        fn walk(widget: &gtk::Widget, depth: usize) {
+        fn walk(widget: &gtk::Widget, cx: i32, cy: i32, depth: usize, print_children: bool) {
+            let alloc = widget.allocation();
+            let contains = cx >= alloc.x()
+                && cx < alloc.x() + alloc.width()
+                && cy >= alloc.y()
+                && cy < alloc.y() + alloc.height();
             let name = widget.type_().name();
-            if name.contains("Spinner") {
+            let interesting = contains || name.contains("Spinner");
+            if interesting {
                 let mut chain = Vec::new();
                 let mut current = widget.parent();
                 while let Some(parent) = current {
@@ -1831,18 +1837,30 @@ impl Inner {
                     current = parent.parent();
                 }
                 eprintln!(
-                    "segmenta-gui: spinner {name} visible={} mapped={} depth={depth} parents={chain:?}",
+                    "segmenta-gui: widget {name} visible={} mapped={} alloc={}x{}+{}+{} depth={depth} parents={chain:?}",
                     widget.is_visible(),
-                    widget.is_mapped()
+                    widget.is_mapped(),
+                    alloc.width(),
+                    alloc.height(),
+                    alloc.x(),
+                    alloc.y()
                 );
             }
+            let _ = print_children;
             let mut next = widget.first_child();
             while let Some(child) = next {
-                walk(&child, depth + 1);
+                walk(&child, cx, cy, depth + 1, false);
                 next = child.next_sibling();
             }
         }
-        walk(self.window.upcast_ref::<gtk::Widget>(), 0);
+        let alloc = self.window.allocation();
+        walk(
+            self.window.upcast_ref::<gtk::Widget>(),
+            alloc.width() / 2,
+            alloc.height() / 2,
+            0,
+            true,
+        );
     }
 
     fn refill(&self) {
