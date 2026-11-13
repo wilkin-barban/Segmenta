@@ -467,3 +467,158 @@ async fn a_failing_hook_leaves_the_download_completed_and_the_file_in_place() {
     assert_eq!(bytes.len(), 32 * 1024);
     server.shutdown().await;
 }
+
+/// The engine path is process-wide, so the antivirus tests take turns instead of racing
+/// on `SEGMENTA_ANTIVIRUS_PATH`.
+static ANTIVIRUS_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Fake `clamscan`: exit 1 when the file contains the EICAR marker, 0 otherwise.
+fn fake_clamscan(dir: &Path) -> PathBuf {
+    let path = dir.join("clamscan");
+    std::fs::write(
+        &path,
+        "#!/bin/sh\nlast=\"\"\nfor arg in \"$@\"; do last=\"$arg\"; done\n\
+         if grep -q 'EICAR-STANDARD-ANTIVIRUS-TEST-FILE' \"$last\"; then\n\
+         \tprintf '%s: Eicar-Test-Signature FOUND\\n' \"$last\"\n\texit 1\nfi\n\
+         printf '%s: OK\\n' \"$last\"\nexit 0\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+async fn configure_antivirus(
+    h: &Harness,
+    dir: &Path,
+    quarantine: &Path,
+    engine_dir: Option<&Path>,
+) {
+    let settings = Settings {
+        allow_local_downloads: true,
+        download_dir: dir.display().to_string(),
+        max_connections: 2,
+        antivirus_enabled: true,
+        antivirus_timeout_secs: 30,
+        antivirus_quarantine_dir: quarantine.display().to_string(),
+        ..Settings::default()
+    };
+    h.manager
+        .call(
+            "settings.update",
+            Some(serde_json::to_value(&settings).unwrap()),
+        )
+        .await
+        .unwrap();
+    // The scan searches only where the test says: no real ClamAV is ever involved.
+    match engine_dir {
+        Some(path) => std::env::set_var("SEGMENTA_ANTIVIRUS_PATH", path),
+        None => std::env::set_var("SEGMENTA_ANTIVIRUS_PATH", dir.join("no-engine")),
+    }
+}
+
+/// The Ubuntu QA scenario: antivirus on, no hook configured, an infected file.
+#[tokio::test]
+async fn an_infected_download_fails_with_1046_and_leaves_downloads() {
+    let _guard = ANTIVIRUS_ENV.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+    let downloads = dir.path().join("Descargas");
+    let quarantine = dir.path().join("cuarentena");
+    std::fs::create_dir_all(&downloads).unwrap();
+    let engine_dir = dir.path().join("bin");
+    std::fs::create_dir_all(&engine_dir).unwrap();
+    fake_clamscan(&engine_dir);
+
+    let body = b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*".to_vec();
+    let server = RangeServer::start(ServerConfig {
+        body,
+        ..ServerConfig::default()
+    })
+    .await;
+    configure_antivirus(&h, &downloads, &quarantine, Some(&engine_dir)).await;
+
+    let task = record("infected", server.url().as_str(), &downloads);
+    h.store.insert_download(&task).unwrap();
+    assert_eq!(h.manager.start_pending_for_queue("main").unwrap(), 1);
+
+    assert_eq!(wait_terminal(&h, "infected").await, DownloadStatus::Failed);
+    let stored = h.store.get("infected").unwrap().unwrap();
+    assert_eq!(
+        stored.error_code,
+        Some(1046),
+        "the code names the infection"
+    );
+    let quarantined = stored.quarantine_path.expect("the quarantine path");
+    assert!(
+        std::path::Path::new(&quarantined).exists(),
+        "the file is in quarantine: {quarantined}"
+    );
+    assert!(
+        !std::path::Path::new(&task.final_path).exists(),
+        "the infected file must not stay in the downloads folder"
+    );
+    server.shutdown().await;
+    std::env::remove_var("SEGMENTA_ANTIVIRUS_PATH");
+}
+
+#[tokio::test]
+async fn a_clean_download_completes_with_the_scanner_running() {
+    let _guard = ANTIVIRUS_ENV.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+    let downloads = dir.path().join("Descargas");
+    let quarantine = dir.path().join("cuarentena");
+    std::fs::create_dir_all(&downloads).unwrap();
+    let engine_dir = dir.path().join("bin");
+    std::fs::create_dir_all(&engine_dir).unwrap();
+    fake_clamscan(&engine_dir);
+    let server = RangeServer::start(ServerConfig {
+        body: vec![3u8; 32 * 1024],
+        ..ServerConfig::default()
+    })
+    .await;
+    configure_antivirus(&h, &downloads, &quarantine, Some(&engine_dir)).await;
+
+    let task = record("clean", server.url().as_str(), &downloads);
+    h.store.insert_download(&task).unwrap();
+    assert_eq!(h.manager.start_pending_for_queue("main").unwrap(), 1);
+
+    assert_eq!(wait_terminal(&h, "clean").await, DownloadStatus::Completed);
+    let stored = h.store.get("clean").unwrap().unwrap();
+    assert_eq!(stored.error_code, None);
+    assert!(std::path::Path::new(&task.final_path).exists());
+    server.shutdown().await;
+    std::env::remove_var("SEGMENTA_ANTIVIRUS_PATH");
+}
+
+#[tokio::test]
+async fn antivirus_without_an_engine_fails_with_1047() {
+    let _guard = ANTIVIRUS_ENV.lock().await;
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+    let downloads = dir.path().join("Descargas");
+    let quarantine = dir.path().join("cuarentena");
+    std::fs::create_dir_all(&downloads).unwrap();
+    let server = RangeServer::start(ServerConfig {
+        body: vec![1u8; 8 * 1024],
+        ..ServerConfig::default()
+    })
+    .await;
+    configure_antivirus(&h, &downloads, &quarantine, None).await;
+
+    let task = record("no-engine", server.url().as_str(), &downloads);
+    h.store.insert_download(&task).unwrap();
+    assert_eq!(h.manager.start_pending_for_queue("main").unwrap(), 1);
+
+    assert_eq!(wait_terminal(&h, "no-engine").await, DownloadStatus::Failed);
+    let stored = h.store.get("no-engine").unwrap().unwrap();
+    assert_eq!(
+        stored.error_code,
+        Some(1047),
+        "a missing engine is not an infection"
+    );
+    assert_eq!(stored.quarantine_path, None);
+    server.shutdown().await;
+    std::env::remove_var("SEGMENTA_ANTIVIRUS_PATH");
+}

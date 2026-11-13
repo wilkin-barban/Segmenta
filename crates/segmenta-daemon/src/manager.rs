@@ -1612,19 +1612,80 @@ async fn finish_task(
             // before the task is published as `completed`. No lock of the manager is held
             // across the await: `running` belongs to the spawned task, which only touches it
             // after this function returns.
-            run_postprocess(store, bus, task_id).await;
-            let _ = store.set_status(task_id, DownloadStatus::Completed, None);
-            tracing::info!(
-                task_id = %task_id,
-                total_bytes,
-                checksum_ok = ?checksum_ok,
-                "task completed"
-            );
-            bus.publish(
-                "state_changed",
-                Some(task_id),
-                json!({ "old_state": "downloading", "new_state": "completed", "checksum_ok": checksum_ok }),
-            );
+            // The hook and the antivirus scan decide whether this really completes: a
+            // quarantined or unverifiable file must never be published as `completed`.
+            match run_postprocess(store, bus, task_id).await {
+                FinalizeOutcome::Clean => {
+                    let _ = store.set_status(task_id, DownloadStatus::Completed, None);
+                    tracing::info!(
+                        task_id = %task_id,
+                        total_bytes,
+                        checksum_ok = ?checksum_ok,
+                        "task completed"
+                    );
+                    bus.publish(
+                        "state_changed",
+                        Some(task_id),
+                        json!({ "old_state": "downloading", "new_state": "completed", "checksum_ok": checksum_ok }),
+                    );
+                }
+                FinalizeOutcome::Infected {
+                    quarantine_path,
+                    message,
+                } => {
+                    let _ = store.set_quarantine_path(task_id, Some(&quarantine_path));
+                    let _ = store.set_status(
+                        task_id,
+                        DownloadStatus::Failed,
+                        Some((1046, format!("ERR_ANTIVIRUS_FOUND: {message}"))),
+                    );
+                    tracing::warn!(task_id = %task_id, quarantine = %quarantine_path, "task failed: infected file quarantined");
+                    bus.publish(
+                        "state_changed",
+                        Some(task_id),
+                        json!({
+                            "old_state": "finalizing",
+                            "new_state": "failed",
+                            "error_code": 1046,
+                            "quarantine_path": quarantine_path,
+                        }),
+                    );
+                }
+                FinalizeOutcome::ScanUnavailable { message } => {
+                    let _ = store.set_status(
+                        task_id,
+                        DownloadStatus::Failed,
+                        Some((1047, format!("ERR_ANTIVIRUS_UNAVAILABLE: {message}"))),
+                    );
+                    tracing::warn!(task_id = %task_id, "task failed: no antivirus engine");
+                    bus.publish(
+                        "state_changed",
+                        Some(task_id),
+                        json!({
+                            "old_state": "finalizing",
+                            "new_state": "failed",
+                            "error_code": 1047,
+                        }),
+                    );
+                }
+                FinalizeOutcome::ScanFailed { message } => {
+                    let _ = store.set_status(
+                        task_id,
+                        DownloadStatus::Failed,
+                        Some((1047, format!("ERR_ANTIVIRUS_UNAVAILABLE: {message}"))),
+                    );
+                    tracing::warn!(task_id = %task_id, message = %message, "task failed: the scan produced no verdict");
+                    bus.publish(
+                        "state_changed",
+                        Some(task_id),
+                        json!({
+                            "old_state": "finalizing",
+                            "new_state": "failed",
+                            "error_code": 1047,
+                        }),
+                    );
+                }
+            }
             progress
                 .lock()
                 .unwrap_or_else(|err| err.into_inner())
@@ -1733,23 +1794,30 @@ async fn finish_task(
 /// task (`HookRun::fails_task(true)`) cannot run in 0.2: no setting enables it and the 07
 /// catalog assigns no `ERR_POSTPROCESS_*` code, so no code is invented here (OpenSpec 12
 /// §8).
-async fn run_postprocess(store: &Arc<Store>, bus: &Arc<EventBus>, task_id: &str) {
+async fn run_postprocess(
+    store: &Arc<Store>,
+    bus: &Arc<EventBus>,
+    task_id: &str,
+) -> FinalizeOutcome {
     let settings = match store.settings() {
         Ok(settings) => settings,
         Err(err) => {
             tracing::warn!(task_id = %task_id, error = %err, "post-processing skipped: settings unreadable");
-            return;
+            return FinalizeOutcome::Clean;
         }
     };
-    if settings.postprocess_command.is_empty() {
-        return;
+    // The hook and the scan are independent: with no hook configured the scan still has to
+    // run, which is exactly what the Ubuntu QA caught when an infected file completed.
+    let run_hook = !settings.postprocess_command.is_empty();
+    if !run_hook && !settings.antivirus_enabled {
+        return FinalizeOutcome::Clean;
     }
     let record = match store.get(task_id) {
         Ok(Some(record)) => record,
-        Ok(None) => return,
+        Ok(None) => return FinalizeOutcome::Clean,
         Err(err) => {
             tracing::warn!(task_id = %task_id, error = %err, "post-processing skipped: task unreadable");
-            return;
+            return FinalizeOutcome::Clean;
         }
     };
     let _ = store.set_status(task_id, DownloadStatus::Finalizing, None);
@@ -1758,6 +1826,9 @@ async fn run_postprocess(store: &Arc<Store>, bus: &Arc<EventBus>, task_id: &str)
         Some(task_id),
         json!({ "old_state": "downloading", "new_state": "finalizing" }),
     );
+    if !run_hook {
+        return scan_final_file(store, &settings, &record, None).await;
+    }
 
     let command = settings.postprocess_command.clone();
     let binary = command.first().cloned().unwrap_or_default();
@@ -1800,6 +1871,101 @@ async fn run_postprocess(store: &Arc<Store>, bus: &Arc<EventBus>, task_id: &str)
             task_id = %task_id,
             "post-processing is configured to fail the task, but no error code is assigned yet"
         );
+    }
+    // The scan runs on the file the hook left behind, which may have been rewritten.
+    let after_hook = store.get(task_id).ok().flatten().unwrap_or(record);
+    let hook_exit = match &run {
+        HookRun::Ran(outcome) => outcome.exit.code(),
+        _ => None,
+    };
+    scan_final_file(store, &settings, &after_hook, hook_exit).await
+}
+
+/// Result of the finalizing step: what the task must end as.
+enum FinalizeOutcome {
+    /// The file is clean (or nothing was configured): the task completes.
+    Clean,
+    /// The scanner found an infection and the file is already in quarantine.
+    Infected {
+        quarantine_path: String,
+        message: String,
+    },
+    /// Antivirus is on and there is no usable engine.
+    ScanUnavailable { message: String },
+    /// The engine ran but produced no verdict.
+    ScanFailed { message: String },
+}
+
+/// Scan the finished file with the configured engine and quarantine it when infected.
+async fn scan_final_file(
+    _store: &Arc<Store>,
+    settings: &Settings,
+    record: &DownloadRecord,
+    hook_exit: Option<i32>,
+) -> FinalizeOutcome {
+    if !settings.antivirus_enabled {
+        return FinalizeOutcome::Clean;
+    }
+    let options = crate::postprocess::ScanOptions {
+        timeout: std::time::Duration::from_secs(settings.antivirus_timeout_secs),
+        ..Default::default()
+    };
+    let path = std::path::PathBuf::from(&record.final_path);
+    let dirs = crate::postprocess::engine_search_path();
+    let scan = tokio::task::spawn_blocking(move || {
+        let engine = crate::postprocess::detect_engine_in(&dirs);
+        crate::postprocess::scan_with(engine, &path, &options)
+    })
+    .await;
+    let report = match scan {
+        Ok(report) => report,
+        Err(err) => {
+            return FinalizeOutcome::ScanFailed {
+                message: format!("the scan thread failed: {err}"),
+            }
+        }
+    };
+    use crate::postprocess::ScanVerdict;
+    match report.verdict() {
+        ScanVerdict::Clean => FinalizeOutcome::Clean,
+        ScanVerdict::Infected => {
+            let quarantine_dir = if settings.antivirus_quarantine_dir.trim().is_empty() {
+                crate::data_dir().join("quarantine")
+            } else {
+                std::path::PathBuf::from(&settings.antivirus_quarantine_dir)
+            };
+            match crate::postprocess::quarantine(
+                std::path::Path::new(&record.final_path),
+                &quarantine_dir,
+            ) {
+                Ok(target) => FinalizeOutcome::Infected {
+                    quarantine_path: target.to_string_lossy().into_owned(),
+                    message: report.message.clone(),
+                },
+                // The file could not be moved away: never publish it as completed, and say
+                // what happened instead of pretending the quarantine worked.
+                Err(err) => FinalizeOutcome::ScanFailed {
+                    message: format!(
+                        "the infected file could not be quarantined: {err}{}",
+                        hook_note(hook_exit)
+                    ),
+                },
+            }
+        }
+        ScanVerdict::Unavailable => FinalizeOutcome::ScanUnavailable {
+            message: report.message.clone(),
+        },
+        ScanVerdict::Failed => FinalizeOutcome::ScanFailed {
+            message: report.message.clone(),
+        },
+    }
+}
+
+/// Suffix used in messages when the hook also ran, so the log explains both steps.
+fn hook_note(hook_exit: Option<i32>) -> String {
+    match hook_exit {
+        Some(code) => format!(" (post-process hook exit {code})"),
+        None => String::new(),
     }
 }
 
