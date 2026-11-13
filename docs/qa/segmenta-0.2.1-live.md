@@ -59,5 +59,10 @@ Dos causas distintas, ambas corregidas:
    `~/.local/share/segmenta/extension/chromium`, no la 0.2.x versionada. La carpeta se reemplazó por
    0.2.1 y la 0.1.1 quedó en `chromium-0.1.1-backup-20261113`.
 
-Pendiente: pulsar **Recargar** en `chrome://extensions` y repetir el panel de YouTube en el Chrome
-real. No se publica 0.2.1 hasta esa confirmación.
+Prueba real del fix en CFT 157: con la extensión 0.2.1 cargada desde la misma carpeta, abrí
+`https://www.youtube.com/` y envié `segmenta.probe` desde el contexto aislado del content script
+(`sender.url = /`). La respuesta fue `ERR_HOST_UNAVAILABLE` (host nativo ausente en el perfil CFT),
+no `ERR_INVALID_SENDER`. Log: `docs/qa/segmenta-0.2.1-cdp-sender.txt`.
+
+Pendiente: pulsar **Recargar** en `chrome://extensions` para que el Chrome del usuario use la copia
+0.2.1 y confirmar visualmente el panel. No se publica 0.2.1 hasta esa confirmación.

@@ -79,7 +79,7 @@ Además, se pide una función nueva de gestión segura de descargas.
 | Bloqueo del diálogo tras la respuesta | `b75d39b` | confirmado: sin deadlock |
 | Preferencias: inset inferior, búsqueda negra, descripciones cortadas | `71e39bfe` (build) | confirmado por captura |
 | Documentación | `13eca06` | — |
-| P0 extensión `ERR_INVALID_SENDER` | `7dfda2c` | reproducido en Node y corregido; falta confirmación en navegador real |
+| P0 extensión `ERR_INVALID_SENDER` | `7dfda2c` | reproducido en Node y confirmado en CFT 157; falta recargar el Chrome real |
 | Bypass de allowlist de streams | `944782a` | tests negativos de probe/add con host ajeno |
 
 Artefacto final: `segmenta_0.2.1-1_amd64.deb`, sha256
@@ -127,7 +127,9 @@ Sin tag y sin Release.
 ## Pendiente
 
 1. **Recargar la extensión en el Chrome real y verificar el panel de YouTube.** La carpeta ya es
-   0.2.1 y el fix de sender está dentro; la confirmación visual sigue pendiente.
+   0.2.1; la prueba CFT con la misma carpeta aceptó el sender y respondió `ERR_HOST_UNAVAILABLE`,
+   no `ERR_INVALID_SENDER` (`docs/qa/segmenta-0.2.1-cdp-sender.txt`). Falta que el Chrome del
+   usuario recargue la copia y se confirme visualmente.
 2. El informe y las capturas de `agy` están en su commit `1ac4799`; las capturas también se
    guardaron en `docs/qa/screenshots/`.
 
