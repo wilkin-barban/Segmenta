@@ -1889,8 +1889,11 @@ impl Inner {
             );
         }
         // Leaving Loading must stop the spinner *after* the stack switched, otherwise
-        // the stopped glyph stays painted behind the list.
-        if !matches!(state, ViewState::Loading) {
+        // the stopped glyph stays painted behind the list. A list with rows is the
+        // strongest evidence there is nothing to load, so the spinner goes away even if
+        // the state machine has not caught up: the X11 capture showed it painted over a
+        // fully populated list and through the preferences dialog.
+        if !matches!(state, ViewState::Loading) || !self.store.borrow().is_empty() {
             self.stop_loading();
         }
         *self.view_state.borrow_mut() = state;

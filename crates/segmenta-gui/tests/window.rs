@@ -879,3 +879,61 @@ fn browsers_page_paints_the_three_states_and_wires_the_three_actions() {
         );
     });
 }
+
+/// A browser row must never collapse its title into a vertical column.
+///
+/// The X11 capture showed "Google Chrome · Manifest nativo…" one character per line with
+/// two huge empty suffix buttons next to it: the suffixes were asking for more width than
+/// the row had, so the title was squeezed to its minimum.
+#[test]
+fn browser_row_suffixes_leave_room_for_the_title() {
+    run_gui("browser_rows_keep_the_title", || {
+        let application = app("io.github.wilkin.Segmenta.BrowserRows");
+        let status = json!({
+            "extension_id": "kdeldnifdbpemnhfpmhonlnibbhnoaan",
+            "firefox_extension_id": "segmenta@wilkin.github.io",
+            "host_path": "/usr/bin/segmenta-host",
+            "extension_version": "0.2.1",
+            "browsers": [{
+                "id": "chrome", "name": "Google Chrome", "family": "chromium",
+                "command": "/usr/bin/google-chrome", "version": "Chrome 120.0",
+                "unsupported": null, "manifest_path": "/etc/opt/chrome/x.json",
+                "manifest_present": true, "user_manifest_present": false,
+                "extension_installed": false, "prepared_path": null,
+                "archive_path": null, "state": "native-ready"
+            }]
+        });
+        let page = segmenta_gui::prefs::browsers_page(
+            segmenta_gui::prefs::locale(),
+            &status,
+            segmenta_gui::prefs::BrowserHandlers {
+                prepare: Rc::new(|_| {}),
+                open: Rc::new(|_| {}),
+                install_native: Rc::new(|| {}),
+                copy_path: Rc::new(|_| {}),
+            },
+        );
+        let window = adw::ApplicationWindow::builder()
+            .application(&application)
+            .build();
+        window.set_default_size(960, 760);
+        let page_widget: gtk::Widget = page.page.clone().upcast();
+        window.set_content(Some(&page_widget));
+        window.present();
+        assert!(pump_until(
+            || page.rows.first().map(|row| row.row.height()).unwrap_or(0) > 0,
+            Duration::from_secs(5)
+        ));
+        let row = &page.rows[0].row;
+        // The title keeps a usable width: with one character per line it was ~10 px.
+        assert!(
+            row.title_lines() == 1,
+            "the title must not wrap into a column"
+        );
+        assert!(
+            row.height() < 120,
+            "the row collapsed into a tall vertical title: {} px",
+            row.height()
+        );
+    });
+}
