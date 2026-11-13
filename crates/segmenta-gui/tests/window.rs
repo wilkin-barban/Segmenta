@@ -704,3 +704,178 @@ fn missing_engine_failure_is_not_painted_as_quarantine() {
         );
     });
 }
+
+// --------------------------------------------------------------- Browsers (E1)
+
+/// Prepared folder `extension.prepare` leaves behind.
+const PREPARED_EXTENSION: &str = "/home/user/.local/share/segmenta/extensions/chromium-0.2.0";
+
+/// `extension.status` with the three states the page must tell apart: a snap
+/// browser that cannot run the host, the manifest without the extension, and the
+/// extension already present in a profile.
+fn browser_status() -> Value {
+    json!({
+        "extension_id": "kdeldnifdbpemnhfpmhonlnibbhnoaan",
+        "extension_version": "0.2.0",
+        "browsers": [
+            {
+                "id": "chromium",
+                "name": "Chromium",
+                "family": "chromium",
+                "command": "/snap/bin/chromium",
+                "version": "Chromium 120.0",
+                "unsupported": "snap",
+                "manifest_present": true,
+                "extension_installed": false,
+                "prepared_path": PREPARED_EXTENSION,
+                "state": "unsupported"
+            },
+            {
+                "id": "chrome",
+                "name": "Google Chrome",
+                "family": "chromium",
+                "command": "/usr/bin/google-chrome",
+                "version": "Google Chrome 120.0",
+                "unsupported": null,
+                "manifest_present": true,
+                "extension_installed": false,
+                "prepared_path": PREPARED_EXTENSION,
+                "state": "native-ready"
+            },
+            {
+                "id": "firefox",
+                "name": "Firefox",
+                "family": "firefox",
+                "command": "/usr/bin/firefox",
+                "version": "Firefox 128.0",
+                "unsupported": null,
+                "manifest_present": true,
+                "extension_installed": true,
+                "prepared_path": null,
+                "state": "extension-installed"
+            }
+        ]
+    })
+}
+
+/// Builds the Navegadores page with recording closures instead of an IPC client.
+fn browser_page(log: &Rc<RefCell<Vec<(&'static str, String)>>>) -> prefs::BrowsersPage {
+    fn record(
+        log: &Rc<RefCell<Vec<(&'static str, String)>>>,
+        kind: &'static str,
+    ) -> Rc<dyn Fn(&str)> {
+        let log = Rc::clone(log);
+        Rc::new(move |value: &str| log.borrow_mut().push((kind, value.to_string())))
+    }
+    prefs::browsers_page(
+        segmenta_i18n::Locale::Es,
+        &browser_status(),
+        prefs::BrowserHandlers {
+            prepare: record(log, "prepare"),
+            open: record(log, "open"),
+            copy_path: record(log, "copy"),
+            install_native: {
+                let log = Rc::clone(log);
+                Rc::new(move || log.borrow_mut().push(("install", String::new())))
+            },
+        },
+    )
+}
+
+#[test]
+fn browsers_page_paints_the_three_states_and_wires_the_three_actions() {
+    run_gui("browsers_page_states", || {
+        let log: Rc<RefCell<Vec<(&'static str, String)>>> = Rc::new(RefCell::new(Vec::new()));
+        let page = browser_page(&log);
+        assert_eq!(page.rows.len(), 3, "the page lists the detected browsers");
+
+        let view = |id: &str| {
+            page.rows
+                .iter()
+                .find(|view| view.data.id == id)
+                .unwrap_or_else(|| panic!("`{id}` has no row"))
+        };
+        let unsupported = view("chromium")
+            .row
+            .subtitle()
+            .unwrap_or_default()
+            .to_string();
+        let manifest_only = view("chrome")
+            .row
+            .subtitle()
+            .unwrap_or_default()
+            .to_string();
+        let installed = view("firefox")
+            .row
+            .subtitle()
+            .unwrap_or_default()
+            .to_string();
+        assert_ne!(unsupported, manifest_only, "snap and manifest-only row");
+        assert_ne!(manifest_only, installed, "manifest-only and installed row");
+        assert_ne!(unsupported, installed, "snap and installed row");
+        assert!(
+            manifest_only.contains("NO está instalada"),
+            "a browser without the extension is not stated as such: {manifest_only}"
+        );
+
+        // A sandboxed browser offers no action that could only fail.
+        let snap = view("chromium");
+        assert!(snap.prepare.is_none(), "a snap browser offers prepare");
+        assert!(snap.open.is_none(), "a snap browser offers open");
+        assert!(snap.copy_path.is_none(), "a snap browser offers copy");
+
+        // The usable browser offers the three actions of the contract.
+        let chrome = view("chrome");
+        chrome
+            .prepare
+            .as_ref()
+            .expect("no prepare button")
+            .emit_clicked();
+        chrome.open.as_ref().expect("no open button").emit_clicked();
+        chrome
+            .copy_path
+            .as_ref()
+            .expect("no copy button")
+            .emit_clicked();
+        assert_eq!(
+            *log.borrow(),
+            vec![
+                ("prepare", "chromium".to_string()),
+                ("open", "chrome".to_string()),
+                ("copy", PREPARED_EXTENSION.to_string()),
+            ]
+        );
+
+        // Firefox has no prepared folder yet: nothing to copy.
+        assert!(view("firefox").copy_path.is_none());
+
+        // The numbered how-to names the real pages of both families.
+        assert!(
+            page.steps
+                .iter()
+                .any(|step| step.title().contains("chrome://extensions")),
+            "the Chromium page is never named"
+        );
+        assert!(
+            page.steps
+                .iter()
+                .any(|step| step.title().contains("about:debugging")),
+            "the Firefox page is never named"
+        );
+
+        // Both limits are on the page: a manifest is not an install, and there is
+        // no store and no signature.
+        assert!(
+            page.hints
+                .iter()
+                .any(|hint| hint.label().contains("no es una instalación")),
+            "the page does not say a manifest is not an installation"
+        );
+        assert!(
+            page.hints
+                .iter()
+                .any(|hint| hint.label().contains("Sin tienda y sin firma")),
+            "the page does not say there is no store and no signature"
+        );
+    });
+}

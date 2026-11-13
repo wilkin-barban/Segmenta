@@ -15,7 +15,7 @@ use adw::prelude::*;
 use crate::client::{Client, RequestBus};
 use crate::model::Settings;
 use crate::{adw, gtk};
-use segmenta_i18n::{tr, Msg};
+use segmenta_i18n::{tr, Locale, Msg};
 
 fn locale() -> segmenta_i18n::Locale {
     segmenta_i18n::current()
@@ -122,41 +122,50 @@ pub fn present(
     network.add(&proxy);
 
     // -------------------------------------------------------------- Browsers
-    let browsers_page = adw::PreferencesPage::builder()
-        .title(tr(locale(), Msg::PrefsBrowsers))
-        .icon_name("applications-internet-symbolic")
-        .build();
-    let browsers_group = adw::PreferencesGroup::builder()
-        .title(tr(locale(), Msg::PrefsBrowsers))
-        .description(tr(locale(), Msg::BrowserInstallHint))
-        .build();
+    //
+    // The page never guesses readiness: every row is the `extension.status`
+    // `state` in plain language plus the three actions the contract already
+    // exposes. There is no store and no signature, and the GUI says so instead
+    // of implying that a manifest alone means "installed" (E1).
+    let browser_handlers = BrowserHandlers {
+        prepare: {
+            let bus = Rc::clone(&browser_bus);
+            let client = Arc::clone(&client);
+            Rc::new(move |family: &str| {
+                bus.spawn(&client, "extension.prepare", json!({ "family": family }));
+            })
+        },
+        open: {
+            let bus = Rc::clone(&browser_bus);
+            let client = Arc::clone(&client);
+            Rc::new(move |browser_id: &str| {
+                bus.spawn(
+                    &client,
+                    "extension.open",
+                    json!({ "browser_id": browser_id }),
+                );
+            })
+        },
+        copy_path: {
+            let dialog = dialog.clone();
+            let toast_locale = locale();
+            Rc::new(move |path: &str| {
+                dialog.clipboard().set_text(path);
+                dialog.add_toast(adw::Toast::new(tr(toast_locale, Msg::ExtensionPathCopied)));
+            })
+        },
+        install_native: {
+            let bus = Rc::clone(&browser_bus);
+            let client = Arc::clone(&client);
+            Rc::new(move || {
+                bus.spawn(&client, "extension.install-native", json!({}));
+            })
+        },
+    };
+    let browser_page = browsers_page(locale(), &json!({}), browser_handlers.clone());
+    let browsers_page_widget = browser_page.page;
+    let browsers_group = browser_page.group;
     browser_bus.spawn(&client, "extension.status", json!({}));
-    let install_row = adw::ActionRow::builder()
-        .title(tr(locale(), Msg::InstallNative))
-        .build();
-    let install_button = gtk::Button::with_label(tr(locale(), Msg::InstallNative));
-    install_button.add_css_class("suggested-action");
-    install_row.add_suffix(&install_button);
-    install_row.set_activatable_widget(Some(&install_button));
-    browsers_group.add(&install_row);
-
-    let local_group = adw::PreferencesGroup::builder()
-        .title(tr(locale(), Msg::ExtensionLocalTitle))
-        .build();
-    local_group.add(
-        &adw::ActionRow::builder()
-            .title(tr(locale(), Msg::ExtensionLocalHint))
-            .subtitle("/usr/share/segmenta/extensions")
-            .build(),
-    );
-    browsers_page.add(&browsers_group);
-    browsers_page.add(&local_group);
-
-    let install_bus = Rc::clone(&browser_bus);
-    let install_client = Arc::clone(&client);
-    install_button.connect_clicked(move |_| {
-        install_bus.spawn(&install_client, "extension.install-native", json!({}));
-    });
 
     // ------------------------------------------------------------ Web capture
     let capture = adw::PreferencesPage::builder()
@@ -251,7 +260,7 @@ pub fn present(
     dialog.add(&general);
     dialog.add(&network);
     dialog.add(&capture);
-    dialog.add(&browsers_page);
+    dialog.add(&browsers_page_widget);
     dialog.add(&about);
 
     // ------------------------------------------------------------ Save helpers
@@ -264,130 +273,38 @@ pub fn present(
     let open_for_close = Rc::clone(&open);
     dialog.connect_closed(move |_| open_for_close.set(false));
 
-    // Browsers poll: `extension.status` fills the list, `install-native` reports back.
-    // Rows added by the last status answer, so a refresh replaces instead of appends.
-    let dynamic_rows: Rc<std::cell::RefCell<Vec<adw::ActionRow>>> =
-        Rc::new(std::cell::RefCell::new(Vec::new()));
-    let dynamic_rows_poll = Rc::clone(&dynamic_rows);
-    let refresh_poll_bus = Rc::clone(&browser_bus);
-    let refresh_poll_client = Arc::clone(&client);
-    let browser_poll = Rc::clone(&browser_bus);
+    // Browsers poll: `extension.status` repaints the rows; `extension.prepare`,
+    // `extension.open` and `extension.install-native` report back and ask for a
+    // fresh status so every row shows its post-action state.
+    let browser_views: Rc<std::cell::RefCell<Vec<BrowserRowView>>> =
+        Rc::new(std::cell::RefCell::new(browser_page.rows));
+    let browser_views_poll = Rc::clone(&browser_views);
     let browser_group_poll = browsers_group.clone();
     let browser_dialog_poll = dialog.clone();
     let browser_open_poll = Rc::clone(&open);
     let browser_locale = locale();
-    let dialog_for_browser = dialog.clone();
-    let client_for_browser = Arc::clone(&client);
+    let browser_handlers_poll = browser_handlers.clone();
+    let refresh_poll_bus = Rc::clone(&browser_bus);
+    let refresh_poll_client = Arc::clone(&client);
+    let browser_poll = Rc::clone(&browser_bus);
     gtk::glib::timeout_add_local(Duration::from_millis(150), move || {
         if !browser_open_poll.get() {
             return gtk::glib::ControlFlow::Break;
         }
-        let dialog = dialog_for_browser.clone();
-        let client = Arc::clone(&client_for_browser);
         for (_, result) in browser_poll.take() {
             match result {
                 Ok(value) => {
-                    if let Some(list) = value.get("browsers").and_then(Value::as_array) {
-                        for row in dynamic_rows_poll.borrow_mut().drain(..) {
-                            browser_group_poll.remove(&row);
+                    if value.get("browsers").and_then(Value::as_array).is_some() {
+                        for view in browser_views_poll.borrow_mut().drain(..) {
+                            browser_group_poll.remove(&view.row);
                         }
-                        for browser in list {
-                            let installed =
-                                browser.get("command").and_then(Value::as_str).is_some();
-                            if !installed {
-                                continue;
-                            }
-                            let name = browser.get("name").and_then(Value::as_str).unwrap_or("?");
-                            // State comes from the daemon; the UI never guesses readiness.
-                            let state = browser
-                                .get("state")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default();
-                            let status = match state {
-                                "unsupported" => tr(browser_locale, Msg::BrowserUnsupported),
-                                "extension-installed" => {
-                                    tr(browser_locale, Msg::ExtensionInstalled)
-                                }
-                                "native-ready" => &format!(
-                                    "{} · {}",
-                                    tr(browser_locale, Msg::NativeReady),
-                                    tr(browser_locale, Msg::ExtensionMissing)
-                                ),
-                                "native-missing" => tr(browser_locale, Msg::NativeMissing),
-                                _ => tr(browser_locale, Msg::ExtensionMissing),
-                            };
-                            let row = adw::ActionRow::builder()
-                                .title(name)
-                                .subtitle(status)
-                                .build();
-                            if let Some(version) = browser.get("version").and_then(Value::as_str) {
-                                row.add_suffix(
-                                    &gtk::Label::builder()
-                                        .label(version)
-                                        .css_classes(["dim-label"])
-                                        .build(),
-                                );
-                            }
-
-                            let browser_id =
-                                browser.get("id").and_then(Value::as_str).unwrap_or("");
-                            let family =
-                                browser.get("family").and_then(Value::as_str).unwrap_or("");
-                            let prepared_path = browser
-                                .get("prepared_path")
-                                .and_then(Value::as_str)
-                                .map(str::to_string);
-
-                            let prep_btn =
-                                gtk::Button::with_label(tr(browser_locale, Msg::ExtensionPrepare));
-                            let prep_bus = browser_bus.clone();
-                            let prep_client = Arc::clone(&client);
-                            let fam_str = family.to_string();
-                            prep_btn.connect_clicked(move |_| {
-                                prep_bus.spawn(
-                                    &prep_client,
-                                    "extension.prepare",
-                                    json!({ "family": fam_str }),
-                                );
-                            });
-                            row.add_suffix(&prep_btn);
-
-                            let open_btn =
-                                gtk::Button::with_label(tr(browser_locale, Msg::ExtensionOpen));
-                            let open_bus = browser_bus.clone();
-                            let open_client = Arc::clone(&client);
-                            let bid_str = browser_id.to_string();
-                            open_btn.connect_clicked(move |_| {
-                                open_bus.spawn(
-                                    &open_client,
-                                    "extension.open",
-                                    json!({ "browser_id": bid_str }),
-                                );
-                            });
-                            row.add_suffix(&open_btn);
-
-                            if let Some(path) = prepared_path {
-                                let copy_btn = gtk::Button::with_label(tr(
-                                    browser_locale,
-                                    Msg::ExtensionCopyPath,
-                                ));
-                                let row_for_clipboard = row.clone();
-                                let toast_dialog = dialog.clone();
-                                let locale_for_toast = browser_locale;
-                                let p_clone = path.clone();
-                                copy_btn.connect_clicked(move |_| {
-                                    row_for_clipboard.clipboard().set_text(&p_clone);
-                                    toast_dialog.add_toast(adw::Toast::new(tr(
-                                        locale_for_toast,
-                                        Msg::ExtensionPathCopied,
-                                    )));
-                                });
-                                row.add_suffix(&copy_btn);
-                            }
-
-                            browser_group_poll.add(&row);
-                            dynamic_rows_poll.borrow_mut().push(row);
-                        }
+                        let painted = fill_browser_rows(
+                            &browser_group_poll,
+                            browser_locale,
+                            &value,
+                            &browser_handlers_poll,
+                        );
+                        *browser_views_poll.borrow_mut() = painted;
                     } else if let Some(installed) = value.get("installed").and_then(Value::as_array)
                     {
                         // Refresh so every row shows its post-install state.
@@ -402,6 +319,14 @@ pub fn present(
                             tr(browser_locale, Msg::InstallNative),
                             installed.len(),
                             errors
+                        )));
+                    } else if let Some(prepared) = value.get("prepared").and_then(Value::as_array) {
+                        // The prepared folder is what `Copy path` hands over: repaint.
+                        refresh_poll_bus.spawn(&refresh_poll_client, "extension.status", json!({}));
+                        browser_dialog_poll.add_toast(adw::Toast::new(&format!(
+                            "{}: {}",
+                            tr(browser_locale, Msg::ExtensionPrepared),
+                            prepared.len()
                         )));
                     }
                 }
@@ -689,6 +614,372 @@ fn edit_list(
         cancel_dialog.close();
     });
     dialog.present(Some(parent));
+}
+
+/// One browser row derived from an `extension.status` answer.
+///
+/// The row is plain data so the page can be asserted without a daemon: the
+/// daemon owns the `state`, this layer only turns it into a sentence that says
+/// what exists and what is still missing (E1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserRow {
+    /// Stable daemon id (`chrome`, `firefox`, …).
+    pub id: String,
+    /// Human name.
+    pub name: String,
+    /// `chromium` or `firefox`: the family the prepare step works on.
+    pub family: String,
+    /// First line of `--version`, when the daemon could run it.
+    pub version: Option<String>,
+    /// The state the daemon reported.
+    pub state: BrowserState,
+    /// Full sentence the row shows. Never a bare "ready".
+    pub status: String,
+    /// Which of the three contract actions make sense for this row.
+    pub actions: BrowserActions,
+    /// Folder `extension.prepare` left ready, when it exists.
+    pub prepared_path: Option<String>,
+}
+
+/// The `state` of one browser, as `extension.status` defines it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserState {
+    /// The binary lives in a snap/flatpak sandbox: the native host cannot run.
+    Unsupported,
+    /// No `command` on this system.
+    NotInstalled,
+    /// The browser is installed but neither manifest nor extension is there.
+    NativeMissing,
+    /// A native manifest exists; the extension does not.
+    NativeReady,
+    /// The browser profile shows the extension.
+    ExtensionInstalled,
+}
+
+impl BrowserState {
+    /// Reads the daemon `state`, falling back to the boolean fields instead of
+    /// guessing readiness from a partial payload.
+    fn from_status(browser: &Value) -> BrowserState {
+        match browser.get("state").and_then(Value::as_str) {
+            Some("unsupported") => return BrowserState::Unsupported,
+            Some("not-installed") => return BrowserState::NotInstalled,
+            Some("native-missing") => return BrowserState::NativeMissing,
+            Some("native-ready") => return BrowserState::NativeReady,
+            Some("extension-installed") => return BrowserState::ExtensionInstalled,
+            _ => {}
+        }
+        let flag = |key: &str| browser.get(key).and_then(Value::as_bool).unwrap_or(false);
+        if browser.get("unsupported").and_then(Value::as_str).is_some() {
+            BrowserState::Unsupported
+        } else if browser.get("command").and_then(Value::as_str).is_none() {
+            BrowserState::NotInstalled
+        } else if flag("extension_installed") {
+            BrowserState::ExtensionInstalled
+        } else if flag("manifest_present") {
+            BrowserState::NativeReady
+        } else {
+            BrowserState::NativeMissing
+        }
+    }
+}
+
+/// Which of the three contract actions the row offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BrowserActions {
+    /// `extension.prepare` for the browser family.
+    pub prepare: bool,
+    /// `extension.open` for this browser.
+    pub open: bool,
+    /// Copy the prepared folder, only when the daemon reported one.
+    pub copy_path: bool,
+}
+
+/// The sentence one browser state shows.
+fn browser_status_text(locale: Locale, state: BrowserState, unsupported: Option<&str>) -> String {
+    match state {
+        BrowserState::Unsupported => tr(locale, Msg::BrowserStatusUnsupported)
+            .replace("{reason}", unsupported.unwrap_or("snap/flatpak")),
+        BrowserState::NotInstalled => tr(locale, Msg::BrowserStatusNotInstalled).to_string(),
+        BrowserState::NativeMissing => tr(locale, Msg::BrowserStatusNoManifest).to_string(),
+        BrowserState::NativeReady => tr(locale, Msg::BrowserStatusManifestOnly).to_string(),
+        BrowserState::ExtensionInstalled => tr(locale, Msg::BrowserStatusInstalled).to_string(),
+    }
+}
+
+/// Maps an `extension.status` answer to the rows the page paints.
+///
+/// Browsers the daemon did not find are skipped: a missing binary is not a row,
+/// but an unsupported one is, because its limit is what E1 has to state.
+pub fn browser_rows(locale: Locale, status: &Value) -> Vec<BrowserRow> {
+    let Some(list) = status.get("browsers").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    list.iter()
+        .filter_map(|browser| {
+            let state = BrowserState::from_status(browser);
+            if state == BrowserState::NotInstalled {
+                return None;
+            }
+            let unsupported = browser.get("unsupported").and_then(Value::as_str);
+            // A sandboxed binary can neither run the host nor be opened for the
+            // extension page: offering either action would only fail.
+            let usable = state != BrowserState::Unsupported;
+            let prepared_path = browser
+                .get("prepared_path")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            Some(BrowserRow {
+                id: browser
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                name: browser
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                family: browser
+                    .get("family")
+                    .and_then(Value::as_str)
+                    .unwrap_or("chromium")
+                    .to_string(),
+                version: browser
+                    .get("version")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                state,
+                status: browser_status_text(locale, state, unsupported),
+                actions: BrowserActions {
+                    prepare: usable,
+                    open: usable,
+                    copy_path: usable && prepared_path.is_some(),
+                },
+                prepared_path,
+            })
+        })
+        .collect()
+}
+
+/// Numbered how-to for loading an unpacked (Chromium) or temporary (Firefox)
+/// extension. Empty for a family the page knows nothing about.
+pub fn load_steps(locale: Locale, family: &str) -> Vec<String> {
+    let steps: &[Msg] = match family {
+        "chromium" => &[
+            Msg::BrowserStepPrepare,
+            Msg::BrowserStepChromiumPage,
+            Msg::BrowserStepChromiumLoad,
+            Msg::BrowserStepChromiumVerify,
+        ],
+        "firefox" => &[
+            Msg::BrowserStepPrepare,
+            Msg::BrowserStepFirefoxPage,
+            Msg::BrowserStepFirefoxLoad,
+        ],
+        _ => &[],
+    };
+    steps
+        .iter()
+        .map(|step| tr(locale, *step).to_string())
+        .collect()
+}
+
+/// Callbacks the Browsers page needs.
+///
+/// Keeping them out of the widget code lets the page be built in a test with
+/// plain closures instead of an IPC client.
+#[derive(Clone)]
+pub struct BrowserHandlers {
+    /// `extension.prepare` with the browser family.
+    pub prepare: Rc<dyn Fn(&str)>,
+    /// `extension.open` with the browser id.
+    pub open: Rc<dyn Fn(&str)>,
+    /// Copy the prepared folder into the clipboard.
+    pub copy_path: Rc<dyn Fn(&str)>,
+    /// `extension.install-native`.
+    pub install_native: Rc<dyn Fn()>,
+}
+
+/// One painted browser row and its buttons.
+pub struct BrowserRowView {
+    /// The data the row was painted from.
+    pub data: BrowserRow,
+    /// The row itself, so a repaint can remove it from the group.
+    pub row: adw::ActionRow,
+    /// `Preparar extensión`, when the state allows it.
+    pub prepare: Option<gtk::Button>,
+    /// `Abrir página de extensiones`, when the state allows it.
+    pub open: Option<gtk::Button>,
+    /// `Copiar ruta`, only when a prepared folder exists.
+    pub copy_path: Option<gtk::Button>,
+}
+
+/// The whole Navegadores page.
+pub struct BrowsersPage {
+    /// The page to add to the dialog.
+    pub page: adw::PreferencesPage,
+    /// The group that holds the browser rows.
+    pub group: adw::PreferencesGroup,
+    /// Painted browser rows, in daemon order.
+    pub rows: Vec<BrowserRowView>,
+    /// Numbered step rows of the how-to.
+    pub steps: Vec<adw::ActionRow>,
+    /// Notes under the list: manifest is not an install, no store, no signature.
+    pub hints: Vec<gtk::Label>,
+}
+
+fn hint_label(locale: Locale, msg: Msg) -> gtk::Label {
+    gtk::Label::builder()
+        .label(tr(locale, msg))
+        .xalign(0.0)
+        .wrap(true)
+        .margin_start(12)
+        .margin_end(12)
+        .margin_bottom(6)
+        .css_classes(["dim-label"])
+        .build()
+}
+
+/// Paints the browser rows of one `extension.status` answer into `group`.
+pub fn fill_browser_rows(
+    group: &adw::PreferencesGroup,
+    locale: Locale,
+    status: &Value,
+    handlers: &BrowserHandlers,
+) -> Vec<BrowserRowView> {
+    let mut views = Vec::new();
+    for data in browser_rows(locale, status) {
+        let row = adw::ActionRow::builder()
+            .title(&data.name)
+            .subtitle(&data.status)
+            .build();
+        if let Some(version) = &data.version {
+            row.add_suffix(
+                &gtk::Label::builder()
+                    .label(version)
+                    .css_classes(["dim-label"])
+                    .build(),
+            );
+        }
+
+        let mut prepare = None;
+        if data.actions.prepare {
+            let button = gtk::Button::with_label(tr(locale, Msg::ExtensionPrepare));
+            let handler = Rc::clone(&handlers.prepare);
+            let family = data.family.clone();
+            button.connect_clicked(move |_| handler(&family));
+            row.add_suffix(&button);
+            prepare = Some(button);
+        }
+
+        let mut open = None;
+        if data.actions.open {
+            let button = gtk::Button::with_label(tr(locale, Msg::ExtensionOpen));
+            let handler = Rc::clone(&handlers.open);
+            let browser_id = data.id.clone();
+            button.connect_clicked(move |_| handler(&browser_id));
+            row.add_suffix(&button);
+            open = Some(button);
+        }
+
+        let mut copy_path = None;
+        if let (true, Some(path)) = (data.actions.copy_path, data.prepared_path.clone()) {
+            let button = gtk::Button::with_label(tr(locale, Msg::ExtensionCopyPath));
+            let handler = Rc::clone(&handlers.copy_path);
+            button.connect_clicked(move |_| handler(&path));
+            row.add_suffix(&button);
+            copy_path = Some(button);
+        }
+
+        group.add(&row);
+        views.push(BrowserRowView {
+            data,
+            row,
+            prepare,
+            open,
+            copy_path,
+        });
+    }
+    views
+}
+
+/// Builds the Navegadores page: install row, state rows, how-to and the two
+/// limits (a manifest is not an installation; there is no store and no
+/// signature).
+pub fn browsers_page(locale: Locale, status: &Value, handlers: BrowserHandlers) -> BrowsersPage {
+    let page = adw::PreferencesPage::builder()
+        .title(tr(locale, Msg::PrefsBrowsers))
+        .icon_name("applications-internet-symbolic")
+        .build();
+    let group = adw::PreferencesGroup::builder()
+        .title(tr(locale, Msg::PrefsBrowsers))
+        .description(tr(locale, Msg::BrowserInstallHint))
+        .build();
+
+    let install_row = adw::ActionRow::builder()
+        .title(tr(locale, Msg::InstallNative))
+        .build();
+    let install_button = gtk::Button::with_label(tr(locale, Msg::InstallNative));
+    install_button.add_css_class("suggested-action");
+    install_row.add_suffix(&install_button);
+    install_row.set_activatable_widget(Some(&install_button));
+    {
+        let handler = Rc::clone(&handlers.install_native);
+        install_button.connect_clicked(move |_| handler());
+    }
+    group.add(&install_row);
+    let rows = fill_browser_rows(&group, locale, status, &handlers);
+    page.add(&group);
+
+    // The how-to is the manual: two families, numbered steps, no store needed.
+    let how_to = adw::PreferencesGroup::builder()
+        .title(tr(locale, Msg::BrowserHowTo))
+        .build();
+    let mut steps = Vec::new();
+    for (family, header) in [
+        ("chromium", Msg::BrowserHowToChromium),
+        ("firefox", Msg::BrowserHowToFirefox),
+    ] {
+        let head = adw::ActionRow::builder().title(tr(locale, header)).build();
+        head.add_css_class("heading");
+        how_to.add(&head);
+        steps.push(head);
+        for step in load_steps(locale, family) {
+            let row = adw::ActionRow::builder().title(step).build();
+            how_to.add(&row);
+            steps.push(row);
+        }
+    }
+    page.add(&how_to);
+
+    let hints = vec![
+        hint_label(locale, Msg::BrowserInstallNotAnInstallation),
+        hint_label(locale, Msg::BrowserNoStore),
+    ];
+    let notes = adw::PreferencesGroup::new();
+    for hint in &hints {
+        notes.add(hint);
+    }
+    page.add(&notes);
+
+    let local_group = adw::PreferencesGroup::builder()
+        .title(tr(locale, Msg::ExtensionLocalTitle))
+        .build();
+    local_group.add(
+        &adw::ActionRow::builder()
+            .title(tr(locale, Msg::ExtensionLocalHint))
+            .subtitle("/usr/share/segmenta/extensions")
+            .build(),
+    );
+    page.add(&local_group);
+
+    BrowsersPage {
+        page,
+        group,
+        rows,
+        steps,
+        hints,
+    }
 }
 
 /// Antivirus section: the engine is external, so the switch, the timeout and the
