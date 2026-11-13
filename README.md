@@ -4,13 +4,10 @@
 > **Ubuntu 26.04 LTS (GNOME 50 / Wayland)**, con daemon propio, CLI, GUI nativa GTK4 +
 > Libadwaita y extensión de navegador.
 
-**Estado: 0.2.0 construida y verificada, pendiente de publicación.** El `.deb` y los dos ZIP están
-en `dist/` con sus SHA-256 y pasaron el QA real en Ubuntu (`docs/qa/segmenta-0.2-live.md`); el tag
-`v0.2.0` todavía no existe. La última release publicada sigue siendo **0.1.2** (tag `v0.1.2`). El
-`.deb` 0.2.0 y los dos ZIP **sí están construidos y verificados** en `dist/` (con sus SHA-256 y el
-QA real de `docs/qa/segmenta-0.2-live.md`); lo que falta es el tag y la Release, no el paquete. Lo
-que sigue describe el comportamiento real
-de 0.1.2 y separa explícitamente lo que entra en 0.2.0 cuando el QA en Ubuntu cierre.
+**Estado: 0.2.0 publicada.** El `.deb` y los dos ZIP están en la Release `v0.2.0` con sus SHA-256
+y pasaron el QA real en Ubuntu (`docs/qa/segmenta-0.2-live.md`). Los límites de esa pasada
+(cold-start de captura y extensión Firefox) quedaron declarados en el informe de QA. La release
+anterior es **0.1.2** (tag `v0.1.2`).
 
 ### Novedades de 0.1.2
 
