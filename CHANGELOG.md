@@ -5,9 +5,9 @@ Todos los cambios notables de Segmenta se documentan en este archivo.
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el proyecto usa
 [Versionado semántico](https://semver.org/lang/es/).
 
-## [Unreleased]
+## [0.2.0] - 2026-11-12
 
-0.2.0 en preparación: scheduler de colas nativo con ventanas horarias y `max_active` real,
+0.2.0 construida y verificada con QA real en Ubuntu, pendiente de tag y Release: scheduler de colas nativo con ventanas horarias y `max_active` real,
 post-procesamiento argv seguro y ClamAV integrado con cuarentena, site logins Basic con GNOME
 Keyring (sin Digest), sin categorías automáticas, extensión de instalación manual asistida por
 la GUI, reconciliación de capturas al arrancar en frío, probe multiarchivo de torrents, ayuda CLI
