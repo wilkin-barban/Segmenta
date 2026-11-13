@@ -27,7 +27,7 @@ pub fn present(
     client: Arc<dyn Client>,
     settings: Settings,
     on_saved: Rc<dyn Fn(Settings)>,
-) {
+) -> adw::PreferencesDialog {
     let dialog = adw::PreferencesDialog::builder()
         .title(tr(locale(), Msg::Preferences))
         .content_width(640)
@@ -269,6 +269,17 @@ pub fn present(
         }
     });
     let site_logins = site_logins_page(&[], Rc::clone(&site_login_call));
+    let antivirus = antivirus_page(
+        parent,
+        &settings,
+        Rc::new({
+            let bus = Rc::clone(&bus);
+            let client = Arc::clone(&client);
+            move |patch: Value| {
+                bus.spawn(&client, "settings.update", patch);
+            }
+        }),
+    );
     // The stored logins are fetched when the dialog opens; a rejected call leaves the
     // empty state instead of pretending the list is authoritative.
     load_site_logins(
@@ -281,6 +292,7 @@ pub fn present(
     dialog.add(&network);
     dialog.add(&capture);
     dialog.add(&browsers_page_widget);
+    dialog.add(&antivirus.page);
     dialog.add(&site_logins.page);
     dialog.add(&about);
 
@@ -562,6 +574,7 @@ pub fn present(
     });
 
     dialog.present(Some(parent));
+    dialog
 }
 
 /// Split a free-form list into trimmed tokens, dropping empties and duplicates.
