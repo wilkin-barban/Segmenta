@@ -17,7 +17,7 @@ use crate::model::Settings;
 use crate::{adw, gtk};
 use segmenta_i18n::{tr, Locale, Msg};
 
-fn locale() -> segmenta_i18n::Locale {
+pub fn locale() -> segmenta_i18n::Locale {
     segmenta_i18n::current()
 }
 
@@ -1052,6 +1052,164 @@ pub fn antivirus_page(
         timeout,
         quarantine,
     }
+}
+
+/// Sink for a JSON-RPC call the page performs: method and params.
+pub type RpcCall = std::rc::Rc<dyn Fn(&str, serde_json::Value)>;
+
+/// One stored login as the daemon reports it: never the password.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct SiteLoginEntry {
+    #[serde(default)]
+    pub origin: String,
+    #[serde(default)]
+    pub domain: String,
+    #[serde(default)]
+    pub username: String,
+}
+
+/// Site logins page: the password is write-only, so it exists only in the entry row.
+pub struct SiteLoginsPage {
+    pub page: adw::PreferencesPage,
+    pub group: adw::PreferencesGroup,
+    pub origin: adw::EntryRow,
+    pub username: adw::EntryRow,
+    pub password: gtk::PasswordEntry,
+    pub add: gtk::Button,
+    pub list: gtk::ListBox,
+    pub error: gtk::Label,
+    /// One remove button per listed origin, in list order.
+    pub removals: Vec<gtk::Button>,
+}
+
+/// Builds the Site logins page.
+///
+/// `call` receives the JSON-RPC method and params; the caller decides how to send them, so
+/// the page stays testable without a daemon.
+pub fn site_logins_page(entries: &[SiteLoginEntry], call: RpcCall) -> SiteLoginsPage {
+    let page = adw::PreferencesPage::builder()
+        .title(tr(locale(), Msg::PrefsSiteLogins))
+        .icon_name("dialog-password-symbolic")
+        .build();
+    let group = adw::PreferencesGroup::builder()
+        .title(tr(locale(), Msg::PrefsSiteLogins))
+        .description(tr(locale(), Msg::SiteLoginsHint))
+        .build();
+
+    let origin = adw::EntryRow::builder()
+        .title(tr(locale(), Msg::SiteLoginOrigin))
+        .build();
+    origin.set_tooltip_text(Some(tr(locale(), Msg::SiteLoginOriginHint)));
+    group.add(&origin);
+
+    let username = adw::EntryRow::builder()
+        .title(tr(locale(), Msg::SiteLoginUsername))
+        .build();
+    group.add(&username);
+
+    let password = gtk::PasswordEntry::builder()
+        .show_peek_icon(false)
+        .placeholder_text(tr(locale(), Msg::SiteLoginPassword))
+        .build();
+    let password_row = adw::ActionRow::builder()
+        .title(tr(locale(), Msg::SiteLoginPassword))
+        .build();
+    password_row.add_suffix(&password);
+    group.add(&password_row);
+
+    let add = gtk::Button::with_label(tr(locale(), Msg::SiteLoginAdd));
+    add.add_css_class("suggested-action");
+    let actions = adw::ActionRow::builder().build();
+    actions.add_suffix(&add);
+    group.add(&actions);
+
+    let error = gtk::Label::new(None);
+    error.add_css_class("error");
+    error.set_visible(false);
+    error.set_wrap(true);
+    let error_row = adw::ActionRow::builder().build();
+    error_row.add_suffix(&error);
+    group.add(&error_row);
+
+    let list = gtk::ListBox::new();
+    list.set_selection_mode(gtk::SelectionMode::None);
+    let mut removals: Vec<gtk::Button> = Vec::new();
+    for entry in entries {
+        let row = adw::ActionRow::builder()
+            .title(entry.origin.clone())
+            .subtitle(site_login_subtitle(entry))
+            .build();
+        let remove = gtk::Button::with_label(tr(locale(), Msg::SiteLoginRemove));
+        remove.add_css_class("destructive-action");
+        let target = entry.origin.clone();
+        let call = std::rc::Rc::clone(&call);
+        remove.connect_clicked(move |_| {
+            call(
+                "site_login.remove",
+                serde_json::json!({ "origin": target.clone() }),
+            );
+        });
+        row.add_suffix(&remove);
+        removals.push(remove);
+        list.append(&row);
+    }
+    if entries.is_empty() {
+        let empty = adw::ActionRow::builder()
+            .title(tr(locale(), Msg::SiteLoginsEmpty))
+            .build();
+        list.append(&empty);
+    }
+    let list_row = adw::ActionRow::builder().build();
+    list_row.add_suffix(&list);
+    group.add(&list_row);
+    page.add(&group);
+
+    {
+        let call = std::rc::Rc::clone(&call);
+        let origin_row = origin.clone();
+        let user_row = username.clone();
+        let secret = password.clone();
+        let error_label = error.clone();
+        add.connect_clicked(move |_| {
+            let params = serde_json::json!({
+                "origin": origin_row.text().trim().to_string(),
+                "username": user_row.text().trim().to_string(),
+                "password": secret.text().to_string(),
+            });
+            if params["origin"].as_str().unwrap_or_default().is_empty()
+                || params["username"].as_str().unwrap_or_default().is_empty()
+                || params["password"].as_str().unwrap_or_default().is_empty()
+            {
+                error_label.set_text(tr(locale(), Msg::SiteLoginOrigin));
+                error_label.set_visible(true);
+                return;
+            }
+            call("site_login.set", params);
+            // The password is never echoed back nor kept after it is sent.
+            secret.set_text("");
+        });
+    }
+
+    SiteLoginsPage {
+        page,
+        group,
+        origin,
+        username,
+        password,
+        add,
+        list,
+        error,
+        removals,
+    }
+}
+
+/// Subtitle of a stored login: the user name, plus the legacy warning when the daemon
+/// reports a row that still has no origin.
+fn site_login_subtitle(entry: &SiteLoginEntry) -> String {
+    if entry.origin.trim().is_empty() {
+        return tr(locale(), Msg::SiteLoginLegacyNoOrigin).to_string();
+    }
+    entry.username.clone()
 }
 
 #[cfg(test)]
