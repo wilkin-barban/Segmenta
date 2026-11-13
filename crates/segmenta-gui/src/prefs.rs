@@ -261,11 +261,20 @@ pub fn present(
     // dialog's request bus. Loading the stored list on open is the remaining stitch.
     let site_login_bus = Rc::clone(&bus);
     let site_login_client = Arc::clone(&client);
-    let site_logins = site_logins_page(
-        &[],
-        Rc::new(move |method: &str, params: Value| {
-            site_login_bus.spawn(&site_login_client, method, params);
-        }),
+    let site_login_call: RpcCall = Rc::new({
+        let bus = Rc::clone(&site_login_bus);
+        let client = Arc::clone(&site_login_client);
+        move |method: &str, params: Value| {
+            bus.spawn(&client, method, params);
+        }
+    });
+    let site_logins = site_logins_page(&[], Rc::clone(&site_login_call));
+    // The stored logins are fetched when the dialog opens; a rejected call leaves the
+    // empty state instead of pretending the list is authoritative.
+    load_site_logins(
+        &site_logins.list,
+        Arc::clone(&site_login_client),
+        Rc::clone(&site_login_call),
     );
 
     dialog.add(&general);
@@ -1091,7 +1100,7 @@ pub struct SiteLoginsPage {
     pub list: gtk::ListBox,
     pub error: gtk::Label,
     /// One remove button per listed origin, in list order.
-    pub removals: Vec<gtk::Button>,
+    pub removals: std::cell::RefCell<Vec<gtk::Button>>,
 }
 
 /// Builds the Site logins page.
@@ -1145,32 +1154,7 @@ pub fn site_logins_page(entries: &[SiteLoginEntry], call: RpcCall) -> SiteLogins
 
     let list = gtk::ListBox::new();
     list.set_selection_mode(gtk::SelectionMode::None);
-    let mut removals: Vec<gtk::Button> = Vec::new();
-    for entry in entries {
-        let row = adw::ActionRow::builder()
-            .title(entry.origin.clone())
-            .subtitle(site_login_subtitle(entry))
-            .build();
-        let remove = gtk::Button::with_label(tr(locale(), Msg::SiteLoginRemove));
-        remove.add_css_class("destructive-action");
-        let target = entry.origin.clone();
-        let call = std::rc::Rc::clone(&call);
-        remove.connect_clicked(move |_| {
-            call(
-                "site_login.remove",
-                serde_json::json!({ "origin": target.clone() }),
-            );
-        });
-        row.add_suffix(&remove);
-        removals.push(remove);
-        list.append(&row);
-    }
-    if entries.is_empty() {
-        let empty = adw::ActionRow::builder()
-            .title(tr(locale(), Msg::SiteLoginsEmpty))
-            .build();
-        list.append(&empty);
-    }
+    let removals = render_site_login_rows(&list, entries, std::rc::Rc::clone(&call));
     let list_row = adw::ActionRow::builder().build();
     list_row.add_suffix(&list);
     group.add(&list_row);
@@ -1211,8 +1195,99 @@ pub fn site_logins_page(entries: &[SiteLoginEntry], call: RpcCall) -> SiteLogins
         add,
         list,
         error,
-        removals,
+        removals: std::cell::RefCell::new(removals),
     }
+}
+
+impl SiteLoginsPage {
+    /// Replace the listed origins, keeping the same call sink.
+    pub fn set_entries(&self, entries: &[SiteLoginEntry], call: RpcCall) {
+        while let Some(child) = self.list.first_child() {
+            self.list.remove(&child);
+        }
+        *self.removals.borrow_mut() = render_site_login_rows(&self.list, entries, call);
+    }
+}
+
+/// Fill the list box with one row per origin and return the remove buttons.
+fn render_site_login_rows(
+    list: &gtk::ListBox,
+    entries: &[SiteLoginEntry],
+    call: RpcCall,
+) -> Vec<gtk::Button> {
+    let mut removals = Vec::new();
+    for entry in entries {
+        let row = adw::ActionRow::builder()
+            .title(entry.origin.clone())
+            .subtitle(site_login_subtitle(entry))
+            .build();
+        let remove = gtk::Button::with_label(tr(locale(), Msg::SiteLoginRemove));
+        remove.add_css_class("destructive-action");
+        let target = entry.origin.clone();
+        let call = std::rc::Rc::clone(&call);
+        remove.connect_clicked(move |_| {
+            call(
+                "site_login.remove",
+                serde_json::json!({ "origin": target.clone() }),
+            );
+        });
+        row.add_suffix(&remove);
+        removals.push(remove);
+        list.append(&row);
+    }
+    if entries.is_empty() {
+        let empty = adw::ActionRow::builder()
+            .title(tr(locale(), Msg::SiteLoginsEmpty))
+            .build();
+        list.append(&empty);
+    }
+    removals
+}
+
+/// Parse a `site_login.list` answer into the page model, ignoring a password field even
+/// if a broken daemon ever sent one.
+pub fn site_login_entries(value: &serde_json::Value) -> Vec<SiteLoginEntry> {
+    value
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| serde_json::from_value::<SiteLoginEntry>(row.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Load the stored logins and repaint the list from the main loop.
+///
+/// The daemon call runs on a worker thread; GTK is only touched by the timeout, which also
+/// gives up as soon as the widget is gone.
+pub fn load_site_logins(list: &gtk::ListBox, client: Arc<dyn Client>, call: RpcCall) {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let answer = client.request("site_login.list", serde_json::json!({}));
+        let _ = sender.send(answer);
+    });
+    let weak = list.downgrade();
+    crate::glib::timeout_add_local(std::time::Duration::from_millis(50), move || match receiver
+        .try_recv()
+    {
+        Ok(Ok(value)) => {
+            if let Some(list) = weak.upgrade() {
+                while let Some(child) = list.first_child() {
+                    list.remove(&child);
+                }
+                render_site_login_rows(
+                    &list,
+                    &site_login_entries(&value),
+                    std::rc::Rc::clone(&call),
+                );
+            }
+            crate::glib::ControlFlow::Break
+        }
+        Ok(Err(_)) => crate::glib::ControlFlow::Break,
+        Err(std::sync::mpsc::TryRecvError::Empty) => crate::glib::ControlFlow::Continue,
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => crate::glib::ControlFlow::Break,
+    });
 }
 
 /// Subtitle of a stored login: the user name, plus the legacy warning when the daemon
