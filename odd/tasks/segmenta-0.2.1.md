@@ -73,7 +73,7 @@ Además, se pide una función nueva de gestión segura de descargas.
 | Bloqueo del diálogo tras la respuesta | `b75d39b` | confirmado: sin deadlock |
 | Preferencias: inset inferior, búsqueda negra, descripciones cortadas | `71e39bfe` (build) | confirmado por captura |
 | Documentación | `13eca06` | — |
-| P0 extensión `ERR_INVALID_MESSAGE` | — | **bloqueado**: sin navegador en el equipo de desarrollo |
+| P0 extensión `ERR_INVALID_SENDER` | `extension/shared/validate.js` | reproducido en Node y corregido; falta confirmación en navegador |
 
 Artefacto final: `segmenta_0.2.1-1_amd64.deb`, sha256
 `71e39bfecf25d6a36739f82694488cb6f1579e90f525788a9a5f508c49d05adf`; `check-package` 22/22.
@@ -106,4 +106,16 @@ Sin tag y sin Release.
 2. **Cold-start de captura**: sigue sin probarse en navegador real; la reconciliación tiene tests
    con worker reiniciado y `downloads.search` falso, que no es evidencia de navegador.
 3. **Extensión de Firefox**: no ejercitada en navegador en ninguna de las dos sesiones de QA.
+- L5: `ERR_INVALID_MESSAGE` era `ERR_INVALID_SENDER`. Reproducido sin navegador: con
+  `sender.url = "https://www.youtube.com/"` —lo que reporta el content script tras una navegación
+  SPA— `validateInbound` devolvía `ERR_INVALID_SENDER`, y el content script lo traduce al mismo
+  texto genérico. `validateSender` acepta ahora el **origen exacto** `https://www.youtube.com`
+  (comprobado con `new URL`: scheme `https` y host exacto) y sigue validando el `url` del payload
+  por su cuenta. Tests: `/`, origen sin barra, `/results` y `/watch` aceptados; `evil.example`,
+  `http://`, `m.youtube.com` y `www.youtube.com.evil.example` rechazados.
+- L6 (hallazgo abierto, **no corregido**): `isAllowedUrl` acepta **cualquier host** cuando
+  `allowStreams` está activo y la allowlist está vacía (`extension/shared/protocol.js:180-181`), y
+  el background pasa `allowStreams: true`. Un payload `https://evil.example/watch?v=1` pasa la
+  validación. Es comportamiento previo, no de esta unidad, y tocarlo cambia el contrato de probing
+  de streams; queda registrado para una decisión explícita.
 
