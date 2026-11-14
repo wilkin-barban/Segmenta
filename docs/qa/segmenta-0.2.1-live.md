@@ -1,6 +1,6 @@
 # Segmenta 0.2.1 — QA live en Ubuntu
 
-Fecha: 2026-11-13. Sin tag ni Release. Estado del `.deb`:
+Fecha: 2026-11-13. Release `v0.2.1` publicada. Estado del `.deb`:
 `a3ded14cf8285dc6598d7b9131aeb851a9ec8c4051325166076de259ccb7ef63`.
 Instalado en Ubuntu 26.04: `SMOKE OK rows=1 segments=4`; `check-package` 23/23.
 

@@ -91,7 +91,7 @@ Además, se pide una función nueva de gestión segura de descargas.
 
 Artefacto final: `segmenta_0.2.1-1_amd64.deb`, sha256
 `a3ded14cf8285dc6598d7b9131aeb851a9ec8c4051325166076de259ccb7ef63`; `check-package` 23/23; iCloud real completado; captura pequeña con notificación.
-Sin tag y sin Release.
+Release `v0.2.1` publicada con CI verde.
 
 ## Log
 

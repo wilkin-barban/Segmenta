@@ -1,15 +1,14 @@
 # OpenSpec 10: Empaquetado, Ejecución Segura y Suite de Pruebas
 
 > **Especificación:** OPENSPEC-SEGMENTA-010
-> **Versión:** 2.0.0 (0.2.0 **en preparación**)
+> **Versión:** 2.1.0 (0.2.1 publicada)
 > **Área:** Configuración de Build Cargo, Empaquetado `.deb` para Ubuntu 26.04, Suite de Pruebas y Benchmarks
 >
-> **Alcance de entrega:** paquete `.deb` 0.2.0 y árbol `cargo` reproducible. Flatpak/Snap/AppImage
+> **Alcance de entrega:** paquete `.deb` 0.2.1 y árbol `cargo` reproducible. Flatpak/Snap/AppImage
 > quedan fuera de alcance; el Native Messaging fuera del sandbox no se resuelve con un manifiesto
 > dentro del paquete y requiere una decisión de producto posterior.
 >
-> Todo lo marcado «(0.2, en preparación)» es contrato acordado para 0.2.0, no comportamiento entregado
-> hasta que Q1 cierre con el QA real. No existe tag `v0.2.0` mientras esta marca siga aquí.
+> La Release `v0.2.1` está publicada y CI está verde; este documento describe el estado entregado.
 
 ---
 
@@ -30,7 +29,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"          # Q1: hoy 0.1.2, se sube a 0.2.0 al cerrar la release
+version = "0.2.1"          # versión publicada
 edition = "2021"
 rust-version = "1.80"
 license = "GPL-3.0-or-later"
@@ -75,7 +74,7 @@ consulta de sondeo termina con código 0 (secreto encontrado) o 1 (no hay secret
 se informa `unavailable`, no se escribe ningún secreto en archivo plano y un alta con cabeceras
 sensibles falla con `1031` (`ERR_KEYRING_UNAVAILABLE`).
 
-**ClamAV es opcional** (0.2, en preparación): no está en `Depends` ni se embebe. Se detecta
+**ClamAV es opcional** (0.2, opcional): no está en `Depends` ni se embebe. Se detecta
 `clamdscan` primero y `clamscan` después; con `antivirus_enabled=true` y sin motor, la tarea falla con
 `ERR_ANTIVIRUS_UNAVAILABLE` en vez de publicarse como `completed` (contrato en 12).
 
@@ -123,7 +122,7 @@ En la tabla, por función:
 `segmenta-handler.desktop` registra el handler de enlaces magnet; el `.deb` no ejecuta `xdg-mime`
 desde `postinst`, así que el registro efectivo depende del escritorio y se documenta como tal.
 
-### 2.2. Flujo de build e instalación (0.2, en preparación)
+### 2.2. Flujo de build e instalación (0.2.1, entregado)
 
 ```bash
 cargo build --release --workspace
@@ -138,8 +137,7 @@ systemctl --user enable --now segmenta.socket
 
 `node extension/tools/pack.mjs` genera `dist/segmenta-extension-<versión>.zip` (Chromium MV3) y
 `dist/segmenta-firefox-<versión>.zip`. Los `assets` de `[package.metadata.deb]` apuntan hoy a los
-nombres `0.1.2`; Q1 debe actualizarlos a `0.2.0` **antes** de construir el paquete o `cargo deb` falla
-buscando los ZIP.
+nombres `0.2.1` y el paquete se construye con esos assets.
 
 El `.deb` no debe ejecutar `systemctl enable` desde `postinst` sin una decisión explícita: la unidad de
 usuario se activa por el operador o por la GUI. El desinstalador conserva `$XDG_DATA_HOME/segmenta` y
@@ -159,8 +157,8 @@ Qué comprueba, en este orden y saliendo con código distinto de cero en el prim
 1. que el archivo exista y sea un `.deb`, y que `dpkg-deb` esté instalado;
 2. que `dpkg-deb --info` declare `Package: segmenta`, la `Version` esperada y un `Description` no
    vacío, y que `dpkg-deb -f Depends` incluya `libsecret-tools`. La versión esperada llega como
-   segundo argumento (`0.2.0` en el gate) o por `SEGMENTA_EXPECTED_VERSION`; el valor por defecto del
-   script es `0.1.2` y se sube junto con el workspace. Acepta `0.2.0` y `0.2.0-*`;
+   segundo argumento (`0.2.1` en el gate) o por `SEGMENTA_EXPECTED_VERSION`; el script acepta
+   `0.2.1` y `0.2.1-*`;
 3. que `dpkg-deb --contents` liste las **23 rutas** de §2.1; informa **todas** las que falten, no sólo
    la primera;
 4. que `desktop-file-validate` y `appstreamcli validate --no-net` acepten las copias **extraídas del
@@ -182,7 +180,7 @@ portal, `--filesystem` y un host instalado en el sistema; no alcanza con meter `
 del Flatpak. La GUI y el daemon pueden empaquetarse por separado en el futuro, pero el contrato IPC no
 cambia.
 
-### 2.4. Extensión de navegador: dos ZIP y carga manual (0.2, en preparación)
+### 2.4. Extensión de navegador: dos ZIP y carga manual (0.2.1, entregado)
 
 - El `.deb` instala `usr/share/segmenta/extensions/segmenta-chromium.zip` y
   `segmenta-firefox.zip`; los dos se construyen desde el mismo árbol `extension/` con
@@ -338,11 +336,11 @@ packaging/check-package.sh dist/segmenta_0.2.1-1_amd64.deb 0.2.1
 ```
 
 Para GUI: `xvfb-run -a cargo test -p segmenta-gui`; no se aceptan skips por falta de display. Un gate
-en rojo bloquea el `done` de la unidad y el tag `v0.2.0`.
+en rojo bloquea el `done` de la unidad y el tag `v0.2.1`.
 
 ---
 
-## 7. Empaquetado de medios, navegadores y antivirus (0.2, en preparación)
+## 7. Empaquetado de medios, navegadores y antivirus (0.2.1, entregado)
 
 - `segmenta-host` → `/usr/bin/segmenta-host` (framing Native Messaging, sin shell).
 - Manifiestos nativos de sistema instalados por el `.deb` (§2.1): Chrome, Chromium, Edge, Brave,

@@ -4,9 +4,10 @@
 > **Ubuntu 26.04 LTS (GNOME 50 / Wayland)**, con daemon propio, CLI, GUI nativa GTK4 +
 > Libadwaita y extensión de navegador.
 
-**Estado: 0.2.1 en preparación.** El `.deb` final se instala y pasa el QA real en Ubuntu 26.04;
-el tag y la Release se crean después de que CI quede verde. La release publicada es **0.2.0**
-(tag `v0.2.0`), con sus límites de QA declarados.
+**Estado: 0.2.1 publicada.** La Release `v0.2.1` incluye el `.deb`
+(`a3ded14cf8285dc6598d7b9131aeb851a9ec8c4051325166076de259ccb7ef63`), los dos ZIP y el
+`SHA256SUMS`; CI está verde y el QA real se hizo en Ubuntu 26.04. La release anterior es **0.2.0**
+(tag `v0.2.0`).
 
 ### Novedades de 0.2.1
 

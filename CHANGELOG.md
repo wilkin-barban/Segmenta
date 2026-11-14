@@ -7,8 +7,7 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 
 ## [0.2.1] - 2026-11-13
 
-Correcciones de interfaz, captura y motor, y gestión segura de descargas. Sin publicar: falta el
-tag y el Release.
+Correcciones de interfaz, captura y motor, y gestión segura de descargas. Publicada como `v0.2.1`.
 
 ### Added
 
