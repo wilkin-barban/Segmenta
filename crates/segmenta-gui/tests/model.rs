@@ -34,6 +34,12 @@ fn row(task_id: &str, status: &str) -> DownloadItem {
     .expect("contract row parses")
 }
 
+fn created_row(task_id: &str, status: &str, created_at: &str) -> DownloadItem {
+    let mut item = row(task_id, status);
+    item.created_at = Some(created_at.to_string());
+    item
+}
+
 fn segment(id: u32, start: u64, end: u64, next: u64) -> SegmentItem {
     serde_json::from_value(json!({
         "id": id,
@@ -145,6 +151,139 @@ fn a_new_task_lands_at_the_top_of_the_list() {
         .map(|item| item.task_id.as_str())
         .collect();
     assert_eq!(order, vec!["fresh", "old"]);
+}
+
+#[test]
+fn reload_keeps_the_daemon_newest_first_order() {
+    let mut store = DownloadStore::default();
+    // Exactly what `download.list` sends (`created_at DESC, rowid DESC`): newest on top.
+    store.reload(vec![
+        created_row("newest", "completed", "2026-04-24T12:00:00Z"),
+        created_row("middle", "downloading", "2026-04-24T11:00:00Z"),
+        created_row("oldest", "failed", "2026-04-24T10:00:00Z"),
+    ]);
+    let order: Vec<&str> = store
+        .items()
+        .iter()
+        .map(|item| item.task_id.as_str())
+        .collect();
+    assert_eq!(
+        order,
+        vec!["newest", "middle", "oldest"],
+        "the reload reversed the daemon order"
+    );
+    assert_eq!(store.len(), 3);
+
+    // A task added from an event still lands on top of the same order.
+    store.upsert(created_row("fresh", "downloading", "2026-04-24T13:00:00Z"));
+    let order: Vec<&str> = store
+        .items()
+        .iter()
+        .map(|item| item.task_id.as_str())
+        .collect();
+    assert_eq!(order, vec!["fresh", "newest", "middle", "oldest"]);
+
+    // The next reload receives that same order and must keep it, without duplicates.
+    store.reload(vec![
+        created_row("fresh", "downloading", "2026-04-24T13:00:00Z"),
+        created_row("newest", "completed", "2026-04-24T12:00:00Z"),
+        created_row("middle", "downloading", "2026-04-24T11:00:00Z"),
+        created_row("oldest", "failed", "2026-04-24T10:00:00Z"),
+        // A repeated id must replace in place, never paint two rows.
+        created_row("middle", "paused", "2026-04-24T11:00:00Z"),
+    ]);
+    let order: Vec<&str> = store
+        .items()
+        .iter()
+        .map(|item| item.task_id.as_str())
+        .collect();
+    assert_eq!(order, vec!["fresh", "newest", "middle", "oldest"]);
+    assert_eq!(
+        store.get("middle").map(|item| item.status),
+        Some(DownloadStatus::Paused),
+        "the later duplicate payload must win"
+    );
+}
+
+#[test]
+fn a_stale_status_answer_never_moves_the_bar_back() {
+    let mut store = DownloadStore::default();
+    store.reload(vec![row("a", "downloading")]);
+    // A `download.status` is sent now; while it is in flight a progress event lands.
+    let request_mark = store.task_mark("a");
+    let progress: ProgressUpdate = serde_json::from_value(json!({
+        "downloaded_bytes": 3_000_000_000u64,
+        "total_bytes": 4_000_000_000u64,
+        "speed_bps": 30_000_000u64
+    }))
+    .expect("progress payload parses");
+    assert!(store.apply_progress("a", &progress));
+
+    // The answer carries the older bytes and the older status.
+    let mut stale = row("a", "downloading");
+    stale.downloaded_bytes = 1_200_000_000;
+    store.apply_status(stale, request_mark);
+    let item = store.get("a").expect("row kept");
+    assert_eq!(item.downloaded_bytes, 3_000_000_000, "the bar moved back");
+    assert_eq!(item.speed_bps, 30_000_000);
+    assert!((item.progress() - 0.75).abs() < 1e-9);
+
+    // An answer requested after the event is the authority: the task completed.
+    let fresh_mark = store.task_mark("a");
+    let mut fresh = row("a", "completed");
+    fresh.downloaded_bytes = 4_000_000_000;
+    store.apply_status(fresh, fresh_mark);
+    let item = store.get("a").expect("row kept");
+    assert_eq!(item.status, DownloadStatus::Completed);
+    assert_eq!(item.downloaded_bytes, 4_000_000_000);
+    assert!((item.progress() - 1.0).abs() < 1e-9);
+
+    // A task the list does not know yet still lands on top, never dropped.
+    let mut unknown = row("late", "downloading");
+    unknown.downloaded_bytes = 10;
+    store.apply_status(unknown, 0);
+    assert_eq!(store.len(), 2);
+    assert_eq!(
+        store.items().first().map(|item| item.task_id.as_str()),
+        Some("late")
+    );
+}
+
+#[test]
+fn an_unknown_total_never_fakes_a_fraction_or_a_size() {
+    let mut store = DownloadStore::default();
+    // HLS/DASH streams publish `total_bytes: null` (`manager.rs`, the stream path).
+    let mut stream = row("stream", "downloading");
+    stream.total_bytes = None;
+    stream.downloaded_bytes = 5_000_000;
+    // A torrent reports `0` until the metadata arrives.
+    let mut torrent = row("torrent", "downloading");
+    torrent.total_bytes = Some(0);
+    torrent.downloaded_bytes = 12_000_000;
+    store.reload(vec![stream, torrent]);
+
+    for task_id in ["stream", "torrent"] {
+        let item = store.get(task_id).expect("row listed");
+        assert!(!item.has_known_total(), "{task_id} claims a known size");
+        assert_eq!(item.progress(), 0.0);
+        // Only the downloaded amount: never `0 B de 0 B`.
+        assert!(!item.size_line().contains(" de "), "{}", item.size_line());
+    }
+
+    // A `task_progress` that brings no total keeps the one the list already had.
+    let mut known = row("known", "downloading");
+    known.total_bytes = Some(4_000_000_000);
+    store.reload(vec![known]);
+    let progress: ProgressUpdate = serde_json::from_value(json!({
+        "downloaded_bytes": 2_000_000_000u64,
+        "segments": []
+    }))
+    .expect("progress payload parses");
+    assert!(store.apply_progress("known", &progress));
+    let item = store.get("known").expect("row kept");
+    assert!(item.has_known_total());
+    assert_eq!(item.total_bytes, Some(4_000_000_000));
+    assert!((item.progress() - 0.5).abs() < 1e-9);
 }
 
 #[test]

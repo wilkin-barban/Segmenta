@@ -402,6 +402,16 @@ impl DownloadItem {
         }
     }
 
+    /// Whether the daemon knows how big the payload is.
+    ///
+    /// `None` and `Some(0)` both mean "unknown": HLS/DASH streams publish
+    /// `total_bytes: null` (`manager.rs`, the stream path), a torrent reports `0`
+    /// until it has the metadata, and yt-dlp only prints a total once it does.
+    /// Painting a 0 % fraction for those is what left the bar quiet until completion.
+    pub fn has_known_total(&self) -> bool {
+        matches!(self.total_bytes, Some(total) if total > 0)
+    }
+
     pub fn active_segments(&self) -> usize {
         self.segments
             .iter()
@@ -411,14 +421,15 @@ impl DownloadItem {
 
     /// `1.2 GB de 4.0 GB`, or just the downloaded amount when the size is unknown.
     pub fn size_line(&self) -> String {
-        match self.total_bytes {
-            Some(total) => format!(
+        if self.has_known_total() {
+            format!(
                 "{} {} {}",
                 format_bytes(self.downloaded_bytes),
                 segmenta_i18n::tr(segmenta_i18n::current(), segmenta_i18n::Msg::Of),
-                format_bytes(total)
-            ),
-            None => format_bytes(self.downloaded_bytes),
+                format_bytes(self.total_bytes.unwrap_or(0))
+            )
+        } else {
+            format_bytes(self.downloaded_bytes)
         }
     }
 
@@ -591,6 +602,11 @@ pub enum SeqStatus {
 pub struct DownloadStore {
     items: Vec<DownloadItem>,
     last_seq: Option<u64>,
+    /// Monotonic counter bumped by every live update (progress, state, error, reload).
+    mark: u64,
+    /// Last mark applied per task: a `download.status` answer older than this would
+    /// take the bar back to bytes the events already went past.
+    task_marks: BTreeMap<String, u64>,
 }
 
 impl DownloadStore {
@@ -614,11 +630,23 @@ impl DownloadStore {
         self.items.iter_mut().find(|item| item.task_id == task_id)
     }
 
-    /// Replaces the whole table: a reload must never duplicate rows.
+    /// Replaces the whole table: a reload never duplicates rows and never reorders
+    /// them. The daemon answers `created_at DESC`, so the incoming order is already
+    /// newest first and reversing it here is what painted the oldest task on top.
     pub fn reload(&mut self, items: Vec<DownloadItem>) {
         self.items.clear();
+        self.task_marks.clear();
+        self.mark += 1;
+        let mark = self.mark;
         for item in items {
-            self.upsert(item);
+            let task_id = item.task_id.clone();
+            match self.get_mut(&task_id) {
+                // The daemon must not repeat a task; if it does, the later payload wins
+                // without the row moving, exactly like `upsert`.
+                Some(existing) => *existing = item,
+                None => self.items.push(item),
+            }
+            self.task_marks.insert(task_id, mark);
         }
     }
 
@@ -632,9 +660,54 @@ impl DownloadStore {
         }
     }
 
+    /// Applies a `download.status` answer that was requested when the store had
+    /// `request_mark`.
+    ///
+    /// The answer is the authority for everything the events never carry (path,
+    /// filename, quarantine, errors), but its byte counters were read before any
+    /// progress event that arrived while the request was in flight. Taking those older
+    /// bytes is what froze the bar: the user watched a `task_progress` repaint be
+    /// overwritten by the answer to a `download.status` sent a moment earlier.
+    pub fn apply_status(&mut self, mut item: DownloadItem, request_mark: u64) {
+        let task_id = item.task_id.clone();
+        let stale = self.task_mark(&task_id) > request_mark;
+        if self.get(&task_id).is_none() {
+            self.items.insert(0, item);
+            self.bump_mark(&task_id);
+            return;
+        }
+        if let Some(existing) = self.get_mut(&task_id) {
+            if stale {
+                // Keep what the live events already painted.
+                item.status = existing.status;
+                item.downloaded_bytes = existing.downloaded_bytes;
+                item.total_bytes = existing.total_bytes;
+                item.speed_bps = existing.speed_bps;
+                item.eta_seconds = existing.eta_seconds;
+                item.segments = std::mem::take(&mut existing.segments);
+            }
+            *existing = item;
+        }
+    }
+
+    /// Mark of the last live update applied to `task_id`.
+    ///
+    /// Captured when a request is sent so the answer can be recognised as stale.
+    pub fn task_mark(&self, task_id: &str) -> u64 {
+        self.task_marks.get(task_id).copied().unwrap_or(0)
+    }
+
+    /// Records that a live update was applied for `task_id`.
+    fn bump_mark(&mut self, task_id: &str) {
+        self.mark += 1;
+        let mark = self.mark;
+        self.task_marks.insert(task_id.to_string(), mark);
+    }
+
     pub fn remove(&mut self, task_id: &str) -> bool {
         let before = self.items.len();
         self.items.retain(|item| item.task_id != task_id);
+        self.task_marks.remove(task_id);
         before != self.items.len()
     }
 
@@ -642,6 +715,9 @@ impl DownloadStore {
     pub fn remove_many(&mut self, task_ids: &[String]) -> usize {
         let before = self.items.len();
         self.items.retain(|item| !task_ids.contains(&item.task_id));
+        for task_id in task_ids {
+            self.task_marks.remove(task_id);
+        }
         before - self.items.len()
     }
 
@@ -687,6 +763,7 @@ impl DownloadStore {
         if !progress.segments.is_empty() {
             item.segments = progress.segments.clone();
         }
+        self.bump_mark(task_id);
         true
     }
 
@@ -711,6 +788,7 @@ impl DownloadStore {
             item.error_code = None;
             item.error_message = None;
         }
+        self.bump_mark(task_id);
         true
     }
 
@@ -724,6 +802,7 @@ impl DownloadStore {
         item.error_message = Some(message.to_string());
         item.speed_bps = 0;
         item.eta_seconds = None;
+        self.bump_mark(task_id);
         true
     }
 

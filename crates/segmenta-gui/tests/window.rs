@@ -423,6 +423,290 @@ fn task_progress_updates_the_row_model() {
     });
 }
 
+/// A media/torrent task as the daemon reports it: no size known, no segment table.
+fn media_row(task_id: &str, media_kind: &str) -> Value {
+    let mut row = download_row(task_id, "downloading", 1);
+    row["url"] = json!("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+    row["filename"] = json!("video.webm");
+    row["final_path"] = json!("/home/user/Descargas/video.webm");
+    row["total_bytes"] = json!(null);
+    row["downloaded_bytes"] = json!(0u64);
+    row["segments"] = json!([]);
+    row["media_kind"] = json!(media_kind);
+    row
+}
+
+#[test]
+fn direct_download_detail_bar_changes_with_each_progress_event() {
+    run_gui("direct_download_detail_bar_changes", || {
+        let app = app("io.github.wilkin.Segmenta.TestDirectBar");
+        let fake = DemoClient::with_downloads(vec![download_row("task-1", "downloading", 4)]);
+        let window = window_with(&app, &fake);
+        assert!(pump_until(
+            || window.rows().len() == 1,
+            Duration::from_secs(5)
+        ));
+        assert!(window.click_task("task-1"), "task-1 is not selectable");
+        assert!(
+            pump_until(|| window.detail().is_some(), Duration::from_secs(5)),
+            "the detail page never opened"
+        );
+        // The row starts at 1.2 GB of 4.0 GB: 0.30 painted by the widget itself.
+        let initial = window
+            .detail_progress_fraction()
+            .expect("the detail page paints a progress bar");
+        assert!(
+            (initial - 0.3).abs() < 1e-9,
+            "the detail bar opened at {initial}"
+        );
+
+        fake.push_download_event(
+            1,
+            "task_progress",
+            "task-1",
+            json!({
+                "downloaded_bytes": 1_000_000_000u64,
+                "total_bytes": 4_000_000_000u64,
+                "speed_bps": 10_000_000u64,
+                "eta_seconds": 300u64,
+                "segments": segments(4, 4_000_000_000u64)
+            }),
+        );
+        assert!(
+            pump_until(
+                || window.detail_progress_fraction() == Some(0.25),
+                Duration::from_secs(5)
+            ),
+            "DEBUG rows={:?} detail={:?} fraction={:?} text={:?} row_fractions={:?} list_calls={} state={:?}",
+            window.rows().iter().map(|row| (row.task_id.clone(), row.downloaded_bytes, row.speed_bps, row.total_bytes)).collect::<Vec<_>>(),
+            window.detail().map(|item| (item.downloaded_bytes, item.total_bytes)),
+            window.detail_progress_fraction(),
+            window.detail_progress_text(),
+            window.row_progress_fractions(),
+            fake.list_calls(),
+            window.view_state()
+        );
+        assert!(
+            pump_until(
+                || window.row_progress_fractions().first().copied() == Some(0.25),
+                Duration::from_secs(5)
+            ),
+            "the list row painted {:?} after the first event",
+            window.row_progress_fractions()
+        );
+
+        fake.push_download_event(
+            2,
+            "task_progress",
+            "task-1",
+            json!({
+                "downloaded_bytes": 3_000_000_000u64,
+                "total_bytes": 4_000_000_000u64,
+                "speed_bps": 20_000_000u64,
+                "eta_seconds": 50u64,
+                "segments": segments(4, 4_000_000_000u64)
+            }),
+        );
+        assert!(
+            pump_until(
+                || window.detail_progress_fraction() == Some(0.75),
+                Duration::from_secs(5)
+            ),
+            "the detail bar stayed at {:?} after the second event",
+            window.detail_progress_fraction()
+        );
+        assert!(
+            pump_until(
+                || window.row_progress_fractions().first().copied() == Some(0.75),
+                Duration::from_secs(5)
+            ),
+            "the list row painted {:?} after the second event",
+            window.row_progress_fractions()
+        );
+        assert_eq!(
+            window.detail_progress_indeterminate(),
+            Some(false),
+            "a known size must not paint a pulse"
+        );
+    });
+}
+
+#[test]
+fn media_progress_with_an_unknown_total_pulses_and_shows_the_real_bytes() {
+    run_gui("media_progress_unknown_total", || {
+        let app = app("io.github.wilkin.Segmenta.TestMediaBar");
+        let fake = DemoClient::with_downloads(vec![media_row("media-1", "video")]);
+        let window = window_with(&app, &fake);
+        assert!(pump_until(
+            || window.rows().len() == 1,
+            Duration::from_secs(5)
+        ));
+        assert!(window.click_task("media-1"), "media-1 is not selectable");
+        assert!(
+            pump_until(|| window.detail().is_some(), Duration::from_secs(5)),
+            "the detail page never opened"
+        );
+        assert_eq!(
+            window.detail_progress_indeterminate(),
+            Some(true),
+            "an unknown size painted a determinate bar"
+        );
+        assert_eq!(window.detail_progress_text().as_deref(), Some("0 B"));
+        assert!(window.row_progress_indeterminate());
+
+        // A yt-dlp style event: bytes moved, the total is still unknown (`null`).
+        fake.push_download_event(
+            1,
+            "task_progress",
+            "media-1",
+            json!({
+                "downloaded_bytes": 5_000_000u64,
+                "total_bytes": null,
+                "speed_bps": 1_000_000u64,
+                "eta_seconds": null,
+                "segments": [],
+                "media_kind": "video"
+            }),
+        );
+        assert!(
+            pump_until(
+                || window.detail_progress_text().as_deref() == Some("5.0 MB"),
+                Duration::from_secs(5)
+            ),
+            "the detail bar painted {:?} as text",
+            window.detail_progress_text()
+        );
+        assert_eq!(window.detail_progress_indeterminate(), Some(true));
+        assert_eq!(
+            window.detail_progress_fraction(),
+            Some(0.0),
+            "an unknown size must not invent a fraction"
+        );
+        assert_eq!(
+            window.detail_percent_label().as_deref(),
+            Some("5.0 MB"),
+            "the percent chip still lies about a size it does not know"
+        );
+
+        fake.push_download_event(
+            2,
+            "task_progress",
+            "media-1",
+            json!({
+                "downloaded_bytes": 12_000_000u64,
+                "total_bytes": null,
+                "speed_bps": 1_500_000u64,
+                "eta_seconds": null,
+                "segments": [],
+                "media_kind": "video"
+            }),
+        );
+        assert!(
+            pump_until(
+                || window.detail_progress_text().as_deref() == Some("12.0 MB"),
+                Duration::from_secs(5)
+            ),
+            "the detail bar text stayed at {:?}",
+            window.detail_progress_text()
+        );
+        assert_eq!(
+            window.detail_progress_indeterminate(),
+            Some(true),
+            "an unknown size must stay in pulse mode"
+        );
+    });
+}
+
+#[test]
+fn torrent_progress_is_indeterminate_at_zero_and_settles_on_a_known_total() {
+    run_gui("torrent_progress_zero_total", || {
+        let app = app("io.github.wilkin.Segmenta.TestTorrentBar");
+        let mut row = media_row("torrent-1", "torrent");
+        // A torrent before metadata reports the total as `0`, not as `null`.
+        row["total_bytes"] = json!(0u64);
+        let fake = DemoClient::with_downloads(vec![row]);
+        let window = window_with(&app, &fake);
+        assert!(pump_until(
+            || window.rows().len() == 1,
+            Duration::from_secs(5)
+        ));
+        assert!(window.click_task("torrent-1"));
+        assert!(pump_until(
+            || window.detail().is_some(),
+            Duration::from_secs(5)
+        ));
+        assert_eq!(
+            window.detail_progress_indeterminate(),
+            Some(true),
+            "total_bytes 0 painted a determinate bar"
+        );
+
+        fake.push_download_event(
+            1,
+            "task_progress",
+            "torrent-1",
+            json!({
+                "downloaded_bytes": 6u64,
+                "total_bytes": 12u64,
+                "speed_bps": 0u64,
+                "eta_seconds": null,
+                "segments": []
+            }),
+        );
+        assert!(
+            pump_until(
+                || window.detail_progress_fraction() == Some(0.5),
+                Duration::from_secs(5)
+            ),
+            "the torrent bar painted {:?}",
+            window.detail_progress_fraction()
+        );
+        assert_eq!(window.detail_progress_indeterminate(), Some(false));
+        assert_eq!(window.detail_progress_text(), None);
+    });
+}
+
+#[test]
+fn a_progress_event_without_a_total_keeps_the_size_from_the_item() {
+    run_gui("progress_event_without_total", || {
+        let app = app("io.github.wilkin.Segmenta.TestEventWithoutTotal");
+        let fake = DemoClient::with_downloads(vec![download_row("task-1", "downloading", 4)]);
+        let window = window_with(&app, &fake);
+        assert!(pump_until(
+            || window.rows().len() == 1,
+            Duration::from_secs(5)
+        ));
+        assert!(window.click_task("task-1"));
+        assert!(pump_until(
+            || window.detail().is_some(),
+            Duration::from_secs(5)
+        ));
+
+        // `task_progress` without `total_bytes`: the size the list already knows wins.
+        fake.push_download_event(
+            1,
+            "task_progress",
+            "task-1",
+            json!({
+                "downloaded_bytes": 2_000_000_000u64,
+                "speed_bps": 12_000_000u64,
+                "eta_seconds": 160u64,
+                "segments": segments(4, 4_000_000_000u64)
+            }),
+        );
+        assert!(
+            pump_until(
+                || window.detail_progress_fraction() == Some(0.5),
+                Duration::from_secs(5)
+            ),
+            "the detail bar painted {:?} instead of the item total",
+            window.detail_progress_fraction()
+        );
+        assert_eq!(window.detail_progress_indeterminate(), Some(false));
+        assert_eq!(window.detail_percent_label().as_deref(), Some("50 %"));
+    });
+}
+
 #[test]
 fn detail_page_shows_one_block_per_segment() {
     run_gui("detail_page_shows_one_block_per_segment", || {

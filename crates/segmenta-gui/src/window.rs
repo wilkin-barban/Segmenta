@@ -134,7 +134,13 @@ enum Pending {
     Hello,
     Reload,
     Settings,
-    Status(String),
+    /// `download.status` for one task. The mark is the store's freshness at request
+    /// time: an answer older than a `task_progress` already applied must not move the
+    /// bar back to bytes the events went past.
+    Status {
+        task_id: String,
+        mark: u64,
+    },
     Pause(String),
     Resume(String),
     Cancel(String),
@@ -411,6 +417,59 @@ impl SegmentaWindow {
             .as_ref()
             .map(|detail| detail.task_id.clone())?;
         self.0.store.borrow().get(&task_id).cloned()
+    }
+
+    /// Fraction the detail page's progress bar is painting right now.
+    ///
+    /// Read from the widget and not from the model: a test that asks the store would
+    /// pass while the user keeps looking at a frozen bar.
+    pub fn detail_progress_fraction(&self) -> Option<f64> {
+        self.0
+            .detail
+            .borrow()
+            .as_ref()
+            .map(|detail| detail.progress.fraction())
+    }
+
+    /// Whether the detail progress bar is painting an unknown size as a pulse.
+    pub fn detail_progress_indeterminate(&self) -> Option<bool> {
+        self.0
+            .detail
+            .borrow()
+            .as_ref()
+            .map(|detail| detail.progress.has_css_class(INDETERMINATE_CLASS))
+    }
+
+    /// Text painted inside the detail progress bar (the bytes when the size is unknown).
+    pub fn detail_progress_text(&self) -> Option<String> {
+        self.0
+            .detail
+            .borrow()
+            .as_ref()
+            .and_then(|detail| detail.progress.text().map(|text| text.to_string()))
+    }
+
+    /// Label of the percent chip next to the detail progress bar.
+    pub fn detail_percent_label(&self) -> Option<String> {
+        self.0
+            .detail
+            .borrow()
+            .as_ref()
+            .map(|detail| detail.percent.label().to_string())
+    }
+
+    /// Fractions painted by the progress bars of the visible list rows, in paint order.
+    pub fn row_progress_fractions(&self) -> Vec<f64> {
+        let mut fractions = Vec::new();
+        collect_progress_bars(self.0.list_view.upcast_ref::<gtk::Widget>(), &mut fractions);
+        fractions
+    }
+
+    /// Whether any visible list row is painting an unknown size as a pulse.
+    pub fn row_progress_indeterminate(&self) -> bool {
+        let mut bars = Vec::new();
+        collect_indeterminate_bars(self.0.list_view.upcast_ref::<gtk::Widget>(), &mut bars);
+        !bars.is_empty()
     }
 
     /// Number of blocks the detail segment bar is painting.
@@ -1327,14 +1386,19 @@ impl Inner {
     }
 
     fn refresh_task(&self, task_id: &str) {
+        let mark = self.store.borrow().task_mark(task_id);
         self.request(
             "download.status",
             json!({ "task_id": task_id }),
-            Pending::Status(task_id.to_string()),
+            Pending::Status {
+                task_id: task_id.to_string(),
+                mark,
+            },
         );
     }
 
     fn tick(&self) {
+        self.pulse_indeterminate();
         while let Some(event) = self.client.poll_event() {
             match event {
                 ClientEvent::Connected => {
@@ -1391,7 +1455,7 @@ impl Inner {
                 Pending::Reload => "reload".to_string(),
                 Pending::Queues => "queues".to_string(),
                 Pending::Total { offset, .. } => format!("total from {offset}"),
-                Pending::Status(task) => format!("status {task}"),
+                Pending::Status { task_id, .. } => format!("status {task_id}"),
                 other => format!("{other:?}"),
             };
             match &result {
@@ -1507,15 +1571,12 @@ impl Inner {
                     }
                 }
             },
-            Pending::Status(task_id) => match result {
+            Pending::Status { task_id, mark } => match result {
                 Ok(value) => {
                     if let Ok(item) = serde_json::from_value::<DownloadItem>(value) {
-                        let segments = item.segments.clone();
-                        let total = item.total_bytes.unwrap_or(0);
-                        self.store.borrow_mut().upsert(item);
+                        self.store.borrow_mut().apply_status(item, mark);
                         self.sync_row(&task_id);
                         self.update_detail();
-                        let _ = (segments, total);
                     }
                 }
                 Err(err) => self.toast(&err.ui_message()),
@@ -1873,6 +1934,23 @@ impl Inner {
         );
     }
 
+    /// Keeps the bars of tasks with an unknown size visibly moving.
+    ///
+    /// The tick is the only clock the window has: a bar that pulses once per paint stops
+    /// moving between events, which reads as frozen on a stalled stream.
+    fn pulse_indeterminate(&self) {
+        if let Some(detail) = self.detail.borrow().as_ref() {
+            if detail.progress.has_css_class(INDETERMINATE_CLASS) {
+                detail.progress.pulse();
+            }
+        }
+        let mut bars = Vec::new();
+        collect_indeterminate_bars(self.list_view.upcast_ref::<gtk::Widget>(), &mut bars);
+        for bar in bars {
+            bar.pulse();
+        }
+    }
+
     fn refill(&self) {
         let filter = self.filter.get();
         let query = self.query.borrow().clone();
@@ -2110,11 +2188,10 @@ impl Inner {
         state.set_halign(gtk::Align::Start);
 
         let progress = gtk::ProgressBar::new();
-        progress.set_fraction(item.progress());
-        progress.set_show_text(false);
         progress.set_hexpand(true);
+        paint_progress(&progress, item);
 
-        let percent = gtk::Label::new(Some(&format!("{:.0} %", item.progress() * 100.0)));
+        let percent = gtk::Label::new(Some(&progress_label_text(item)));
         percent.add_css_class("numeric");
         percent.add_css_class("dim-label");
 
@@ -2402,12 +2479,11 @@ impl Inner {
         status.add_css_class("dim-label");
 
         let bar = gtk::ProgressBar::new();
-        bar.set_fraction(item.progress());
-        bar.set_show_text(false);
+        paint_progress(&bar, item);
         bar.update_property(&[gtk::accessible::Property::Label(&format!(
-            "Progreso de {}: {:.0} %",
+            "Progreso de {}: {}",
             item.filename,
-            item.progress() * 100.0
+            progress_label_text(item)
         ))]);
 
         // Media tasks carry a localized badge in front of the progress line.
@@ -2765,6 +2841,39 @@ fn format_speed_label(speed: u64) -> String {
     crate::model::format_speed(speed)
 }
 
+/// Paints one download on a progress bar.
+///
+/// A known size gets its real fraction. An unknown one (`total_bytes: null`, which is
+/// what the HLS/DASH stream path publishes, or `0`, which is what a torrent reports
+/// before the metadata arrives) gets activity mode plus the bytes that did arrive:
+/// a fraction computed from an unknown total is 0 for the whole transfer, and that is
+/// the bar the user saw frozen until completion.
+fn paint_progress(bar: &gtk::ProgressBar, item: &DownloadItem) {
+    if item.has_known_total() {
+        bar.remove_css_class(INDETERMINATE_CLASS);
+        bar.set_show_text(false);
+        bar.set_text(None);
+        bar.set_fraction(item.progress());
+    } else {
+        bar.add_css_class(INDETERMINATE_CLASS);
+        bar.set_fraction(0.0);
+        bar.set_show_text(true);
+        bar.set_text(Some(&progress_label_text(item)));
+        // Activity mode: every call moves the block one `pulse_step`. The window tick
+        // keeps it moving even when the daemon has no new bytes to report.
+        bar.pulse();
+    }
+}
+
+/// `42 %` when the total is known, the downloaded bytes while it is not.
+fn progress_label_text(item: &DownloadItem) -> String {
+    if item.has_known_total() {
+        format!("{:.0} %", item.progress() * 100.0)
+    } else {
+        crate::model::format_bytes(item.downloaded_bytes)
+    }
+}
+
 fn eta_label(seconds: Option<u64>) -> String {
     crate::model::format_eta(seconds)
 }
@@ -2774,8 +2883,8 @@ fn update_detail_widgets(detail: &DetailPage, item: &DownloadItem) {
     detail.path.set_label(&item.final_path);
     detail.path.set_tooltip_text(Some(&item.final_path));
     detail.state.set_label(item.status.label(locale()));
-    detail.progress.set_fraction(item.progress());
-    let percent = format!("{:.0} %", item.progress() * 100.0);
+    paint_progress(&detail.progress, item);
+    let percent = progress_label_text(item);
     detail.percent.set_label(&percent);
     detail
         .progress
@@ -2800,6 +2909,38 @@ fn update_detail_widgets(detail: &DetailPage, item: &DownloadItem) {
     detail.cancel.set_visible(item.status.can_cancel());
     detail.delete.set_visible(item.status.can_delete());
     detail.open_folder.set_visible(!item.final_path.is_empty());
+}
+
+/// CSS marker of a progress bar whose real size the daemon does not know yet: HLS/DASH
+/// streams, torrents before metadata and media tasks before yt-dlp prints a total.
+const INDETERMINATE_CLASS: &str = "indeterminate";
+
+/// Collects the bars painting an unknown size, so the tick can keep them pulsing.
+fn collect_indeterminate_bars(widget: &gtk::Widget, bars: &mut Vec<gtk::ProgressBar>) {
+    if let Some(bar) = widget.downcast_ref::<gtk::ProgressBar>() {
+        if bar.has_css_class(INDETERMINATE_CLASS) {
+            bars.push(bar.clone());
+        }
+        return;
+    }
+    let mut next = widget.first_child();
+    while let Some(child) = next {
+        next = child.next_sibling();
+        collect_indeterminate_bars(&child, bars);
+    }
+}
+
+/// Fractions of every progress bar under `widget`, in paint order.
+fn collect_progress_bars(widget: &gtk::Widget, fractions: &mut Vec<f64>) {
+    if let Some(bar) = widget.downcast_ref::<gtk::ProgressBar>() {
+        fractions.push(bar.fraction());
+        return;
+    }
+    let mut next = widget.first_child();
+    while let Some(child) = next {
+        next = child.next_sibling();
+        collect_progress_bars(&child, fractions);
+    }
 }
 
 fn list_items(store: &gtk::gio::ListStore) -> Vec<DownloadItem> {

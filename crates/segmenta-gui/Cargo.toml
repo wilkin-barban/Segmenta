@@ -40,7 +40,49 @@ maintainer = "Wilkin Barban Rosabal <barbanwilkin@gmail.com>"
 copyright = "2026, Wilkin Barban Rosabal"
 license-file = ["../../LICENSE", "0"]
 extended-description = "Segmenta downloads HTTP and HTTPS files with several connections at once, writes every byte at its final offset and keeps the segment table in SQLite so a download survives a pause, a crash or a reboot. This package installs the download daemon (systemd user units), the segmenta CLI and the GTK4/Libadwaita desktop client."
-depends = "$auto, libgtk-4-1, libadwaita-1-0, libsecret-tools, ffmpeg, yt-dlp"
+# Runtime dependencies of the five shipped binaries, audited on Ubuntu 26.04 with
+# `ldd target/release/segmenta*`, `dpkg -S` and `apt-cache depends`:
+#
+#   $auto     resolves the shared libraries the binaries really link against. On
+#             26.04 that is libgtk-4-1 (>= 4.9.2), libadwaita-1-0 (>= 1.5~beta),
+#             libc6, libglib2.0-0t64, libgraphene-1.0-0 and libssl3t64 (pulled by
+#             librqbit -> openssl-sys).
+#   libgtk-4-1 / libadwaita-1-0
+#             kept explicit on top of $auto: cargo-deb only warns when a soname
+#             cannot be mapped to a package, and losing the toolkit dependency
+#             would install a GUI that cannot start. Both names still exist and
+#             are installed on 26.04 (`apt-cache policy`), so they are not stale.
+#   libsecret-tools
+#             not a link-time dependency: the daemon spawns `secret-tool`
+#             (crates/segmenta-daemon/src/secrets.rs). `libsecret-1-0` is NOT
+#             declared because libsecret-tools already depends on it and no
+#             shipped binary links it (no libsecret-1.so.0 in `ldd`).
+#   ffmpeg
+#             spawned binary (HLS/DASH remux and the final ffmpeg merge).
+#   yt-dlp
+#             spawned binary (YouTube). The archive one is older than the daemon's
+#             MIN_YTDLP_VERSION, so the package also ships a current zipapp (below);
+#             this dependency keeps a PATH copy for users who want one and is the
+#             fallback the daemon uses when the embedded build is not newer.
+#   python3
+#             the embedded zipapp is `#!/usr/bin/env python3` + a zip: without an
+#             interpreter it cannot run at all. Required by the upstream yt-dlp
+#             release, and the reason `yt-dlp` in the archive dragged python3 in.
+#   ca-certificates
+#             owns the system trust store /etc/ssl/certs/ca-certificates.crt.
+#             `strings target/release/segmenta-daemon` embeds the
+#             rustls-native-certs/openssl-probe path list, because librqbit's HTTP
+#             tracker client (reqwest 0.13) verifies TLS against the OS store: with
+#             no bundle installed, https announce URLs fail verification. The
+#             embedded Python yt-dlp reads the same store through `ssl`. The
+#             HTTP/HTTPS engine itself ships Mozilla roots through webpki-roots and
+#             does not need the bundle. Declared in Depends rather than Recommends
+#             because an unverifiable tracker is a hard feature break, and the
+#             package is Priority: important (330 KiB), so the install cost is nil.
+#
+# Everything else the binaries need is already pulled transitively; do not add
+# packages "just in case", each one lengthens the install.
+depends = "$auto, libgtk-4-1, libadwaita-1-0, libsecret-tools, ca-certificates, ffmpeg, yt-dlp, python3"
 assets = [
     ["../../target/release/segmenta-gui", "usr/bin/", "755"],
     ["../../target/release/segmenta-cli", "usr/bin/", "755"],
@@ -63,4 +105,8 @@ assets = [
     ["../../dist/segmenta-firefox-0.2.1.zip", "usr/share/segmenta/extensions/segmenta-firefox.zip", "644"],
     ["../../packaging/extensions/README", "usr/share/segmenta/extensions/", "644"],
     ["../../packaging/segmenta-handler.desktop", "usr/share/applications/", "644"],
+    # The upstream yt-dlp zipapp pinned in packaging/ytdlp.lock and materialised
+    # by packaging/fetch-ytdlp.sh. It is not in git: the build fetches it and
+    # verifies its SHA-256 before this asset can be packaged.
+    ["../../dist/yt-dlp", "usr/share/segmenta/bin/yt-dlp", "755"],
 ]

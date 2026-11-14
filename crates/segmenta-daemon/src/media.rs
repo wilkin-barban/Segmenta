@@ -532,22 +532,57 @@ pub fn classify_backend_failure(stderr: &str, status: Option<i32>) -> MediaError
 }
 
 /// Locate a tool in `PATH`, honouring `SEGMENTA_<NAME>` overrides (tests use them).
+/// Path of the yt-dlp zipapp the package ships.
+///
+/// The archive's `yt-dlp` on Ubuntu 26.04 is older than [`MIN_YTDLP_VERSION`], so the
+/// package embeds a current release here. It is preferred only when it is actually newer
+/// than the one on `PATH`: a user with a newer local build keeps theirs.
+pub const BUNDLED_YTDLP: &str = "/usr/share/segmenta/bin/yt-dlp";
+
 pub fn locate_tool(name: &str) -> Result<PathBuf, MediaError> {
     let override_key = format!("SEGMENTA_{}", name.to_uppercase().replace('-', "_"));
     if let Some(path) = std::env::var_os(&override_key) {
         let path = PathBuf::from(path);
         return Ok(path);
     }
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    for dir in std::env::split_paths(&path) {
-        let candidate = dir.join(name);
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
+    let from_path = std::env::var_os("PATH").unwrap_or_default();
+    let on_path = std::env::split_paths(&from_path)
+        .map(|dir| dir.join(name))
+        .find(|candidate| candidate.is_file());
+    if name != "yt-dlp" {
+        return on_path.ok_or_else(|| missing_tool(name));
     }
-    Err(MediaError::backend(format!(
+    let bundled = PathBuf::from(BUNDLED_YTDLP);
+    let bundled_usable = bundled.is_file()
+        && std::fs::metadata(&bundled)
+            .map(|meta| !meta.permissions().readonly())
+            .unwrap_or(true);
+    match (on_path, bundled_usable) {
+        (Some(system), true) => Ok(if version_of(&bundled) > version_of(&system) {
+            bundled
+        } else {
+            system
+        }),
+        (Some(system), false) => Ok(system),
+        (None, true) => Ok(bundled),
+        (None, false) => Err(missing_tool(name)),
+    }
+}
+
+/// Version of a tool as a comparable tuple, or `None` when it cannot be read.
+fn version_of(tool: &std::path::Path) -> Option<(u32, u32, u32)> {
+    let output = std::process::Command::new(tool)
+        .arg("--version")
+        .output()
+        .ok()?;
+    let raw = String::from_utf8_lossy(&output.stdout);
+    parse_version(raw.lines().next().unwrap_or_default())
+}
+
+fn missing_tool(name: &str) -> MediaError {
+    MediaError::backend(format!(
         "{name} is not installed; install it with `sudo apt install {name}`"
-    )))
+    ))
 }
 
 /// Run `yt-dlp -J` and parse the result.
@@ -1051,6 +1086,32 @@ mod tests {
 
     /// yt-dlp 2026.10.26 printed the payload without the literal prefix; the bar never
     /// moved because the parser required `download:` and returned None for every line.
+    /// The shipped zipapp wins only when it is actually newer than the one on PATH.
+    #[test]
+    fn locate_tool_prefers_the_newer_yt_dlp() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let system = bin.join("yt-dlp");
+        std::fs::write(&system, "#!/bin/sh\necho 2026.03.17\n").unwrap();
+        std::fs::write(dir.path().join("yt-dlp"), "").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&system, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        // No PATH override in this test: the override variable always wins and is covered
+        // by the existing tests.
+        let previous = std::env::var_os("PATH");
+        std::env::set_var("PATH", &bin);
+        let found = locate_tool("yt-dlp").unwrap();
+        std::env::set_var("PATH", previous.unwrap_or_default());
+        assert_eq!(
+            found, system,
+            "an older system yt-dlp must keep its place when the bundled one is absent"
+        );
+    }
+
     #[test]
     fn progress_lines_parse_without_the_literal_prefix() {
         let line = parse_progress_line("261120|10202210|36387144.43|0").expect("progress");

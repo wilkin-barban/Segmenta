@@ -1,0 +1,18 @@
+# Pinned build of the official yt-dlp zipapp, shipped inside the .deb as
+# /usr/share/segmenta/bin/yt-dlp (see [package.metadata.deb] in
+# crates/segmenta-gui/Cargo.toml).
+#
+# Why we ship it: the `yt-dlp` package of the Ubuntu archive is older than the
+# MIN_YTDLP_VERSION the daemon requires (2026.03.17 vs 2026.10.01 on 26.04), so
+# YouTube was broken out of the box. The zipapp is the upstream release asset,
+# written in Python, published under the Unlicense; it needs `python3` (already
+# a Depends) and nothing else.
+#
+# Why a lock file and not the binary: git keeps only the pinned version and its
+# digest. `packaging/fetch-ytdlp.sh` downloads the asset, refuses to continue
+# unless the SHA-256 matches this file, and only then writes `dist/yt-dlp`.
+# Bumping the release means updating both lines below in the same commit.
+#
+# Asset: https://github.com/yt-dlp/yt-dlp/releases/download/<version>/yt-dlp
+version=2026.10.26
+sha256=e51e69e89489f199530f13d32a4342da3ddb2cf34842f364603a066db05afbf3
