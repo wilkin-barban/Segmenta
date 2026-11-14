@@ -28,6 +28,14 @@ publica sólo cuando el QA real en Ubuntu cierre y exista el `.deb` 0.2.1.
   `1048 ERR_FILE_DELETE_FAILED` y su ruta aparece en el informe.
 - Una tarea activa se detiene y se espera al motor antes de tocar su archivo.
 
+## Lista y progreso
+
+- La lista conserva el orden `created_at DESC` del daemon: la descarga más reciente queda arriba,
+  no al final.
+- La barra de progreso avanza con cada `task_progress`. `yt-dlp` 2026.10.26 emite el template sin
+  el prefijo `download:`; el parser ya acepta esa forma real, y los streams HLS/DASH o torrents sin
+  tamaño conocido usan modo indeterminado con los bytes descargados visibles.
+
 ## Extensión
 
 - **YouTube tras navegación SPA**: el content script podía reportar `/` o el origen y

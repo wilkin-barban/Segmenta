@@ -4,10 +4,19 @@
 > **Ubuntu 26.04 LTS (GNOME 50 / Wayland)**, con daemon propio, CLI, GUI nativa GTK4 +
 > Libadwaita y extensión de navegador.
 
-**Estado: 0.2.0 publicada.** El `.deb` y los dos ZIP están en la Release `v0.2.0` con sus SHA-256
-y pasaron el QA real en Ubuntu (`docs/qa/segmenta-0.2-live.md`). Los límites de esa pasada
-(cold-start de captura y extensión Firefox) quedaron declarados en el informe de QA. La release
-anterior es **0.1.2** (tag `v0.1.2`).
+**Estado: 0.2.1 en preparación.** El `.deb` final se instala y pasa el QA real en Ubuntu 26.04;
+el tag y la Release se crean después de que CI quede verde. La release publicada es **0.2.0**
+(tag `v0.2.0`), con sus límites de QA declarados.
+
+### Novedades de 0.2.1
+
+- La lista de descargas respeta `created_at DESC`: la tarea más reciente queda arriba.
+- La barra de progreso avanza con HTTP, segmentos, torrents y YouTube; si el tamaño es
+  desconocido (HLS/DASH o torrent antes de metadata) muestra un pulso con los bytes reales.
+- El `.deb` incluye un `yt-dlp` 2026.10.26 embebido y verificado por SHA-256, porque el paquete
+  de Ubuntu 26.04 es anterior al mínimo de YouTube.
+- Preferencias, spinner, “Limpiar completadas” y eliminación por lote quedaron remediados; ver
+  [`CHANGELOG.md`](CHANGELOG.md).
 
 ### Novedades de 0.1.2
 
@@ -34,10 +43,10 @@ anterior es **0.1.2** (tag `v0.1.2`).
 torrents (`librqbit`). 0.1.0 sumó YouTube, HLS/DASH públicos y el panel flotante. El detalle
 completo está en [`CHANGELOG.md`](CHANGELOG.md).
 
-### Qué entra en 0.2.0
+### Qué entró en 0.2.0
 
-Estas funciones ya están en el código de este repositorio y pasaron el QA real registrado en
-`docs/qa/segmenta-0.2-live.md`; lo que sigue pendiente es la publicación (tag y Release):
+Estas funciones pasaron el QA real registrado en `docs/qa/segmenta-0.2-live.md` y están en la
+Release `v0.2.0`:
 
 - **Scheduler de colas nativo**: ventanas horarias por cola y `max_active` real aplicado por el
   daemon.
@@ -95,24 +104,25 @@ ni otro canal de distribución.
 git clone https://github.com/wilkin-barban/Segmenta.git
 cd Segmenta
 
-# Construir el .deb de la versión del workspace (0.2.0)
+# Construir el .deb de la versión del workspace (0.2.1)
+packaging/fetch-ytdlp.sh         # zipapp fijado por SHA-256 para YouTube
 cargo build --release --workspace
 cargo deb -p segmenta-gui --no-build -o dist/
 
 # Puerta de empaquetado antes de instalar
-packaging/check-package.sh dist/segmenta_0.1.2-1_amd64.deb 0.1.2
+packaging/check-package.sh dist/segmenta_0.2.1-1_amd64.deb 0.2.1
 
-sudo dpkg -i dist/segmenta_0.1.2-1_amd64.deb
-sudo apt-get install -f          # resuelve dependencias si faltaba alguna
+sudo apt-get install ./dist/segmenta_0.2.1-1_amd64.deb
 
 systemctl --user daemon-reload
 systemctl --user enable --now segmenta.socket
 ```
 
-El flujo apunta a `dist/segmenta_0.2.0-1_amd64.deb` con
-`packaging/check-package.sh dist/segmenta_0.2.0-1_amd64.deb 0.2.0`, que valida 22/22 rutas. El
-archivo existe en `dist/` con su SHA-256, pero no hay tag `v0.2.0`, ni Release, ni asset que
-descargar todavía.
+El flujo apunta a `dist/segmenta_0.2.1-1_amd64.deb` con
+`packaging/check-package.sh dist/segmenta_0.2.1-1_amd64.deb 0.2.1`, que valida 23/23 rutas,
+incluido el `yt-dlp` embebido. El paquete declara `python3`, `ca-certificates`, `ffmpeg`,
+`libgtk-4-1`, `libadwaita-1-0` y `libsecret-tools`; `apt-get install` resuelve todo en Ubuntu
+26.04.
 
 El paquete instala `/usr/bin/segmenta-daemon`, `/usr/bin/segmenta-cli`, `/usr/bin/segmenta-gui`,
 `/usr/bin/segmenta-host`, el enlace `/usr/bin/segmenta`, las unidades de usuario
@@ -151,9 +161,10 @@ sudo install -Dm644 packaging/segmenta.service /usr/lib/systemd/user/segmenta.se
 systemctl --user daemon-reload && systemctl --user enable --now segmenta.socket
 ```
 
-`ffmpeg` hace falta para HLS/DASH y para el merge de video+audio; `yt-dlp` debe ser
-**>= 2026.10.01** (el 2026.03 de Ubuntu devuelve 403 y formatos obsoletos). `libsecret-tools`
-es la vía real al Secret Service del escritorio.
+`ffmpeg` hace falta para HLS/DASH y para el merge de video+audio. El `.deb` incluye
+`yt-dlp` **2026.10.26** en `/usr/share/segmenta/bin/yt-dlp`; el paquete del archivo 26.04 es
+anterior al mínimo y no se usa si hay una copia local más nueva. `libsecret-tools` es la vía real
+al Secret Service del escritorio.
 
 ---
 
@@ -184,10 +195,9 @@ Después, en el navegador:
   `manifest.json` de la carpeta `…/segmenta/extensions/firefox-<versión>`. El identificador es
   `segmenta@wilkin.github.io`; sin firma, la carga es temporal.
 
-Los ZIP reproducibles son `dist/segmenta-extension-0.1.2.zip` (Chromium) y
-`dist/segmenta-firefox-0.1.2.zip` (Firefox); Q1 generará los `0.2.0` con el mismo
-`node extension/tools/pack.mjs`. El `.deb` también los instala en
-`/usr/share/segmenta/extensions/`.
+Los ZIP reproducibles son `dist/segmenta-extension-0.2.1.zip` (Chromium) y
+`dist/segmenta-firefox-0.2.1.zip` (Firefox), generados con `node extension/tools/pack.mjs`. El
+`.deb` también los instala en `/usr/share/segmenta/extensions/`.
 
 Si el manifiesto nativo de tu usuario falta, `segmenta extension install-native` lo escribe en
 `$XDG_CONFIG_HOME` para los navegadores detectados (o `extension/install-native.sh` desde el
@@ -391,10 +401,11 @@ IPC sobre sockets temporales, GUI con `xvfb-run` y CLI de punta a punta contra u
 xvfb-run -a cargo test -p segmenta-gui
 
 # Paquete
+packaging/fetch-ytdlp.sh
 cargo build --release --workspace
 cargo deb -p segmenta-gui --no-build -o dist/
-packaging/check-package.sh dist/segmenta_0.1.2-1_amd64.deb 0.1.2
-sha256sum dist/segmenta_0.1.2-1_amd64.deb > dist/segmenta_0.1.2-1_amd64.deb.sha256
+packaging/check-package.sh dist/segmenta_0.2.1-1_amd64.deb 0.2.1
+sha256sum dist/segmenta_0.2.1-1_amd64.deb > dist/segmenta_0.2.1-1_amd64.deb.sha256
 ```
 
 ---
@@ -407,10 +418,10 @@ sha256sum dist/segmenta_0.1.2-1_amd64.deb > dist/segmenta_0.1.2-1_amd64.deb.sha2
    `07` IPC, `08` persistencia y recuperación, `09` seguridad de la extensión, `10` empaquetado
    y pruebas.
 4. [`CHANGELOG.md`](CHANGELOG.md) — cambios por release.
-5. [`docs/qa/segmenta-0.1.2-live.md`](docs/qa/segmenta-0.1.2-live.md) — evidencia del QA de 0.1.2.
-6. [`odd/tasks/segmenta-0.1.2.md`](odd/tasks/segmenta-0.1.2.md) — plan y evidencia de 0.1.2;
+5. [`docs/qa/segmenta-0.2.1-live.md`](docs/qa/segmenta-0.2.1-live.md) — evidencia del QA de 0.2.1.
+6. [`odd/tasks/segmenta-0.2.1.md`](odd/tasks/segmenta-0.2.1.md) — plan y evidencia de 0.2.1;
    [`odd/tasks/segmenta-0.2.md`](odd/tasks/segmenta-0.2.md) — plan de 0.2.0.
-7. [`packaging/release-notes-0.1.2.md`](packaging/release-notes-0.1.2.md) y
+7. [`packaging/release-notes-0.2.1.md`](packaging/release-notes-0.2.1.md) y
    [`packaging/release-notes-0.2.0.md`](packaging/release-notes-0.2.0.md) — notas de cada release.
 
 Licencia: GPL-3.0-or-later (ver [`LICENSE`](LICENSE)).

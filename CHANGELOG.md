@@ -43,6 +43,21 @@ Correcciones de interfaz y gestión segura de descargas. Sin publicar: falta el 
 - **Extensión / instalación real**: Chrome cargaba una copia 0.1.1 desde
   `~/.local/share/segmenta/extension/chromium`; el contrato de mensajes actual no coincide y el
   panel falla con el mismo texto. La copia se actualizó a 0.2.1 con backup de la anterior.
+- **Lista de descargas**: las respuestas de `download.list` llegan en `created_at DESC`; el modelo
+  las reinsertaba al principio y las invertía. Ahora conserva el orden del daemon, la tarea más
+  nueva queda arriba y un `task_added` sigue entrando por delante.
+- **Progreso real**: `yt-dlp` 2026.10.26 emite el template de progreso sin el prefijo `download:`;
+  el parser lo exige y descartaba todas las líneas, dejando la barra en 0 hasta completar. Se
+  aceptan ambas formas, con test de la línea real; para HLS/DASH o torrent sin tamaño conocido la
+  barra usa modo indeterminado y muestra los bytes descargados.
+- **Paquete Ubuntu 26.04+**: el `.deb` embebe el zipapp oficial de `yt-dlp` 2026.10.26 con SHA-256
+  fijado, porque el paquete del archivo es anterior al mínimo de YouTube; declara `python3` y
+  `ca-certificates`, y la instalación limpia en 26.04 se prueba en CI.
+
+### Changed
+
+- CI: workflow de GitHub Actions con fmt, clippy, Rust, Node, sync/pack, release build,
+  `check-package`, instalación limpia en contenedor `ubuntu:26.04` y humo de GUI.
 
 ## [0.2.0] - 2026-11-12
 
