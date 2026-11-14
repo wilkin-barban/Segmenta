@@ -1,0 +1,209 @@
+name: CI
+
+# Gates for every push to main and every pull request: formatting, lints, the
+# Rust and Node suites, a release build, the GUI suite under a virtual display
+# and the packaging gate over the .deb the release is published with.
+#
+# No secrets are used and nothing is published: the .deb is only uploaded as a
+# workflow artifact of that run.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push on the same ref cancels the previous run: the gates are
+# deterministic and a stale result only delays the review.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  gates:
+    name: gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install the GTK4 toolchain and the virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev \
+            libgtk-4-dev libadwaita-1-dev libsecret-1-dev \
+            xvfb
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo and target
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt --all -- --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test --workspace
+        run: cargo test --workspace
+
+      - name: node extension/tests/run.mjs
+        run: node extension/tests/run.mjs
+
+      - name: node extension/tools/sync-shared.mjs --check
+        run: node extension/tools/sync-shared.mjs --check
+
+      - name: cargo build --release --workspace
+        run: cargo build --release --workspace
+
+      # The GUI suites skip themselves without a display, so this step is the
+      # only place where they really run.
+      - name: xvfb-run -a cargo test -p segmenta-gui
+        run: xvfb-run -a cargo test -p segmenta-gui
+
+  package:
+    name: package
+    needs: gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install the packaging validators
+        # desktop-file-validate (desktop-file-utils) and appstreamcli (appstream)
+        # are hard requirements of packaging/check-package.sh; lintian stays
+        # optional there and is not installed.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libssl-dev \
+            libgtk-4-dev libadwaita-1-dev libsecret-1-dev \
+            desktop-file-utils appstream
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo and target
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-deb
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
+
+      # dist/ is gitignored, and the .deb assets the extension ZIPs from there,
+      # so the archive is regenerated from the tree before packaging.
+      - name: node extension/tools/pack.mjs
+        run: node extension/tools/pack.mjs
+
+      # dist/yt-dlp is gitignored too: the pinned upstream zipapp is fetched and
+      # its SHA-256 checked against packaging/ytdlp.lock before packaging.
+      - name: packaging/fetch-ytdlp.sh
+        run: packaging/fetch-ytdlp.sh
+
+      - name: cargo build --release --workspace
+        run: cargo build --release --workspace
+
+      - name: cargo deb -p segmenta-gui --no-build
+        run: cargo deb -p segmenta-gui --no-build -o dist/
+
+      - name: packaging/check-package.sh dist/*.deb 0.2.1
+        run: packaging/check-package.sh dist/*.deb 0.2.1
+
+      - name: Upload the .deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: segmenta-deb
+          path: dist/*.deb
+          if-no-files-found: error
+
+  # The release target is Ubuntu 26.04. GitHub has no `ubuntu-26.04` hosted image, so the
+  # 26.04 coverage is this container job: the gates above run on the latest hosted image
+  # only to build the artifact, and everything that proves the package is verified inside
+  # a bare 26.04 image here.
+  #
+  # The release target is Ubuntu 26.04: install the .deb the previous job built
+  # into a bare 26.04 image with `apt`, which resolves Depends from the archive,
+  # and then check what a user would really have on disk. This is the only job
+  # that proves the dependency list is installable and that YouTube works out of
+  # the box, because the shipped yt-dlp is newer than the archive one.
+  clean-install:
+    name: clean-install
+    needs: package
+    runs-on: ubuntu-latest
+    container: ubuntu:26.04
+    timeout-minutes: 30
+    steps:
+      - name: apt-get update
+        run: apt-get update
+
+      - name: Download the .deb
+        uses: actions/download-artifact@v4
+        with:
+          name: segmenta-deb
+          path: dist
+
+      # `apt-get install` (not `dpkg -i`) is the real user path: it resolves
+      # every Depends entry against the 26.04 archive.
+      - name: apt-get install -y ./dist/*.deb
+        run: apt-get install -y ./dist/*.deb
+
+      - name: Every installed binary is in place
+        run: |
+          for binary in segmenta segmenta-cli segmenta-daemon segmenta-gui segmenta-host; do
+            test -x "/usr/bin/$binary"
+            echo "ok /usr/bin/$binary"
+          done
+
+      - name: segmenta --version
+        run: segmenta --version
+
+      - name: python3 is installed
+        run: dpkg -s python3 | grep -E '^(Status|Package):'
+
+      # The GUI is the part a dependency miss breaks silently: a missing GTK or
+      # libadwaita runtime leaves the binary in place but unusable.
+      - name: The GUI starts under a virtual display
+        run: |
+          apt-get install -y --no-install-recommends xvfb
+          xvfb-run -a segmenta-gui --smoke
+
+      # The daemon requires MIN_YTDLP_VERSION = 2026.10.01. The comparison is
+      # YYYY*10000 + MM*100 + DD so it stays readable without extra tooling.
+      - name: The embedded yt-dlp runs and is recent enough
+        run: |
+          set -euo pipefail
+          test -x /usr/share/segmenta/bin/yt-dlp
+          installed="/usr/share/segmenta/bin/yt-dlp --version"
+          version=$($installed)
+          echo "embedded yt-dlp: $version"
+          IFS=. read -r year month day <<< "$version"
+          numeric=$(( 10#$year * 10000 + 10#$month * 100 + 10#$day ))
+          minimum=$(( 2026 * 10000 + 10 * 100 + 1 ))
+          echo "$version as $numeric, minimum 2026.10.01 as $minimum"
+          if [ "$numeric" -lt "$minimum" ]; then
+            echo "ERROR: embedded yt-dlp $version is older than the required 2026.10.01" >&2
+            exit 1
+          fi

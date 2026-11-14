@@ -6,8 +6,9 @@
 #   1. the file exists and is a .deb;
 #   2. the control file declares the expected package, version, dependencies
 #      (libsecret-tools included) and a Description;
-#   3. every binary, systemd user unit, desktop entry, AppStream file, icon and
-#      the license land in the documented installation tree;
+#   3. every binary, systemd user unit, desktop entry, AppStream file, icon, the
+#      embedded yt-dlp zipapp and the license land in the documented installation
+#      tree, and the zipapp is executable inside the package;
 #   4. desktop-file-validate and appstreamcli validate the *installed-tree copies*
 #      extracted from the package itself, not the sources;
 #   5. lintian runs when available (informational only: lintian findings are
@@ -48,6 +49,7 @@ readonly REQUIRED_PATHS=(
     "usr/share/segmenta/extensions/segmenta-chromium.zip"
     "usr/share/segmenta/extensions/segmenta-firefox.zip"
     "usr/share/segmenta/extensions/README"
+    "usr/share/segmenta/bin/yt-dlp"
 )
 
 DEB="${1:-}"
@@ -143,8 +145,15 @@ dpkg-deb -x "$DEB" "$SCRATCH" || die "dpkg-deb -x failed"
 
 desktop_file="$SCRATCH/usr/share/applications/io.github.wilkin.Segmenta.desktop"
 metainfo_file="$SCRATCH/usr/share/metainfo/io.github.wilkin.Segmenta.metainfo.xml"
+embedded_ytdlp="$SCRATCH/usr/share/segmenta/bin/yt-dlp"
 [ -f "$desktop_file" ] || die "extracted desktop file not found at $desktop_file"
 [ -f "$metainfo_file" ] || die "extracted metainfo file not found at $metainfo_file"
+
+# The embedded yt-dlp zipapp is only usable when dpkg kept it executable: the
+# daemon spawns it directly, so a 644 file would be installed and be useless.
+[ -f "$embedded_ytdlp" ] || die "extracted yt-dlp not found at $embedded_ytdlp"
+[ -x "$embedded_ytdlp" ] || die "$(basename -- "$embedded_ytdlp") is not executable inside the package (expected mode 755)"
+printf '  embedded yt-dlp: present and executable\n'
 
 command -v desktop-file-validate >/dev/null 2>&1 ||
     die "desktop-file-validate is not installed (install desktop-file-utils)"
