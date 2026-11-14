@@ -181,6 +181,13 @@ if (typeof importScripts === 'function') {
   const NOTIFICATION_TIMEOUT_MS = 2000;
   const NOTIFICATION_ICON = 'icons/icon-128.png';
   const CAPTURE_KEPT_NOTIFICATION_ID = 'segmenta-capture-kept';
+  const CAPTURE_MISSED_TITLE_FALLBACK = 'Descarga terminada en el navegador';
+  const CAPTURE_MISSED_BODY_FALLBACK =
+    'El archivo $1 se descarg\u00f3 antes de poder confirmarlo. Qued\u00f3 en el navegador; toc\u00e1 esta notificaci\u00f3n para a\u00f1adirlo a Segmenta.';
+  // A download that finished before the confirmation could be answered is not a failure
+  // to hide: the user gets one notification and a click adds it to Segmenta.
+  const CAPTURE_MISSED_NOTIFICATION_ID = 'segmenta-capture-missed';
+  const missedCaptures = new Map();
   // ASCII source, Spanish literal: the catalogs supply the real title.
   const TASK_ADDED_TITLE_FALLBACK = 'A\u00f1adida a Segmenta';
   const TASK_ADDED_BODY_FALLBACK = 'La tarea se abri\u00f3 en Segmenta.';
@@ -272,6 +279,42 @@ if (typeof importScripts === 'function') {
       message('taskAddedTitle') || TASK_ADDED_TITLE_FALLBACK,
       taskAddedBody(folder),
     );
+  }
+
+  /// Tells the user a small file finished before it could be confirmed, and remembers it
+  /// so a click on the notification adds it to Segmenta instead of re-downloading it blind.
+  function showCaptureMissedNotification(entry) {
+    const title = message('captureMissedTitle') || CAPTURE_MISSED_TITLE_FALLBACK;
+    const body = (message('captureMissedBody') || CAPTURE_MISSED_BODY_FALLBACK).replace(
+      '$1',
+      entry.filename || entry.url,
+    );
+    missedCaptures.set(CAPTURE_MISSED_NOTIFICATION_ID, {
+      url: entry.url,
+      filename: entry.filename || '',
+      referrer: entry.referrer || '',
+    });
+    return notifyUser(CAPTURE_MISSED_NOTIFICATION_ID, title, body);
+  }
+
+  /** Adds the download the user clicked on in the missed-capture notification. */
+  async function addMissedCapture() {
+    const entry = missedCaptures.get(CAPTURE_MISSED_NOTIFICATION_ID);
+    missedCaptures.delete(CAPTURE_MISSED_NOTIFICATION_ID);
+    if (!entry) {
+      return false;
+    }
+    const reply = await callHost(() =>
+      PROTOCOL.buildDownloadAdd({
+        url: entry.url,
+        filename: entry.filename,
+        referrer: entry.referrer,
+      }),
+    );
+    if (reply && reply.ok) {
+      await announceAddedTask(reply.data);
+    }
+    return Boolean(reply && reply.ok);
   }
 
   /** Tells the user the browser copy was kept because Segmenta never got the data. */
@@ -919,6 +962,19 @@ if (typeof importScripts === 'function') {
     return reconcileThenSweep();
   }
 
+  if (
+    API &&
+    notificationsApi() &&
+    typeof notificationsApi().onClicked === 'function'
+  ) {
+    notificationsApi().onClicked.addListener((notificationId) => {
+      if (notificationId === CAPTURE_MISSED_NOTIFICATION_ID) {
+        return addMissedCapture();
+      }
+      return false;
+    });
+  }
+
   if (API && API.alarms && API.alarms.onAlarm && typeof API.alarms.onAlarm.addListener === 'function') {
     API.alarms.onAlarm.addListener(onCaptureWatchdogAlarm);
   }
@@ -1105,6 +1161,7 @@ if (typeof importScripts === 'function') {
           windows.create({
             url: buildConfirmUrl(confirmPageUrl(), entry),
             type: 'popup',
+            focused: true,
             width: 460,
             height: 380,
           }),
@@ -1289,7 +1346,11 @@ if (typeof importScripts === 'function') {
     // survive until the daemon owns the task.
     const paused = await pauseDownload(downloadItem.id);
     if (!paused) {
+      // The browser finished before the pause (common for small iCloud PDFs). Keep the
+      // browser copy and tell the user instead of silently pretending the capture never
+      // existed; the notification can add the URL to Segmenta.
       await resolvePendingCapture(downloadItem.id);
+      await showCaptureMissedNotification(entry);
       return false;
     }
 

@@ -62,6 +62,30 @@ struct RunningTask {
     queue: String,
 }
 
+/// Marks a task as being removed for as long as this guard lives.
+///
+/// The mark is set under the manager's in-flight lock (the one [`Manager::start_task`]
+/// takes before it spawns a worker) and lifted on drop, so every exit path — including the
+/// one that keeps the row because the file could not be removed — leaves the task
+/// announcing again. Being a guard, no error branch can forget it.
+struct RemovalMark<'a> {
+    bus: &'a EventBus,
+    task_id: &'a str,
+}
+
+impl<'a> RemovalMark<'a> {
+    fn new(bus: &'a EventBus, task_id: &'a str) -> RemovalMark<'a> {
+        bus.tombstone(task_id);
+        RemovalMark { bus, task_id }
+    }
+}
+
+impl Drop for RemovalMark<'_> {
+    fn drop(&mut self) {
+        self.bus.untombstone(self.task_id);
+    }
+}
+
 /// Coordinates the store, the engine and the IPC layer.
 pub struct Manager {
     store: Arc<Store>,
@@ -558,6 +582,11 @@ impl Manager {
     fn start_task(&self, task_id: &str, connections: u32) -> Result<(), RpcError> {
         {
             let running = self.running.lock().unwrap_or_else(|err| err.into_inner());
+            if self.bus.is_tombstoned(task_id) {
+                // A housekeeping call is removing the row: spawning a writer now would
+                // create the very late publisher the removal mark exists to prevent.
+                return Err(RpcError::task_not_found(task_id));
+            }
             if running.contains_key(task_id) {
                 return Err(RpcError::task_already_active(task_id));
             }
@@ -646,6 +675,12 @@ impl Manager {
         // immediately can neither leave a stale entry behind nor let a second caller
         // start an extra task in a slot that is already gone.
         let mut inflight = self.running.lock().unwrap_or_else(|err| err.into_inner());
+        // Read under the same lock the removal mark is set with: a delete that finds the
+        // task here stops the worker it spawns below, and a delete that already marked the
+        // task makes this start fail instead of resurrecting it.
+        if self.bus.is_tombstoned(task_id) {
+            return Err(RpcError::task_not_found(task_id));
+        }
         if inflight.contains_key(task_id) {
             return Err(RpcError::task_already_active(task_id));
         }
@@ -954,6 +989,11 @@ impl Manager {
         }))
     }
 
+    /// `download.delete`: stop the task, then forget it and its file.
+    ///
+    /// The worker is stopped through [`RemovalMark`]: the mark is set before the
+    /// cancellation so nothing it still publishes can announce a task that is about to be
+    /// erased, and it is lifted when the removal ends so a failure leaves the task alive.
     async fn delete_task(&self, params: DeleteParams) -> Result<Value, RpcError> {
         let record = self
             .store
@@ -961,11 +1001,13 @@ impl Manager {
             .map_err(store_error)?
             .ok_or_else(|| RpcError::task_not_found(&params.task_id))?;
         // Bind first: a temporary guard in an `if let` scrutinee would live across await.
-        let running_task = self
-            .running
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .remove(&params.task_id);
+        let (running_task, _removal) = {
+            let mut running = self.running.lock().unwrap_or_else(|err| err.into_inner());
+            // Mark before stopping: the bus drops whatever the worker still publishes and
+            // `start_task` refuses to spawn it again while the mark lives.
+            let removal = RemovalMark::new(&self.bus, &params.task_id);
+            (running.remove(&params.task_id), removal)
+        };
         if let Some(task) = running_task {
             task.cancel.cancel();
             let _ = task.handle.await;
@@ -1022,6 +1064,13 @@ impl Manager {
     /// same cancellation `download.cancel` performs and wait for it, then touch the paths
     /// it owns, and only then remove the row. A file that cannot be removed keeps the row
     /// with a visible failure instead of leaving a silent half-deletion behind.
+    ///
+    /// Waiting for the join is what proves the writer is gone, but a join is only as
+    /// deterministic as the set it reads: an entry removed from the in-flight map while
+    /// another caller is about to spawn a worker for the same row would let a writer
+    /// outlive the deletion. [`RemovalMark`] closes that window — it is set under the same
+    /// lock `start_task` uses to decide whether to spawn, so from that instant the task is
+    /// both unstoppable-to-start and silent on the bus.
     async fn delete_many(&self, params: DeleteManyParams) -> Result<Value, RpcError> {
         if params.task_ids.is_empty() {
             return Err(RpcError::invalid_params("task_ids must not be empty"));
@@ -1060,11 +1109,15 @@ impl Manager {
                 }
             };
             // Bind first: a temporary guard in an `if let` scrutinee would live across await.
-            let running_task = self
-                .running
-                .lock()
-                .unwrap_or_else(|err| err.into_inner())
-                .remove(&task_id);
+            let (running_task, _removal) = {
+                let mut running = self.running.lock().unwrap_or_else(|err| err.into_inner());
+                // Mark before stopping, under the lock that also owns the in-flight set:
+                // from here on the bus drops anything the worker still publishes and
+                // `start_task` refuses to spawn it again, so the row cannot gain a writer
+                // between the stop below and the deletion. No grace period, no sleep.
+                let removal = RemovalMark::new(&self.bus, &task_id);
+                (running.remove(&task_id), removal)
+            };
             if let Some(task) = running_task {
                 // Same stop as `download.cancel`: the engine checkpoints and exits, and the
                 // join is awaited so no writer is left holding the file below.
