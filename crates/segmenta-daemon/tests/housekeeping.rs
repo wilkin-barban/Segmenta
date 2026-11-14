@@ -6,8 +6,10 @@
 //! - a batch delete with files removes them after the row work and reports counts;
 //! - a file that cannot be removed keeps the row in a visible failure state;
 //! - an active task is stopped before its file is touched;
+//! - a removed task is silent: nothing about it is published once the reply is out;
 //! - a duplicate, an unknown id or an empty batch never aborts the whole request.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,10 +18,11 @@ use segmenta_core::testserver::{RangeServer, ServerConfig};
 use segmenta_daemon::events::EventBus;
 use segmenta_daemon::ipc::RpcHandler;
 use segmenta_daemon::manager::Manager;
+use segmenta_daemon::rpc::EventEnvelope;
 use segmenta_daemon::secrets::{open_with, SecretStore};
 use segmenta_daemon::store::{DownloadRecord, DownloadStatus, Settings, Store};
 use serde_json::{json, Value};
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 
 struct Harness {
     manager: Arc<Manager>,
@@ -97,6 +100,82 @@ fn result_for<'a>(reply: &'a Value, task_id: &str) -> &'a Value {
         .iter()
         .find(|entry| entry["task_id"] == json!(task_id))
         .unwrap_or_else(|| panic!("no result for `{task_id}` in {reply}"))
+}
+
+/// Every event the receiver already had queued, until `window` of silence.
+async fn drain(
+    receiver: &mut broadcast::Receiver<EventEnvelope>,
+    window: Duration,
+) -> Vec<EventEnvelope> {
+    let mut drained = Vec::new();
+    while let Ok(Ok(event)) = tokio::time::timeout(window, receiver.recv()).await {
+        drained.push(event);
+    }
+    drained
+}
+
+/// Events about `task_ids` that the bus publishes from this call on.
+///
+/// A broadcast receiver never sees an event published before it existed, so this asks the
+/// causal question — "does anything happen to the task after the reply?" — instead of
+/// comparing wall-clock timestamps. `timestamp_ms` has millisecond granularity and an
+/// event published just before the reply can share its millisecond, which made the old
+/// timestamp comparison fail for a reason that has nothing to do with the worker.
+async fn events_published_after(
+    bus: &EventBus,
+    task_ids: &[&str],
+    window: Duration,
+) -> Vec<EventEnvelope> {
+    let mut receiver = bus.subscribe();
+    drain(&mut receiver, window)
+        .await
+        .into_iter()
+        .filter(|event| match event.task_id.as_deref() {
+            Some(id) => task_ids.contains(&id),
+            None => false,
+        })
+        .collect()
+}
+
+/// A running task on `server` that the caller can delete.
+async fn start_task(h: &Harness, server: &RangeServer, filename: &str, connections: u32) -> String {
+    let added = call(
+        &h.manager,
+        "download.add",
+        json!({
+            "url": server.url().to_string(),
+            "connections": connections,
+            "filename": filename,
+        }),
+    )
+    .await
+    .unwrap();
+    added["task_id"].as_str().unwrap().to_string()
+}
+
+/// Wait until every id of `ids` really reported progress, i.e. the engine is writing.
+async fn wait_until_writing(
+    events: &mut broadcast::Receiver<EventEnvelope>,
+    ids: &[String],
+) -> HashSet<String> {
+    let mut writing = HashSet::new();
+    for _ in 0..600 {
+        match tokio::time::timeout(Duration::from_millis(250), events.recv()).await {
+            Ok(Ok(event))
+                if event.event_type == "task_progress"
+                    && event.data["downloaded_bytes"].as_u64().unwrap_or(0) > 0 =>
+            {
+                if let Some(id) = event.task_id.clone() {
+                    writing.insert(id);
+                }
+                if ids.iter().all(|id| writing.contains(id)) {
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    writing
 }
 
 #[tokio::test]
@@ -375,10 +454,6 @@ async fn delete_many_stops_an_active_task_before_touching_its_file() {
     )
     .await
     .unwrap();
-    let returned_at = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64;
 
     assert!(
         result_for(&reply, &task_id)["ok"].as_bool().unwrap(),
@@ -397,23 +472,200 @@ async fn delete_many_stops_an_active_task_before_touching_its_file() {
         "la tarea se detuvo antes de tocar el archivo"
     );
 
-    // No engine event may arrive after the call returned: the writer was already gone.
-    let mut late = Vec::new();
-    while let Ok(Ok(event)) = tokio::time::timeout(Duration::from_millis(300), events.recv()).await
-    {
-        // `timestamp_ms` has millisecond granularity: an event published just before
-        // the call returned can share that millisecond. Only a strictly later event
-        // proves a writer survived the deletion.
-        if event.timestamp_ms > returned_at && event.task_id.as_deref() == Some(&task_id) {
-            late.push(event.event_type);
-        }
-    }
+    // Nothing may be published about the task once the call returned. The receiver is
+    // created after the reply, so the check is causal and free of any timing assumption.
+    let late: Vec<String> = events_published_after(&h.bus, &[&task_id], Duration::from_millis(300))
+        .await
+        .into_iter()
+        .map(|event| event.event_type)
+        .collect();
     assert!(
         late.is_empty(),
         "el motor seguía publicando eventos tras el borrado: {late:?}"
     );
     assert!(!final_path.exists(), "nada reescribió el archivo");
     server.shutdown().await;
+}
+
+#[tokio::test]
+async fn delete_many_does_not_announce_the_stop_of_the_task_it_removes() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+    let server = RangeServer::start(ServerConfig {
+        body: vec![9u8; 4 * 1024 * 1024],
+        chunk_size: 8 * 1024,
+        slow: Some(Duration::from_millis(4)),
+        ..ServerConfig::default()
+    })
+    .await;
+    let settings = Settings {
+        allow_local_downloads: true,
+        download_dir: dir.path().join("descargas").display().to_string(),
+        max_connections: 2,
+        ..Settings::default()
+    };
+    call(
+        &h.manager,
+        "settings.update",
+        serde_json::to_value(&settings).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let mut events = h.bus.subscribe();
+    let task_id = start_task(&h, &server, "callada.bin", 2).await;
+    let writing = wait_until_writing(&mut events, std::slice::from_ref(&task_id)).await;
+    assert_eq!(writing.len(), 1, "el motor nunca reportó progreso");
+
+    // Everything published up to here belongs to a live task: drop it, so what follows is
+    // only what removing the task itself puts on the bus.
+    let _ = drain(&mut events, Duration::from_millis(20)).await;
+
+    let reply = call(
+        &h.manager,
+        "download.delete_many",
+        json!({ "task_ids": [task_id], "delete_files": true }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(reply["removed"], 1, "{reply}");
+
+    // A removed task is erased, not paused: the transition the worker would publish while
+    // it is being stopped must never reach the bus.
+    let after = drain(&mut events, Duration::from_millis(300)).await;
+    let transitions: Vec<&Value> = after
+        .iter()
+        .filter(|event| {
+            event.task_id.as_deref() == Some(&task_id) && event.event_type == "state_changed"
+        })
+        .map(|event| &event.data)
+        .collect();
+    assert!(
+        transitions.is_empty(),
+        "una tarea borrada no puede anunciar transiciones: {transitions:?}"
+    );
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn delete_many_stops_every_active_task_of_the_batch() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+    let server = RangeServer::start(ServerConfig {
+        body: vec![7u8; 2 * 1024 * 1024],
+        chunk_size: 8 * 1024,
+        slow: Some(Duration::from_millis(4)),
+        ..ServerConfig::default()
+    })
+    .await;
+    let settings = Settings {
+        allow_local_downloads: true,
+        download_dir: dir.path().join("descargas").display().to_string(),
+        max_connections: 1,
+        ..Settings::default()
+    };
+    call(
+        &h.manager,
+        "settings.update",
+        serde_json::to_value(&settings).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let mut events = h.bus.subscribe();
+    let uno = start_task(&h, &server, "uno.bin", 1).await;
+    let dos = start_task(&h, &server, "dos.bin", 1).await;
+    let ids = vec![uno, dos];
+    let writing = wait_until_writing(&mut events, &ids).await;
+    assert_eq!(
+        writing.len(),
+        2,
+        "las dos tareas activas reportaron progreso"
+    );
+    assert_eq!(h.manager.running_count(), 2, "las dos tareas están activas");
+    let paths: Vec<PathBuf> = ids
+        .iter()
+        .map(|id| {
+            let path = h.store.get(id).unwrap().unwrap().final_path;
+            assert!(PathBuf::from(&path).is_file(), "{id} ya escribe {path}");
+            PathBuf::from(path)
+        })
+        .collect();
+
+    let reply = call(
+        &h.manager,
+        "download.delete_many",
+        json!({ "task_ids": ids, "delete_files": true }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(reply["removed"], 2, "{reply}");
+    assert_eq!(reply["files_deleted"], 2, "{reply}");
+    for id in &ids {
+        assert!(
+            result_for(&reply, id)["ok"].as_bool().unwrap(),
+            "{id}: {reply}"
+        );
+        assert!(
+            h.store.get(id).unwrap().is_none(),
+            "se borró la fila de {id}"
+        );
+    }
+    for path in &paths {
+        assert!(!path.exists(), "se borró {}", path.display());
+    }
+    assert_eq!(
+        h.manager.running_count(),
+        0,
+        "ningún worker sobrevive al lote"
+    );
+
+    let refs: Vec<&str> = ids.iter().map(String::as_str).collect();
+    let late = events_published_after(&h.bus, &refs, Duration::from_millis(300)).await;
+    let late: Vec<String> = late
+        .into_iter()
+        .map(|event| format!("{}:{:?}", event.event_type, event.task_id))
+        .collect();
+    assert!(late.is_empty(), "el lote dejó publicadores vivos: {late:?}");
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn delete_many_of_a_completed_task_announces_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+    let path = dir.path().join("terminada.bin");
+    std::fs::write(&path, b"contenido descargado").unwrap();
+    h.store
+        .insert_download(&record_at("terminada", DownloadStatus::Completed, &path))
+        .unwrap();
+
+    let mut events = h.bus.subscribe();
+    let reply = call(
+        &h.manager,
+        "download.delete_many",
+        json!({ "task_ids": ["terminada"], "delete_files": true }),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(reply["removed"], 1, "{reply}");
+    assert_eq!(reply["files_deleted"], 1, "{reply}");
+    assert!(h.store.get("terminada").unwrap().is_none());
+    assert!(!path.exists(), "el archivo se borró");
+
+    // A task without a worker has no transition to announce, before or after the reply.
+    let during: Vec<String> = drain(&mut events, Duration::from_millis(100))
+        .await
+        .into_iter()
+        .map(|event| event.event_type)
+        .collect();
+    assert!(
+        during.is_empty(),
+        "un borrado sin worker no publica: {during:?}"
+    );
+    let late = events_published_after(&h.bus, &["terminada"], Duration::from_millis(200)).await;
+    assert!(late.is_empty(), "nada se publica tras el borrado");
 }
 
 #[tokio::test]

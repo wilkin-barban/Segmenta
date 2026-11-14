@@ -271,5 +271,13 @@
   "captureKeptBody": {
     "message": "Segmenta no recibió los datos. La descarga continúa en tu navegador.",
     "description": "Cuerpo del aviso cuando se conserva la copia del navegador."
+  },
+  "captureMissedTitle": {
+    "message": "Descarga terminada en el navegador",
+    "description": "Aviso de descarga que terminó antes de confirmarse."
+  },
+  "captureMissedBody": {
+    "message": "El archivo $1 se descargó antes de poder confirmarlo. Quedó en el navegador; tocá esta notificación para añadirlo a Segmenta.",
+    "description": "Cuerpo con el nombre del archivo en $1 y la acción de añadirlo."
   }
 }
