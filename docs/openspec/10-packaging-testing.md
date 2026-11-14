@@ -60,10 +60,13 @@ sudo apt install build-essential pkg-config libgtk-4-dev libadwaita-1-dev \
 cargo install cargo-deb
 ```
 
-`ffmpeg` es dependencia de ejecución para HLS/DASH (>= 7.0) y `yt-dlp` para el flujo de YouTube; los
-declara `[package.metadata.deb].depends` en `crates/segmenta-gui/Cargo.toml`. La licencia de FFmpeg
-debe revisarse antes de distribuir un binario que lo enlace. `libsecret` se usa vía D-Bus/Secret
-Service; no se enlaza una biblioteca que guarde secretos en SQLite. CI fija Ubuntu 26.04 LTS.
+`ffmpeg` es dependencia de ejecución para HLS/DASH (>= 7.0). El paquete incluye además el zipapp
+oficial de `yt-dlp` 2026.10.26 en `/usr/share/segmenta/bin/yt-dlp`, verificado por SHA-256 en
+`packaging/ytdlp.lock`; el `yt-dlp` del archivo 26.04 es anterior al mínimo y queda sólo como
+fallback. `python3` y `ca-certificates` son dependencias declaradas. La licencia de FFmpeg debe
+revisarse antes de distribuir un binario que lo enlace. `libsecret` se usa vía D-Bus/Secret Service;
+no se enlaza una biblioteca que guarde secretos en SQLite. CI construye en Ubuntu 26.04 y hace una
+instalación limpia en ese contenedor.
 
 `libsecret-tools` es **dependencia de ejecución declarada en el `.deb`** y `packaging/check-package.sh`
 falla si falta (§2.2.1). El backend de secretos elige el keyring sólo cuando `secret-tool` existe y una
@@ -76,7 +79,7 @@ sensibles falla con `1031` (`ERR_KEYRING_UNAVAILABLE`).
 `clamdscan` primero y `clamscan` después; con `antivirus_enabled=true` y sin motor, la tarea falla con
 `ERR_ANTIVIRUS_UNAVAILABLE` en vez de publicarse como `completed` (contrato en 12).
 
-### 2.1. Contrato de instalación que valida la puerta (22 rutas)
+### 2.1. Contrato de instalación que valida la puerta (23 rutas)
 
 `packaging/check-package.sh` compara `dpkg-deb --contents` contra esta lista exacta. Cualquier ruta
 nueva o renombrada obliga a actualizar el script y esta tabla en el mismo commit.
@@ -127,8 +130,8 @@ cargo build --release --workspace
 node extension/tools/sync-shared.mjs
 node extension/tools/pack.mjs
 cargo deb -p segmenta-gui --no-build -o dist/
-packaging/check-package.sh dist/segmenta_0.2.0-1_amd64.deb 0.2.0
-sudo apt install ./dist/segmenta_0.2.0-1_amd64.deb
+packaging/check-package.sh dist/segmenta_0.2.1-1_amd64.deb 0.2.1
+sudo apt install ./dist/segmenta_0.2.1-1_amd64.deb
 systemctl --user daemon-reload
 systemctl --user enable --now segmenta.socket
 ```
@@ -148,7 +151,7 @@ Es la puerta obligatoria entre `cargo deb` y cualquier tag o publicación. Se ej
 ya construido —no lo genera— y valida el paquete real, no las fuentes:
 
 ```bash
-packaging/check-package.sh dist/segmenta_0.2.0-1_amd64.deb 0.2.0
+packaging/check-package.sh dist/segmenta_0.2.1-1_amd64.deb 0.2.1
 ```
 
 Qué comprueba, en este orden y saliendo con código distinto de cero en el primer fallo duro:
@@ -158,7 +161,7 @@ Qué comprueba, en este orden y saliendo con código distinto de cero en el prim
    vacío, y que `dpkg-deb -f Depends` incluya `libsecret-tools`. La versión esperada llega como
    segundo argumento (`0.2.0` en el gate) o por `SEGMENTA_EXPECTED_VERSION`; el valor por defecto del
    script es `0.1.2` y se sube junto con el workspace. Acepta `0.2.0` y `0.2.0-*`;
-3. que `dpkg-deb --contents` liste las **22 rutas** de §2.1; informa **todas** las que falten, no sólo
+3. que `dpkg-deb --contents` liste las **23 rutas** de §2.1; informa **todas** las que falten, no sólo
    la primera;
 4. que `desktop-file-validate` y `appstreamcli validate --no-net` acepten las copias **extraídas del
    propio paquete** con `dpkg-deb -x` en un directorio temporal de `mktemp -d` que se borra con `trap`
@@ -169,7 +172,7 @@ Qué comprueba, en este orden y saliendo con código distinto de cero en el prim
 
 El script no comprueba `yt-dlp`, `ffmpeg`, la existencia del `.deb` en `dist/` ni hashes: eso está en
 `Depends` y en el checklist manual de release. Termina siempre con una línea `summary:` que resume
-paquete, versión, `paths=N/22` y estado de `lintian`.
+paquete, versión, `paths=N/23` y estado de `lintian`.
 
 ### 2.3. Flatpak, Snap y AppImage (fuera de alcance)
 
@@ -313,7 +316,7 @@ Cada pull request debe pasar, como mínimo:
 - tests de integración con `wiremock` y un servidor local de rangos;
 - build del `.deb` en un contenedor Ubuntu 26.04 (o la LTS fijada para desarrollo);
 - `packaging/check-package.sh` sobre el `.deb` recién construido: control (`Package`, `Version`,
-  `libsecret-tools` en `Depends`, `Description`), las 22 rutas, `desktop-file-validate` y
+  `libsecret-tools` en `Depends`, `Description`), las 23 rutas, `desktop-file-validate` y
   `appstreamcli validate --no-net` sobre las copias extraídas; `lintian` opcional e informativo;
 - validación de enlaces de documentación y de que `README`/`openspec` no tengan rutas muertas;
 - un job separado para la extensión (lint del manifest, `pack.mjs --check` y `sync-shared --check`).
@@ -331,7 +334,7 @@ cargo test --workspace
 node extension/tests/run.mjs
 node extension/tools/sync-shared.mjs --check
 node extension/tools/pack.mjs --check
-packaging/check-package.sh dist/segmenta_0.2.0-1_amd64.deb 0.2.0
+packaging/check-package.sh dist/segmenta_0.2.1-1_amd64.deb 0.2.1
 ```
 
 Para GUI: `xvfb-run -a cargo test -p segmenta-gui`; no se aceptan skips por falta de display. Un gate
@@ -349,8 +352,8 @@ en rojo bloquea el `done` de la unidad y el tag `v0.2.0`.
   y `libadwaita-1-0` las resuelve `$auto`. **ClamAV no se declara**: es opcional y lo aporta el
   sistema.
 - Assets de release además del `.deb` y su `.sha256`:
-  - `segmenta-extension-0.2.0.zip` (Chromium MV3, carga manual en modo desarrollador),
-  - `segmenta-firefox-0.2.0.zip` (carga manual desde `about:debugging`).
+  - `segmenta-extension-0.2.1.zip` (Chromium MV3, carga manual en modo desarrollador),
+  - `segmenta-firefox-0.2.1.zip` (carga manual desde `about:debugging`).
 - La extensión **no** se instala desde el `.deb`: se carga manualmente desde el ZIP instalado o desde
   una copia del árbol `extension/` (09 §7).
 

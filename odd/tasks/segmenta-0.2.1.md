@@ -65,6 +65,8 @@ Además, se pide una función nueva de gestión segura de descargas.
 - Cold-start Chromium y panel de Firefox capturados por `agy` en
   `docs/qa/screenshots/cold-start-confirm-run{1,2,3}.png` y `firefox-youtube-panel.png`.
 - Informe consolidado: `docs/qa/segmenta-0.2.1-live.md`.
+- QA final instalada: `.deb` `32746e41…`, `SMOKE OK rows=1 segments=4`, orden newest-first
+  (`/tmp/seg-final-order.png`) y video YouTube 720p completado con el `yt-dlp` embebido.
 - La Release 0.2.0 está publicada; cualquier corrección va a 0.2.1.
 
 ## Estado
@@ -81,9 +83,12 @@ Además, se pide una función nueva de gestión segura de descargas.
 | Documentación | `13eca06` | — |
 | P0 extensión `ERR_INVALID_SENDER` | `7dfda2c` | reproducido en Node y confirmado en CFT 157; falta recargar el Chrome real |
 | Bypass de allowlist de streams | `944782a` | tests negativos de probe/add con host ajeno |
+| Orden newest-first | `18f20b4`, `46d31d2` | confirmado en la app instalada |
+| Progreso real y parser de yt-dlp | `ca9ae7c`, `c1bd4d4` | parser con línea real; HTTP directo y video 720p |
+| yt-dlp embebido, CI y limpieza 26.04 | `18f20b4` | `SMOKE OK`, 23/23, clean-install en contenedor |
 
 Artefacto final: `segmenta_0.2.1-1_amd64.deb`, sha256
-`57fa7a195c1ed9320a742f0412f5fff1bdb8d1f7bcb7fbb52f9457cd8fe00ffb`; `check-package` 22/22.
+`32746e41c6bdc10d5f56508e1f7c22e1ad41bc70099e7caf2e367c212609789e`; `check-package` 23/23.
 Sin tag y sin Release.
 
 ## Log

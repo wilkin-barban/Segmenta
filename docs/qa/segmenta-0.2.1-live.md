@@ -1,7 +1,8 @@
 # Segmenta 0.2.1 — QA live en Ubuntu
 
 Fecha: 2026-11-13. Sin tag ni Release. Estado del `.deb`:
-`57fa7a195c1ed9320a742f0412f5fff1bdb8d1f7bcb7fbb52f9457cd8fe00ffb`.
+`32746e41c6bdc10d5f56508e1f7c22e1ad41bc70099e7caf2e367c212609789e`.
+Instalado en Ubuntu 26.04: `SMOKE OK rows=1 segments=4`; `check-package` 23/23.
 
 ## Interfaz
 
@@ -30,6 +31,18 @@ Prueba física sobre la app instalada, con una descarga local de 4 KiB y otra de
 
 Capturas: `/tmp/seg-0216-clean-confirm.png`, `/tmp/seg-0216-cleaned.png`,
 `/tmp/seg-0216-deleted.png`, `/tmp/seg-0216-deleted-files.png`.
+
+## Lista y progreso
+
+- Captura final con dos descargas locales: `order-dos.bin` (la última añadida) quedó **arriba**,
+  `order-uno.bin` debajo y una tarea anterior al final: `/tmp/seg-final-order.png`.
+- Descarga HTTP directa de 32 MiB: la barra mostró 0,5 % a los 2 s y 20 % a los 12 s
+  (`/tmp/shot-2.png`, `/tmp/shot-12.png`), confirmando que el repintado del widget funciona.
+- Video YouTube 720p con `yt-dlp` embebido: la tarea apareció arriba, mostró el estado
+  indeterminado mientras no había total y completó correctamente. El parser acepta las líneas
+  reales `261120|10202210|...` sin el prefijo `download:`; hay test unitario con la línea capturada.
+- HLS/DASH o torrent antes de metadata usan pulso indeterminado con bytes reales, no una barra
+  clavada en 0.
 
 ## Cold-start Chromium
 
