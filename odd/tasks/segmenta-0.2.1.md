@@ -137,5 +137,18 @@ Sin tag y sin Release.
    usuario recargue la copia y se confirme visualmente.
 2. El informe y las capturas de `agy` están en su commit `1ac4799`; las capturas también se
    guardaron en `docs/qa/screenshots/`.
-
+- L7 (iCloud, causa exacta): el servidor responde **`200` + `Content-Range`** cuando el rango
+  pedido cubre el archivo entero, y `SegmentWorker` trataba todo `200` a un range como "el
+  remoto cambió": reinicio, otro `200` y `1028 remote changed twice`. Corregido en `1e3a98c`
+  aceptando el `200` cuyo `Content-Range` cubre exactamente el rango y el total.
+- L8 (progreso de medios): yt-dlp **no siempre** emite el prefijo `download:` en la plantilla;
+  el parser lo exigía y descartaba todas las líneas, así que nunca había `task_progress`. Acepta
+  ambas formas (`ca9ae7c`), con la línea real del log como test.
+- L9 (captura iCloud): el storage probó que `onCreated` vio las URLs y armó pendientes, pero un
+  PDF de ~100 KB terminaba antes de la confirmación. La ventana se abre con `focused: true`, se
+  cierra si la descarga ya terminó, el registro se limpia y **se notifica** con el archivo; tocar
+  la notificación lo añade a Segmenta. Sin cambio en el orden armar-watchdog → pausar.
+- L10 (housekeeping): `delete_many` marca la tarea bajo el mismo lock que `start_task` lee, y el
+  bus descarta eventos de tareas marcadas antes de consumir secuencia (`76a4821`). El test ya no
+  depende de milisegundos: un suscriptor creado después de la respuesta prueba el silencio.
 

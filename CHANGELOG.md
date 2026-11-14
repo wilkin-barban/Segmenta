@@ -7,7 +7,8 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 
 ## [0.2.1] - 2026-11-13
 
-Correcciones de interfaz y gestión segura de descargas. Sin publicar: falta el tag y el Release.
+Correcciones de interfaz, captura y motor, y gestión segura de descargas. Sin publicar: falta el
+tag y el Release.
 
 ### Added
 
@@ -22,6 +23,24 @@ Correcciones de interfaz y gestión segura de descargas. Sin publicar: falta el 
   `1048 ERR_FILE_DELETE_FAILED`.
 
 ### Fixed
+
+- **Motor**: un `200` con `Content-Range` válido que cubre el rango pedido ya no se interpreta
+  como "el remoto cambió". iCloud responde exactamente así en un rango completo; antes la
+  descarga se reiniciaba y terminaba en `1028 remote changed twice`.
+- **Progreso de medios**: yt-dlp no siempre imprime el prefijo `download:` en la plantilla de
+  progreso, y el parser lo exigía: no se publicaba ningún `task_progress` y la barra quedaba
+  en 0 hasta completar. Ahora acepta ambas formas.
+- **Captura**: un archivo pequeño que termina entre la pausa y la confirmación ya no queda en
+  silencio; la ventana se abre con foco, se cierra si la descarga ya terminó y llega una
+  notificación con el archivo, que al tocarla lo añade a Segmenta.
+- **Gestión**: `delete_many` marca la tarea mientras la borra, de modo que ningún arranque de
+  cola concurrente publica un `state_changed` después de la respuesta.
+- **yt-dlp en el paquete**: el `.deb` embebe el zipapp oficial (versión fijada y SHA-256 en
+  `packaging/ytdlp.lock`) y `locate_tool` lo prefiere sólo si es más nuevo que el del `PATH`.
+  Ubuntu 26.04 trae `2026.03.17` y el mínimo es `2026.10.01`: sin esto YouTube no funcionaba
+  out-of-the-box. `python3` y `ca-certificates` pasan a `Depends`.
+- **CI**: workflow de GitHub Actions con fmt, clippy, ambas suites, build release, paquete y
+  una instalación limpia en `ubuntu:26.04` que arranca la GUI bajo `xvfb`.
 
 - **Preferencias** vuelve a mostrar sus siete páginas: la de Antivirus existía desde 0.2.0 pero
   nunca se añadía al diálogo. El diálogo abre a 960×760 y los títulos de fila ya no se convierten en
