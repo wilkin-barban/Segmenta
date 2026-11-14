@@ -616,3 +616,41 @@ fn remove_many_removes_only_the_named_rows() {
     assert!(store.get("c").is_some());
     assert_eq!(store.completed_ids(), vec!["b".to_string()]);
 }
+
+/// `download.list` answers with `segments: []`; a stale status answer must not wipe the
+/// segments a fresher event already painted. The smoke gate caught this as `segments=0`.
+#[test]
+fn a_stale_status_answer_keeps_the_segments_of_a_fresher_event() {
+    let mut store = DownloadStore::default();
+    store.reload(vec![row("task", "downloading")]);
+    // A `download.status` goes out now; a progress event with four segments lands while
+    // it is in flight.
+    let request_mark = store.task_mark("task");
+    let progress: ProgressUpdate = serde_json::from_value(json!({
+        "downloaded_bytes": 1_000u64,
+        "total_bytes": 4_096u64,
+        "speed_bps": 0u64,
+        "segments": [
+            {"segment_id": 0, "start_offset": 0, "end_offset": 1023, "next_offset": 512, "status": "active", "speed_bps": 0},
+            {"segment_id": 1, "start_offset": 1024, "end_offset": 2047, "next_offset": 1024, "status": "active", "speed_bps": 0},
+            {"segment_id": 2, "start_offset": 2048, "end_offset": 3071, "next_offset": 2048, "status": "active", "speed_bps": 0},
+            {"segment_id": 3, "start_offset": 3072, "end_offset": 4095, "next_offset": 3072, "status": "active", "speed_bps": 0}
+        ]
+    }))
+    .expect("progress payload parses");
+    assert!(store.apply_progress("task", &progress));
+    assert_eq!(
+        store.get("task").map(|item| item.segments.len()),
+        Some(4),
+        "the live event painted four segments"
+    );
+
+    let mut stale = row("task", "downloading");
+    stale.segments = Vec::new();
+    store.apply_status(stale, request_mark);
+    assert_eq!(
+        store.get("task").map(|item| item.segments.len()),
+        Some(4),
+        "the stale answer wiped the segments and the smoke gate would see 0"
+    );
+}
