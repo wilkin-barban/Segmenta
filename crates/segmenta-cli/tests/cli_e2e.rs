@@ -19,13 +19,28 @@ fn binary(name: &str) -> PathBuf {
         .expect("deps dir")
         .parent()
         .expect("target dir");
-    let candidate = dir.join(name);
-    assert!(
-        candidate.exists(),
+    // Integration tests normally live in `target/<profile>/deps`, but a runner can
+    // execute the harness from `target/<profile>/build/<crate>/<hash>`. `cargo build
+    // --workspace` always leaves the daemon in `target/<profile>/<name>`, so resolve
+    // that workspace-relative path as the fallback instead of failing only on CI.
+    let mut candidates = vec![dir.join(name)];
+    if let Some(manifest) = std::env::var_os("CARGO_MANIFEST_DIR") {
+        let workspace_target = Path::new(&manifest).join("../../target/debug").join(name);
+        candidates.push(workspace_target);
+    }
+    for candidate in &candidates {
+        if candidate.exists() {
+            return candidate.clone();
+        }
+    }
+    panic!(
         "{name} is not built at {}; run `cargo build --workspace` or `cargo test --workspace`",
-        candidate.display()
+        candidates
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(" or ")
     );
-    candidate
 }
 
 struct Sandbox {
