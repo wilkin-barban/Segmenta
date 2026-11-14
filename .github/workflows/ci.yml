@@ -60,6 +60,12 @@ jobs:
       - name: cargo clippy --workspace --all-targets -- -D warnings
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # The CLI e2e tests spawn the real daemon from target/debug; `cargo test`
+      # builds test harnesses but not that binary in a clean checkout, so the
+      # workspace is built first (the failure was reported by cli_e2e.rs:23).
+      - name: cargo build --workspace
+        run: cargo build --workspace
+
       - name: cargo test --workspace
         run: cargo test --workspace
 
