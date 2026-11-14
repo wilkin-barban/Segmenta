@@ -770,7 +770,16 @@ pub struct ProgressLine {
 
 /// Parse one `download:...` progress line emitted by the template above.
 pub fn parse_progress_line(line: &str) -> Option<ProgressLine> {
-    let payload = line.strip_prefix("download:")?;
+    // yt-dlp does not always print the literal `download:` prefix: with the
+    // `--progress-template` we use, a real 2026.10.26 run emitted bare lines such as
+    // `261120|10202210|36387144.43|0`. Requiring the prefix meant no progress at all and a
+    // bar frozen at 0 until the task completed. Both shapes are accepted; the pipe in the
+    // first field keeps unrelated numeric output out.
+    let line = line.trim();
+    let payload = line.strip_prefix("download:").unwrap_or(line);
+    if !payload.contains('|') {
+        return None;
+    }
     let mut parts = payload.split('|');
     let downloaded = parts.next()?.trim().parse::<u64>().ok()?;
     let total = parts
@@ -1038,5 +1047,24 @@ mod tests {
         assert_eq!(line.speed, 512_000);
         assert_eq!(line.eta, Some(6));
         assert!(parse_progress_line("[download] 10%").is_none());
+    }
+
+    /// yt-dlp 2026.10.26 printed the payload without the literal prefix; the bar never
+    /// moved because the parser required `download:` and returned None for every line.
+    #[test]
+    fn progress_lines_parse_without_the_literal_prefix() {
+        let line = parse_progress_line("261120|10202210|36387144.43|0").expect("progress");
+        assert_eq!(line.downloaded, 261_120);
+        assert_eq!(line.total, Some(10_202_210));
+        assert_eq!(line.speed, 36_387_144);
+        assert_eq!(line.eta, Some(0));
+
+        // Trailing whitespace, the real log shape, still parses.
+        let padded = parse_progress_line("544768|10202210|41943040.0|0\n").expect("progress");
+        assert_eq!(padded.downloaded, 544_768);
+
+        // Unrelated numeric output is not a progress line.
+        assert!(parse_progress_line("2026").is_none());
+        assert!(parse_progress_line("[youtube] Extracting URL").is_none());
     }
 }
