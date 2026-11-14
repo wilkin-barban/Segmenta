@@ -401,7 +401,10 @@ async fn delete_many_stops_an_active_task_before_touching_its_file() {
     let mut late = Vec::new();
     while let Ok(Ok(event)) = tokio::time::timeout(Duration::from_millis(300), events.recv()).await
     {
-        if event.timestamp_ms >= returned_at && event.task_id.as_deref() == Some(&task_id) {
+        // `timestamp_ms` has millisecond granularity: an event published just before
+        // the call returned can share that millisecond. Only a strictly later event
+        // proves a writer survived the deletion.
+        if event.timestamp_ms > returned_at && event.task_id.as_deref() == Some(&task_id) {
             late.push(event.event_type);
         }
     }
