@@ -486,6 +486,28 @@ fn stale_reason(state: &ResumeState, info: &ProbeInfo) -> Option<String> {
     None
 }
 
+/// Whether a `Content-Range` on a `200` response describes exactly the requested range.
+///
+/// iCloud answers a full-range request with `200` instead of `206`; the body and the
+/// Content-Range are still the requested bytes. Requiring `start == next`, `end >= end`
+/// and the planned total keeps this from blessing a response for another generation.
+fn content_range_covers(
+    value: &str,
+    next: u64,
+    end: u64,
+    total: Option<u64>,
+    length: Option<u64>,
+) -> bool {
+    let Ok((start, content_end, content_total)) = probe::parse_content_range(value) else {
+        return false;
+    };
+    let expected_len = end.saturating_sub(next).saturating_add(1);
+    start == next
+        && content_end >= end
+        && content_total == total
+        && length.map(|length| length == expected_len).unwrap_or(true)
+}
+
 /// The state a paused task must persist, derived only from the caller's spec.
 fn paused_from_spec(spec: &DownloadSpec, last_error: Option<CoreError>) -> ResumeState {
     match &spec.resume {
@@ -1369,8 +1391,13 @@ impl SegmentWorker {
             let status = response.status().as_u16();
             match StatusDecision::from_status(status) {
                 StatusDecision::Proceed => {
-                    if kind == WorkerKind::Range && status == 200 {
-                        // A `200` to a range request means the remote object changed.
+                    if kind == WorkerKind::Range
+                        && status == 200
+                        && !Self::full_range_response(&response, &env, self.next, end)
+                    {
+                        // A plain `200` to a range request means the remote object changed.
+                        // iCloud answers a full-range request with `200` *and* a matching
+                        // Content-Range; that is still the requested bytes, not a restart.
                         self.restart(format!(
                             "server answered 200 to the range request for bytes {}-{end}",
                             self.next
@@ -1501,6 +1528,27 @@ impl SegmentWorker {
                 }
             }
         }
+    }
+
+    /// Accept iCloud's nonstandard full-range `200` response.
+    ///
+    /// A range request normally gets `206`; iCloud answers a request that covers the whole
+    /// entity with `200` plus a correct `Content-Range`. Treating that as a new generation
+    /// made a small PDF restart twice and fail with `1028` even though the bytes were the
+    /// requested ones. The response is accepted only when its Content-Range and length
+    /// describe exactly the requested range and the planned total; anything else keeps the
+    /// restart path.
+    fn full_range_response(response: &reqwest::Response, env: &Env, next: u64, end: u64) -> bool {
+        let (Some(value), Some(total)) = (
+            response
+                .headers()
+                .get(CONTENT_RANGE)
+                .and_then(|value| value.to_str().ok()),
+            env.total,
+        ) else {
+            return false;
+        };
+        content_range_covers(value, next, end, Some(total), response.content_length())
     }
 
     /// Reject a response whose headers contradict the plan.
@@ -1735,6 +1783,48 @@ mod tests {
         assert!(!cancel.is_cancelled());
         cancel.cancel();
         assert!(cancel.is_cancelled());
+    }
+
+    #[test]
+    fn a_full_range_200_with_content_range_is_not_a_remote_change() {
+        // The exact shape iCloud returns for a one-segment PDF.
+        assert!(content_range_covers(
+            "bytes 0-564063/564064",
+            0,
+            564063,
+            Some(564064),
+            Some(564064),
+        ));
+        // A partial response that starts at zero cannot satisfy a later worker.
+        assert!(!content_range_covers(
+            "bytes 0-564063/564064",
+            4096,
+            564063,
+            Some(564064),
+            Some(564064),
+        ));
+        // A different generation or a truncated body keeps the restart path.
+        assert!(!content_range_covers(
+            "bytes 0-564063/564065",
+            0,
+            564063,
+            Some(564064),
+            Some(564064),
+        ));
+        assert!(!content_range_covers(
+            "bytes 0-564063/564064",
+            0,
+            564063,
+            Some(564064),
+            Some(2),
+        ));
+        assert!(!content_range_covers(
+            "bytes 0-100/564064",
+            0,
+            564063,
+            Some(564064),
+            Some(564064),
+        ));
     }
 
     #[test]
