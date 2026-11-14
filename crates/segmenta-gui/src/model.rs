@@ -684,7 +684,14 @@ impl DownloadStore {
                 item.total_bytes = existing.total_bytes;
                 item.speed_bps = existing.speed_bps;
                 item.eta_seconds = existing.eta_seconds;
-                item.segments = std::mem::take(&mut existing.segments);
+                // `download.list` answers with `segments: []`; taking that empty vector
+                // wiped the four segments the status answer carries and the smoke gate
+                // failed with segments=0. Keep whichever side actually has them.
+                if existing.segments.is_empty() {
+                    // The status answer is the only source: leave `item.segments` alone.
+                } else {
+                    item.segments = std::mem::take(&mut existing.segments);
+                }
             }
             *existing = item;
         }

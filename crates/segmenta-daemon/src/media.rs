@@ -555,8 +555,18 @@ pub fn locate_tool(name: &str) -> Result<PathBuf, MediaError> {
     let bundled = PathBuf::from(BUNDLED_YTDLP);
     let bundled_usable = bundled.is_file()
         && std::fs::metadata(&bundled)
-            .map(|meta| !meta.permissions().readonly())
-            .unwrap_or(true);
+            .map(|meta| {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    meta.permissions().mode() & 0o111 != 0
+                }
+                #[cfg(not(unix))]
+                {
+                    !meta.permissions().readonly()
+                }
+            })
+            .unwrap_or(false);
     match (on_path, bundled_usable) {
         (Some(system), true) => Ok(if version_of(&bundled) > version_of(&system) {
             bundled
