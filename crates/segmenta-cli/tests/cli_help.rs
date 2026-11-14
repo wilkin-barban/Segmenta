@@ -8,7 +8,7 @@
 //! helper that produced it.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use clap::Command as ClapCommand;
@@ -274,13 +274,23 @@ fn binary(name: &str) -> PathBuf {
         .expect("deps dir")
         .parent()
         .expect("target dir");
-    let candidate = dir.join(name);
-    assert!(
-        candidate.exists(),
+    let mut candidates = vec![dir.join(name)];
+    if let Some(manifest) = std::env::var_os("CARGO_MANIFEST_DIR") {
+        candidates.push(Path::new(&manifest).join("../../target/debug").join(name));
+    }
+    for candidate in &candidates {
+        if candidate.exists() {
+            return candidate.clone();
+        }
+    }
+    panic!(
         "{name} is not built at {}; run `cargo build --workspace` or `cargo test --workspace`",
-        candidate.display()
+        candidates
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(" or ")
     );
-    candidate
 }
 
 fn run_help(args: &[&str], tag: &str) -> String {
