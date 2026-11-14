@@ -1,7 +1,7 @@
 # Segmenta 0.2.1 — QA live en Ubuntu
 
 Fecha: 2026-11-13. Sin tag ni Release. Estado del `.deb`:
-`32746e41c6bdc10d5f56508e1f7c22e1ad41bc70099e7caf2e367c212609789e`.
+`a3ded14cf8285dc6598d7b9131aeb851a9ec8c4051325166076de259ccb7ef63`.
 Instalado en Ubuntu 26.04: `SMOKE OK rows=1 segments=4`; `check-package` 23/23.
 
 ## Interfaz
@@ -43,6 +43,10 @@ Capturas: `/tmp/seg-0216-clean-confirm.png`, `/tmp/seg-0216-cleaned.png`,
   reales `261120|10202210|...` sin el prefijo `download:`; hay test unitario con la línea capturada.
 - HLS/DASH o torrent antes de metadata usan pulso indeterminado con bytes reales, no una barra
   clavada en 0.
+- **iCloud**: una URL real de `cvws.icloud-content.com` completó `76.3 KiB` con el daemon final;
+  el servidor respondió `200` + `Content-Range` para el rango completo. La extensión guarda
+  `segmenta_pending_captures_v1` y, si el PDF termina antes de pausar, muestra la notificación de
+  captura perdida en vez de dejarlo silencioso.
 
 ## Cold-start Chromium
 
