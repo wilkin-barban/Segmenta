@@ -437,6 +437,48 @@ fn media_row(task_id: &str, media_kind: &str) -> Value {
 }
 
 #[test]
+fn the_list_paints_the_daemon_newest_first_order() {
+    run_gui("list_paints_daemon_order", || {
+        let app = app("io.github.wilkin.Segmenta.TestListOrder");
+        // `download.list` answers `created_at DESC, rowid DESC`: newest on top.
+        let mut newest = download_row("task-new", "downloading", 1);
+        newest["created_at"] = json!("2026-04-24T12:00:00Z");
+        let mut middle = download_row("task-mid", "completed", 1);
+        middle["created_at"] = json!("2026-04-24T11:00:00Z");
+        let mut oldest = download_row("task-old", "completed", 1);
+        oldest["created_at"] = json!("2026-04-24T10:00:00Z");
+        let fake = DemoClient::with_downloads(vec![newest, middle, oldest]);
+        let window = window_with(&app, &fake);
+
+        assert!(
+            pump_until(|| window.rows().len() == 3, Duration::from_secs(5)),
+            "the snapshot never listed its three rows (state {:?})",
+            window.view_state()
+        );
+        let painted: Vec<String> = window
+            .rows()
+            .iter()
+            .map(|item| item.task_id.clone())
+            .collect();
+        assert_eq!(
+            painted,
+            vec!["task-new", "task-mid", "task-old"],
+            "the list reversed the daemon order"
+        );
+
+        // A reload must repaint the same order, not flip it again.
+        window.reload();
+        let _ = pump_until(|| false, Duration::from_millis(300));
+        let painted: Vec<String> = window
+            .rows()
+            .iter()
+            .map(|item| item.task_id.clone())
+            .collect();
+        assert_eq!(painted, vec!["task-new", "task-mid", "task-old"]);
+    });
+}
+
+#[test]
 fn direct_download_detail_bar_changes_with_each_progress_event() {
     run_gui("direct_download_detail_bar_changes", || {
         let app = app("io.github.wilkin.Segmenta.TestDirectBar");
