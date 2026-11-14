@@ -72,6 +72,13 @@ tag y el Release.
 - **Paquete Ubuntu 26.04+**: el `.deb` embebe el zipapp oficial de `yt-dlp` 2026.10.26 con SHA-256
   fijado, porque el paquete del archivo es anterior al mínimo de YouTube; declara `python3` y
   `ca-certificates`, y la instalación limpia en 26.04 se prueba en CI.
+- **iCloud**: el servidor responde `200` con `Content-Range` válido cuando el rango cubre el
+  archivo completo; el motor ya lo acepta en lugar de reiniciar hasta el `1028`. Una descarga
+  pequeña que termina antes de la pausa de confirmación ya no queda silenciosa: la extensión
+  muestra una notificación y permite añadir la URL a Segmenta.
+- **Borrado por lote**: el bus silencia los eventos de una tarea mientras se elimina y espera al
+  worker; no aparece `state_changed` después de responder. Los tests cubren activas, lote,
+  archivos y duplicados.
 
 ### Changed
 

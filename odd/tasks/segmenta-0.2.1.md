@@ -83,12 +83,14 @@ Además, se pide una función nueva de gestión segura de descargas.
 | Documentación | `13eca06` | — |
 | P0 extensión `ERR_INVALID_SENDER` | `7dfda2c` | reproducido en Node y confirmado en CFT 157; falta recargar el Chrome real |
 | Bypass de allowlist de streams | `944782a` | tests negativos de probe/add con host ajeno |
+| iCloud 1028 + captura missed | `1e3a98c`, `76a4821` | URL real completada; notificación de captura |
+| delete_many sin eventos posteriores | `76a4821` | tests housekeeping 11/11 |
 | Orden newest-first | `18f20b4`, `46d31d2` | confirmado en la app instalada |
 | Progreso real y parser de yt-dlp | `ca9ae7c`, `c1bd4d4` | parser con línea real; HTTP directo y video 720p |
 | yt-dlp embebido, CI y limpieza 26.04 | `18f20b4` | `SMOKE OK`, 23/23, clean-install en contenedor |
 
 Artefacto final: `segmenta_0.2.1-1_amd64.deb`, sha256
-`32746e41c6bdc10d5f56508e1f7c22e1ad41bc70099e7caf2e367c212609789e`; `check-package` 23/23.
+`a3ded14cf8285dc6598d7b9131aeb851a9ec8c4051325166076de259ccb7ef63`; `check-package` 23/23; iCloud real completado; captura pequeña con notificación.
 Sin tag y sin Release.
 
 ## Log
