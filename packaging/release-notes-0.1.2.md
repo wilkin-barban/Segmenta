@@ -59,3 +59,24 @@ HTTP/HTTPS, YouTube público y HLS/DASH públicos sin cifrar.
 - Una configuración escrita por 0.1.0 o 0.1.1 se carga igual: conserva los valores del usuario y
   gana los defaults nuevos (`capture_confirm`, lista ampliada).
 - Sin cambios de esquema que rompan tareas existentes.
+
+## Verificación
+
+- QA real documentado en [`docs/qa/segmenta-0.1.2-live.md`](docs/qa/segmenta-0.1.2-live.md):
+  captura con confirmación, watchdog, orden/foco, panel de calidades y extensión Chromium/Firefox.
+- Tests de extensión y `packaging/check-package.sh` pasaron sobre el paquete 0.1.2; el detalle de
+  la corrida queda en el ODD de 0.1.2.
+
+## Artefactos
+
+| Archivo | Tamaño | SHA-256 |
+| --- | --- | --- |
+| `segmenta_0.1.2-1_amd64.deb` | 7.139.044 B | `f2b2aa3a78be4a66963f86df91f2e4c5be0b6f7713c6f760a477dea953b708a5` |
+| `segmenta-extension-0.1.2.zip` | 55.345 B | `ac1e6453e322c61f10c64bfa33ab55f2a3f9db1f412b75b8d41705df7655938e` |
+| `segmenta-firefox-0.1.2.zip` | 55.057 B | `110e252e47b3db4f62976a6eb09996cedbe46b431ca9a4a98868eb3e787d4855` |
+
+## Límites conocidos
+
+- La extensión se carga manualmente y Firefox snap no ejecuta el host nativo.
+- El cold-start del service worker puede dejar una descarga extremadamente rápida en el navegador.
+- Sin DRM/AES, streams en vivo, subtítulos ni multi-audio.
