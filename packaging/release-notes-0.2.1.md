@@ -1,7 +1,8 @@
 # Segmenta 0.2.1
 
-Correcciones de interfaz y gestión segura de descargas. **Sin publicar:** se etiqueta y se
-publica sólo cuando el QA real en Ubuntu cierre y exista el `.deb` 0.2.1.
+Correcciones de interfaz, iCloud y gestión segura de descargas. Release `v0.2.1` con QA real en
+Ubuntu 26.04; el `.deb` publicado tiene SHA-256
+`a3ded14cf8285dc6598d7b9131aeb851a9ec8c4051325166076de259ccb7ef63`.
 
 ## Interfaz
 
