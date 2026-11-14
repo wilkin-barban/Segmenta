@@ -129,3 +129,9 @@ Artefacto probado: `segmenta_0.0.2-1_amd64.deb` (3.931.124 B), SHA-256
 ## Checksum
 
 Ver `segmenta_0.0.2-1_amd64.deb.sha256` junto al paquete.
+
+---
+
+### Todas las releases
+
+[0.2.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.1) · [0.2.0](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.0) · [0.1.2](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.2) · [0.1.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.1) · [0.1.0](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.0) · [0.0.2](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.0.2) · [0.0.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.0.1)

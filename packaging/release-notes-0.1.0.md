@@ -96,3 +96,9 @@ Chrome/Chromium y derivados: cargar `segmenta-extension-0.1.0.zip` descomprimido
 - El `.deb` es el único formato de instalación.
 - El snap de Firefox no permite automatizar `web-ext`; usar Firefox oficial para QA
   automatizado.
+
+---
+
+### Todas las releases
+
+[0.2.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.1) · [0.2.0](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.0) · [0.1.2](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.2) · [0.1.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.1) · [0.1.0](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.0) · [0.0.2](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.0.2) · [0.0.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.0.1)

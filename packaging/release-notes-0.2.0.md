@@ -159,3 +159,9 @@ La release no se publica si falla cualquier gate o el QA real:
 Todavía no hay artefactos 0.2.0. Al cerrar Q1 se publicarán `segmenta_0.2.0-1_amd64.deb` con su
 `.sha256`, `segmenta-extension-0.2.0.zip` y `segmenta-firefox-0.2.0.zip`, con los SHA-256 reales
 en `docs/qa/segmenta-0.2-live.md` y en el CHANGELOG.
+
+---
+
+### Todas las releases
+
+[0.2.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.1) · [0.2.0](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.0) · [0.1.2](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.2) · [0.1.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.1) · [0.1.0](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.0) · [0.0.2](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.0.2) · [0.0.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.0.1)

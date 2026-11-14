@@ -14,6 +14,8 @@ HLS/DASH públicos; conserva el estado en SQLite y reanuda exactamente donde que
 [![Release](https://img.shields.io/github/v/release/wilkin-barban/Segmenta?label=release)](https://github.com/wilkin-barban/Segmenta/releases/latest)
 [![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 
+[Instalación](#instalación) · [Uso](#uso) · [Capturas](#capturas) · [Releases](#releases) · [Documentación](#documentación)
+
 ![Ventana principal de Segmenta con descargas en curso](docs/qa/screenshots/main-window.png)
 
 ## Qué problema resuelve
@@ -245,6 +247,21 @@ El workflow de GitHub Actions corre esos gates, construye el `.deb` y lo instala
 **Ubuntu 26.04** limpio; también comprueba que la GUI arranque bajo Xvfb y que el `yt-dlp` embebido
 sea reciente.
 
+## Releases
+
+Cada versión tiene su propia página y sus assets. El índice general de GitHub agrupa las releases
+en una sola vista; estos son los enlaces directos:
+
+| Versión | Publicación | Release | Notas |
+| --- | --- | --- | --- |
+| **0.2.1** (última) | 2026-11-14 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.1) | [Notas](packaging/release-notes-0.2.1.md) |
+| 0.2.0 | 2026-11-13 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.0) | [Notas](packaging/release-notes-0.2.0.md) |
+| 0.1.2 | 2026-11-12 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.2) | [Notas](packaging/release-notes-0.1.2.md) |
+| 0.1.1 | 2026-11-12 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.1) | [Notas](packaging/release-notes-0.1.1.md) |
+| 0.1.0 | 2026-11-11 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.0) | [Notas](packaging/release-notes-0.1.0.md) |
+| 0.0.2 | 2026-11-11 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.0.2) | [Notas](packaging/release-notes-0.0.2.md) |
+| 0.0.1 | 2026-11-11 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.0.1) | [Notas](packaging/release-notes-0.0.1.md) |
+
 ## Estado y límites
 
 - **v0.2.1 publicada**: [Release y assets](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.1).
@@ -258,7 +275,8 @@ sea reciente.
 ## Documentación
 
 - [`CHANGELOG.md`](CHANGELOG.md) — historial completo por versión.
-- Notas de release: [0.2.1](packaging/release-notes-0.2.1.md) · [0.2.0](packaging/release-notes-0.2.0.md) · [0.1.2](packaging/release-notes-0.1.2.md) · [0.1.1](packaging/release-notes-0.1.1.md) · [0.1.0](packaging/release-notes-0.1.0.md).
+- [Índice de releases](#releases) — enlace directo a cada versión y a sus notas.
+- [Todas las releases en GitHub](https://github.com/wilkin-barban/Segmenta/releases) — vista general.
 - [`docs/openspec/`](docs/openspec/) — contratos de arquitectura, motor, IPC, persistencia, extensión y empaquetado.
 - [`docs/qa/`](docs/qa/) — evidencia de QA en Ubuntu.
 - [`odd/tasks/`](odd/tasks/) — planes y evidencia ODD por release.

@@ -125,3 +125,9 @@ actualizar desde una versión anterior, pulsá **Recargar** en Segmenta.
 - `segmenta-gui --smoke` → `SMOKE OK rows=1 segments=4`.
 - Descarga directa de 32 MiB con progreso visible; iCloud real de 76.3 KiB completada.
 - Evidencia QA: [`docs/qa/segmenta-0.2.1-live.md`](https://github.com/wilkin-barban/Segmenta/blob/main/docs/qa/segmenta-0.2.1-live.md).
+
+---
+
+### Todas las releases
+
+[0.2.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.1) · [0.2.0](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.0) · [0.1.2](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.2) · [0.1.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.1) · [0.1.0](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.0) · [0.0.2](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.0.2) · [0.0.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.0.1)

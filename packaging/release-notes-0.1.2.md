@@ -80,3 +80,9 @@ HTTP/HTTPS, YouTube público y HLS/DASH públicos sin cifrar.
 - La extensión se carga manualmente y Firefox snap no ejecuta el host nativo.
 - El cold-start del service worker puede dejar una descarga extremadamente rápida en el navegador.
 - Sin DRM/AES, streams en vivo, subtítulos ni multi-audio.
+
+---
+
+### Todas las releases
+
+[0.2.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.1) · [0.2.0](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.0) · [0.1.2](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.2) · [0.1.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.1) · [0.1.0](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.0) · [0.0.2](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.0.2) · [0.0.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.0.1)

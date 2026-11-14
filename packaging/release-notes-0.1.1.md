@@ -47,3 +47,9 @@ Release de integración con navegadores, captura de descargas y torrents.
 - `segmenta-extension-0.1.1.zip` — `342980b7cd33e1e5e9a48788385c2bc8705d619db4a59436eb81773ac6e08ee6`
 - `segmenta-firefox-0.1.1.zip` — `95446187c127b0ec496ebf3e5f727816ebdafe22e36c2f1e0cba210f91040233`
 - `segmenta_0.1.1-1_amd64.deb.sha256`
+
+---
+
+### Todas las releases
+
+[0.2.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.1) · [0.2.0](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.0) · [0.1.2](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.2) · [0.1.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.1) · [0.1.0](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.0) · [0.0.2](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.0.2) · [0.0.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.0.1)
