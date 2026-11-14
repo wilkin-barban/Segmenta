@@ -1,428 +1,266 @@
+<p align="center">
+  <img src="packaging/io.github.wilkin.Segmenta.svg" width="96" alt="Icono de Segmenta">
+</p>
+
 # Segmenta
 
-> Gestor de descargas HTTP/HTTPS segmentado, torrents, YouTube y HLS/DASH públicos para
-> **Ubuntu 26.04 LTS (GNOME 50 / Wayland)**, con daemon propio, CLI, GUI nativa GTK4 +
-> Libadwaita y extensión de navegador.
+**Descargas que no se pierden cuando el navegador se cierra, la red falla o el equipo se reinicia.**
 
-**Estado: 0.2.1 publicada.** La Release `v0.2.1` incluye el `.deb`
-(`a3ded14cf8285dc6598d7b9131aeb851a9ec8c4051325166076de259ccb7ef63`), los dos ZIP y el
-`SHA256SUMS`; CI está verde y el QA real se hizo en Ubuntu 26.04. La release anterior es **0.2.0**
-(tag `v0.2.0`).
+Segmenta es un gestor de descargas para **Ubuntu 26.04 LTS** con daemon propio, CLI, GUI GTK4 +
+Libadwaita y extensión de navegador. Descarga HTTP/HTTPS por segmentos, torrents, YouTube y
+HLS/DASH públicos; conserva el estado en SQLite y reanuda exactamente donde quedó.
 
-### Novedades de 0.2.1
+[![CI](https://github.com/wilkin-barban/Segmenta/actions/workflows/ci.yml/badge.svg)](https://github.com/wilkin-barban/Segmenta/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/wilkin-barban/Segmenta?label=release)](https://github.com/wilkin-barban/Segmenta/releases/latest)
+[![License](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 
-- La lista de descargas respeta `created_at DESC`: la tarea más reciente queda arriba.
-- La barra de progreso avanza con HTTP, segmentos, torrents y YouTube; si el tamaño es
-  desconocido (HLS/DASH o torrent antes de metadata) muestra un pulso con los bytes reales.
-- El `.deb` incluye un `yt-dlp` 2026.10.26 embebido y verificado por SHA-256, porque el paquete
-  de Ubuntu 26.04 es anterior al mínimo de YouTube.
-- Preferencias, spinner, “Limpiar completadas” y eliminación por lote quedaron remediados; ver
-  [`CHANGELOG.md`](CHANGELOG.md).
+![Ventana principal de Segmenta con descargas en curso](docs/qa/screenshots/main-window.png)
 
-### Novedades de 0.1.2
+## Qué problema resuelve
 
-- **Estado real de la extensión**: la GUI/Navegadores distingue manifiesto nativo listo con
-  extensión no instalada, extensión instalada, manifiesto ausente y navegador no soportado
-  (snap/Flatpak), por navegador.
-- **`segmenta extension status|prepare|install-native|open`**: prepara el ZIP en
-  `$XDG_DATA_HOME/segmenta/extensions/<familia>-<versión>`, valida `manifest.json`, `_locales` e
-  identificador y abre `chrome://extensions`, `about:debugging` o la carpeta con argv fijo.
-- **Panel de calidades acotado**: 4K (2160), 1080p, 720p, 360p y solo audio, sólo las
-  disponibles, con 720p por defecto; el vídeo se elige por altura, nunca por `format_id`.
-- **Captura con confirmación**: una descarga de `.zip`, `.rar`, `.deb` y compañía se pausa y abre
-  una ventana con nombre, host y carpeta de destino; aceptar crea la tarea y sólo entonces se
-  cancela y borra la copia del navegador.
-- **Watchdog con `alarms`**: cada captura pendiente se persiste antes de pausar y se rehidrata al
-  despertar el service worker o al arrancar el navegador; rechazo, timeout (~120 s), ventana
-  cerrada o host caído reanudan la descarga del navegador.
-- **Orden y foco**: una tarea nueva aparece arriba y `system.open` trae la GUI al frente con la
-  tarea enfocada.
+El navegador es un mal lugar para una descarga larga: si se cierra la pestaña, se suspende la
+sesión o se reinicia el equipo, la descarga se pierde o vuelve a empezar. Los gestores tradicionales
+tampoco coordinan la captura del navegador, las colas, los torrents y los medios en un solo lugar.
 
-### Novedades de 0.1.0 y 0.1.1
+Segmenta separa la descarga del navegador y de la interfaz:
 
-0.1.1 sumó la extensión de navegador con host nativo, la captura de descargas y el motor de
-torrents (`librqbit`). 0.1.0 sumó YouTube, HLS/DASH públicos y el panel flotante. El detalle
-completo está en [`CHANGELOG.md`](CHANGELOG.md).
+- **Estado duradero:** cada byte escrito y cada offset viven en SQLite WAL; pausar, cerrar la GUI
+  o matar el daemon no pierde el progreso.
+- **Velocidad real:** reparte el archivo en hasta 32 conexiones y reasigna en caliente la mitad del
+  rango de un worker lento a uno que terminó.
+- **Un solo punto de control:** la GUI, la CLI y la extensión hablan con el mismo daemon; podés
+  cerrar la GUI y las descargas siguen.
+- **Captura con confirmación:** la extensión pausa la descarga del navegador y pregunta nombre,
+  host y carpeta antes de que Segmenta la adopte. Si no se puede interceptar, el archivo se queda
+  en el navegador y se avisa; nunca se borra en silencio.
+- **Medios y torrents incluidos:** YouTube, HLS/DASH públicos, magnet y `.torrent` comparten la
+  misma cola, los mismos estados y el mismo control de progreso.
 
-### Qué entró en 0.2.0
+## Flujo de trabajo
 
-Estas funciones pasaron el QA real registrado en `docs/qa/segmenta-0.2-live.md` y están en la
-Release `v0.2.0`:
+1. **Instalá el daemon** con el `.deb` y habilitá `segmenta.socket` como usuario.
+2. **Añadí una URL** desde la GUI (`Ctrl+N`), la CLI (`segmenta add`) o la extensión del navegador.
+3. **La extensión intercepta** las descargas que coinciden con la lista configurada: pausa la copia
+   del navegador y abre la confirmación. Al aceptar, crea la tarea en Segmenta y recién entonces
+   elimina la copia nativa.
+4. **Seguí el progreso** en la lista o en el detalle: porcentaje, velocidad, ETA y un bloque por
+   segmento. La tarea más reciente aparece arriba.
+5. **Pausá, reanudá o cambiá la cola** sin perder bytes; el daemon mantiene el estado aunque cierres
+   la GUI.
+6. **Al terminar**, Segmenta verifica el tamaño/checksum y ejecuta el post-procesamiento y el
+   antivirus opcional. La tarea pasa a `completed` o falla con un código visible.
 
-- **Scheduler de colas nativo**: ventanas horarias por cola y `max_active` real aplicado por el
-  daemon.
-- **Post-procesamiento argv seguro y ClamAV integrado**: hook sin shell, escaneo opcional con
-  `clamdscan`/`clamscan`, cuarentena y `ERR_ANTIVIRUS_FOUND`.
-- **Site logins Basic** por dominio con GNOME Keyring (sin Digest).
-- **Sin categorías automáticas**, sniffer sólo YouTube, instalación manual de la extensión
-  asistida por la GUI y reconciliación de capturas al arrancar en frío.
+## Capturas
 
----
+### Lista y progreso
 
-## 1. Qué hace
+![Lista de descargas con barra de progreso](docs/qa/screenshots/download-progress.png)
 
-- **Descarga segmentada**: sondea el recurso con `Range: bytes=0-1` y, si el servidor
-  responde `206`, reparte el archivo en hasta 32 conexiones. Si el servidor ignora `Range`,
-  cae a un solo stream; si responde `Transfer-Encoding: chunked`, descarga en streaming hasta
-  el cierre.
-- **Partición en caliente**: cuando un worker termina su rango, en lugar de quedar ocioso pide
-  al worker más lento la mitad de sus bytes restantes (`SplitRequest`/`SplitAck`). El reparto
-  no deja huecos ni solapamientos.
-- **Sin ensamblado**: cada byte se escribe con `pwrite64` en su offset final de un único
-  archivo, preasignado con `posix_fallocate` (con fallback a `set_len` + comprobación de
-  espacio).
-- **Reanudación real**: el estado vive en SQLite (WAL) con `next_offset` por segmento. Pausar,
-  cerrar la GUI, matar el daemon o reiniciar la sesión no pierde bytes: al reanudar se manda
-  `If-Range` con el validador y, si el archivo remoto cambió, se reinicia desde cero en lugar
-  de mezclar generaciones.
-- **Torrents**: motor embebido `librqbit` con una sesión compartida por proceso, schema v3
-  (`torrents`, `torrent_files`), RPC y CLI `torrent probe|add|status`, saneamiento de rutas
-  internas (`..`, absolutas, escapes) y seeding desactivado por defecto.
-- **YouTube y HLS/DASH públicos**: `media.probe`/`media.add` con `yt-dlp` para video, audio sin
-  recodificar y playlists con límite (1–500); HLS/DASH con `SegmentTemplate` se bajan por
-  segmentos y se remuxean con `ffmpeg -c copy`. DRM, AES-128, live, subtítulos y multi-audio se
-  rechazan con código explícito.
-- **Extensión de navegador y host nativo**: panel en YouTube, captura genérica de descargas,
-  botón de magnet en el menú contextual y comunicación con el daemon a través de
-  `segmenta-host` (Native Messaging, sin shell).
-- **Seguridad**: sin `file:`, `data:` ni `ftp:`; bloqueo de loopback e IPs privadas (SSRF) salvo
-  `allow_local_downloads`; sin `Authorization`/`Cookie` al cruzar de origen en una redirección;
-  nombres sanitizados (path traversal, 255 bytes, colisiones `archivo (1).ext`); secretos fuera
-  de SQLite.
-- **CLI y GUI**: control completo desde `segmenta` (sin GUI) y una app GTK4/Libadwaita con
-  búsqueda, filtros, estados, progreso, velocidad, ETA y vista de segmentos.
+La barra avanza con `task_progress`; cuando el tamaño aún es desconocido (HLS/DASH o torrent antes
+de metadata) se muestra un pulso con los bytes reales, no una barra clavada en 0.
 
----
+### Preferencias
 
-## 2. Instalación en Ubuntu 26.04 LTS
+![Preferencias de Segmenta](docs/qa/screenshots/preferences.png)
 
-### Opción A — el `.deb` que construye este repositorio (recomendado)
+Siete páginas: General, Conexiones y límites, Descargas web, Navegadores, Antivirus,
+Contraseñas de sitios y Acerca.
 
-El paquete de esta release se construye en este repositorio y se instala con `dpkg`; no hay PPA
-ni otro canal de distribución.
+### Extensión de YouTube
+
+![Panel de Segmenta en YouTube](docs/qa/screenshots/extension-youtube.png)
+
+Panel de calidades con 4K, 1080p, 720p (por defecto), 360p y Solo audio.
+
+### Confirmación de captura
+
+![Confirmación de descarga del navegador](docs/qa/screenshots/capture-confirmation.png)
+
+La descarga del navegador ya está pausada; aceptar la adopta en Segmenta y la copia local se elimina
+sólo después de que el daemon demuestra que tiene los bytes.
+
+## Características
+
+| Área | Qué incluye |
+| --- | --- |
+| Motor directo | HTTP/HTTPS segmentado, hot-split, reanudación, checksum SHA-256, límite global, reintentos con `Retry-After` y SSRF bloqueado |
+| Torrents | Motor `librqbit` embebido, magnet y `.torrent`, archivos múltiples, seeding desactivado por defecto |
+| Medios | YouTube (video, audio, playlists), HLS/DASH públicos con remux `ffmpeg`; DRM/AES/live fuera de alcance |
+| Colas | `max_active` real, ventanas horarias y acción al completar |
+| Seguridad | Secretos en Secret Service, sin credenciales en SQLite/logs, redirects cross-origin sin credenciales |
+| GUI | GTK4/Libadwaita, búsqueda, filtros, detalle por segmentos, temas y notificaciones |
+| CLI | `segmenta` con `--json`, códigos de salida estables y control completo sin GUI |
+| Extensión | Chromium MV3 y Firefox, panel de YouTube, captura genérica, Native Messaging con allowlist |
+| Paquete | `.deb` para Ubuntu 26.04+, `yt-dlp` embebido con SHA-256, instalación limpia probada en CI |
+
+## Instalación
+
+### Opción recomendada: Release `.deb`
+
+Descargá el paquete y los checksums desde la
+[Release v0.2.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.1), luego:
+
+```bash
+sha256sum -c segmenta_0.2.1-SHA256SUMS
+sudo apt install ./segmenta_0.2.1-1_amd64.deb
+systemctl --user daemon-reload
+systemctl --user enable --now segmenta.socket
+segmenta hello
+```
+
+El paquete declara e instala sus dependencias (`ffmpeg`, `libgtk-4-1`, `libadwaita-1-0`,
+`libsecret-tools`, `python3`, `ca-certificates` y `yt-dlp`). Incluye además
+`/usr/share/segmenta/bin/yt-dlp` 2026.10.26, porque el paquete del archivo de Ubuntu 26.04 es
+anterior al mínimo que YouTube necesita.
+
+### Desde el código
 
 ```bash
 git clone https://github.com/wilkin-barban/Segmenta.git
 cd Segmenta
 
-# Construir el .deb de la versión del workspace (0.2.1)
-packaging/fetch-ytdlp.sh         # zipapp fijado por SHA-256 para YouTube
+sudo apt-get install build-essential pkg-config libgtk-4-dev libadwaita-1-dev \
+  libsecret-1-dev libssl-dev ffmpeg
+packaging/fetch-ytdlp.sh
 cargo build --release --workspace
 cargo deb -p segmenta-gui --no-build -o dist/
-
-# Puerta de empaquetado antes de instalar
 packaging/check-package.sh dist/segmenta_0.2.1-1_amd64.deb 0.2.1
-
-sudo apt-get install ./dist/segmenta_0.2.1-1_amd64.deb
-
+sudo apt install ./dist/segmenta_0.2.1-1_amd64.deb
 systemctl --user daemon-reload
 systemctl --user enable --now segmenta.socket
 ```
 
-El flujo apunta a `dist/segmenta_0.2.1-1_amd64.deb` con
-`packaging/check-package.sh dist/segmenta_0.2.1-1_amd64.deb 0.2.1`, que valida 23/23 rutas,
-incluido el `yt-dlp` embebido. El paquete declara `python3`, `ca-certificates`, `ffmpeg`,
-`libgtk-4-1`, `libadwaita-1-0` y `libsecret-tools`; `apt-get install` resuelve todo en Ubuntu
-26.04.
+`segmenta.socket` crea el socket `$XDG_RUNTIME_DIR/segmenta/daemon.sock` (`0600`). Habilitá el
+socket, no sólo el servicio: el daemon usa socket activation.
 
-El paquete instala `/usr/bin/segmenta-daemon`, `/usr/bin/segmenta-cli`, `/usr/bin/segmenta-gui`,
-`/usr/bin/segmenta-host`, el enlace `/usr/bin/segmenta`, las unidades de usuario
-`segmenta.socket`/`segmenta.service`, los siete manifiestos nativos de mensajería, el `.desktop`,
-el handler `magnet:`, el icono, el AppStream y los dos ZIP de la extensión en
-`/usr/share/segmenta/extensions/`.
+## Uso
 
-Comprobá que el daemon responde:
+### GUI
 
-```bash
-segmenta hello
-segmenta system status
-```
+Abrí **Segmenta** desde el menú o ejecutá `segmenta-gui`.
 
-> El socket es `$XDG_RUNTIME_DIR/segmenta/daemon.sock` con permisos `0600`. `segmenta.socket` es
-> quien lo crea; si arrancás sólo `segmenta.service` sin el socket, el daemon falla con
-> `address already in use`. Habilita **el socket**.
+- `Ctrl+N`: añadir URL.
+- `Ctrl+F`: buscar.
+- `Ctrl+,`: Preferencias.
+- Menú de fila: pausar, reanudar, cancelar, eliminar y abrir carpeta.
+- Menú principal: **Limpiar completadas** y **Selección múltiple** para borrar una o varias tareas
+  con la casilla opcional **Eliminar también los archivos descargados**.
 
-### Opción B — desde el código, sin empaquetar
+### CLI
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev \
-  libsecret-1-dev libssl-dev xvfb ffmpeg yt-dlp libsecret-tools
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source "$HOME/.cargo/env"
-
-cargo build --release --workspace
-sudo install -Dm755 target/release/segmenta-daemon /usr/bin/segmenta-daemon
-sudo install -Dm755 target/release/segmenta-cli    /usr/bin/segmenta-cli
-sudo install -Dm755 target/release/segmenta-gui    /usr/bin/segmenta-gui
-sudo install -Dm755 target/release/segmenta-host   /usr/bin/segmenta-host
-sudo ln -sf segmenta-cli /usr/bin/segmenta
-sudo install -Dm644 packaging/segmenta.socket  /usr/lib/systemd/user/segmenta.socket
-sudo install -Dm644 packaging/segmenta.service /usr/lib/systemd/user/segmenta.service
-systemctl --user daemon-reload && systemctl --user enable --now segmenta.socket
-```
-
-`ffmpeg` hace falta para HLS/DASH y para el merge de video+audio. El `.deb` incluye
-`yt-dlp` **2026.10.26** en `/usr/share/segmenta/bin/yt-dlp`; el paquete del archivo 26.04 es
-anterior al mínimo y no se usa si hay una copia local más nueva. `libsecret-tools` es la vía real
-al Secret Service del escritorio.
-
----
-
-## 3. Extensión de navegador y host nativo
-
-La extensión **no se instala sola**: el `.deb` deja el host nativo, los manifiestos y los ZIP, y
-la carga en el navegador es un paso manual asistido por la GUI. No hay Chrome Web Store ni AMO
-en 0.1.2 ni en 0.2.0.
-
-```bash
-# Estado por navegador: manifiesto nativo, extensión instalada y conexión
-segmenta extension status
-
-# Descomprimir el ZIP en $XDG_DATA_HOME/segmenta/extensions/<familia>-<versión>
-segmenta extension prepare --family all      # o chromium / firefox
-
-# Abrir la página de extensiones del navegador (argv fijo, sin shell)
-segmenta extension open --browser chrome     # brave, edge, vivaldi, opera, firefox…
-```
-
-Después, en el navegador:
-
-- **Familia Chromium** (Chrome, Chromium, Brave, Edge, Vivaldi, Opera): `chrome://extensions` →
-  activar **Modo de desarrollador** → **Cargar descomprimida** → la carpeta
-  `…/segmenta/extensions/chromium-<versión>` que preparó el comando anterior. Chrome estable
-  puede requerir este paso una vez; no se escriben perfiles ni se usa `--load-extension`.
-- **Firefox**: `about:debugging#/runtime/this-firefox` → **Cargar complemento temporal** →
-  `manifest.json` de la carpeta `…/segmenta/extensions/firefox-<versión>`. El identificador es
-  `segmenta@wilkin.github.io`; sin firma, la carga es temporal.
-
-Los ZIP reproducibles son `dist/segmenta-extension-0.2.1.zip` (Chromium) y
-`dist/segmenta-firefox-0.2.1.zip` (Firefox), generados con `node extension/tools/pack.mjs`. El
-`.deb` también los instala en `/usr/share/segmenta/extensions/`.
-
-Si el manifiesto nativo de tu usuario falta, `segmenta extension install-native` lo escribe en
-`$XDG_CONFIG_HOME` para los navegadores detectados (o `extension/install-native.sh` desde el
-árbol, que además acepta `--print`). El manifiesto del sistema viaja en el `.deb`.
-
-### Descargas del navegador (captura genérica)
-
-- La extensión escucha `downloads.onCreated` y captura por extensión con una lista por defecto
-  editable en Preferencias y una denylist. `r0*`/`r1*` se interpretan como prefijos.
-- Con `capture_confirm` activo (por defecto), la descarga del navegador se **pausa**, se abre una
-  ventana con el nombre, el host y la carpeta de destino, y sólo al aceptar se crea la tarea en
-  Segmenta; recién entonces se cancela y borra la copia del navegador.
-- **Nunca se pierde un archivo**: rechazar, el timeout (~120 s), cerrar la ventana, un fallo del
-  host o una descarga que no se puede pausar reanudan la copia del navegador.
-- **Watchdog**: cada captura pendiente se guarda antes de pausar y un `alarm` la vigila; al
-  despertar el service worker o al arrancar el navegador se rehidrata. Si el registro o el alarm
-  no se pueden crear, no se pausa nada.
-- `.torrent` se deriva a `torrent.add`; los enlaces `magnet:` se ofrecen en el menú contextual y
-  por el handler `segmenta-handler.desktop` (si tu escritorio no lo registra solo:
-  `xdg-mime default segmenta-handler.desktop x-scheme-handler/magnet`).
-- Con `capture_confirm = false` se vuelve al flujo sin ventana, que sigue esperando la tarea
-  antes de cancelar la descarga nativa.
-
-**Límite conocido**: una descarga que arranca en el mismo instante en que arranca el navegador
-puede ocurrir antes de que el service worker registre su listener. Las descargas posteriores sí
-se capturan; 0.2.0 agrega una reconciliación con `downloads.search` que reduce la ventana, sin
-eliminarla del todo.
-
----
-
-## 4. Uso desde la terminal
-
-```bash
-# Añadir y seguir una descarga
+# Descarga y control
 segmenta add https://example.com/ubuntu.iso
 segmenta list
 segmenta status <task-id>
-
-# Control
-segmenta pause  <task-id>
+segmenta pause <task-id>
 segmenta resume <task-id>
-segmenta cancel <task-id> --delete-file
-segmenta delete <task-id> --delete-file
 
-# Opciones de alta
+# Destino, conexiones y verificación
 segmenta add https://example.com/file.zip \
   --dir ~/Descargas --name file.zip --connections 8 \
   --sha256 <hex> --queue main
 
-# Configuración (los mismos valores que expone la GUI)
-segmenta settings
-segmenta settings set max_connections 8 global_speed_limit_bps 2000000
-
-# Colas
+# Colas y ajustes
 segmenta queues list
 segmenta queues create noche --max-active 1
 segmenta queues schedule noche --start 02:00 --stop 06:00 --on-complete suspend
+segmenta settings get
+segmenta settings set max_connections 8 global_speed_limit_bps 2000000
 
-# Medios: YouTube y HLS/DASH públicos
+# Medios y torrents
 segmenta media probe https://www.youtube.com/watch?v=<id>
-segmenta media add   https://www.youtube.com/watch?v=<id> --mode video --height 720
-segmenta media add   https://www.youtube.com/watch?v=<id> --mode audio
-segmenta media add   https://www.youtube.com/playlist?list=<id> --mode playlist --limit 10
-segmenta media add   https://example.com/manifest.m3u8   # HLS/DASH: el daemon detecta el manifiesto
+segmenta media add https://www.youtube.com/watch?v=<id> --mode video --height 720
+segmenta torrent add "magnet:?xt=urn:btih:<hash>" --dir ~/Descargas
 
-# Torrents
-segmenta torrent probe https://example.com/file.torrent
-segmenta torrent add   "magnet:?xt=urn:btih:<hash>" --dir ~/Descargas
-segmenta torrent status <task-id>
-
-# Extensiones
-segmenta extension status
-segmenta extension prepare --family chromium
-segmenta extension install-native
-segmenta extension open --browser chrome
-
-# Daemon
-segmenta hello
-segmenta system status
-segmenta system shutdown
-```
-
-Todos los comandos de lectura aceptan `--json`:
-
-```bash
+# Salida para scripts
 segmenta --json list | jq '.[] | {id: .task_id, status, pct: (.downloaded_bytes / .total_bytes)}'
 ```
 
-Códigos de salida: `0` éxito, `1` error del daemon o del protocolo, `2` uso inválido.
+Códigos de salida: `0` éxito, `1` error del daemon/protocolo, `2` uso inválido.
 
-`extension` aparece en `segmenta --help` desde 0.2.0; `segmenta extension --help` muestra sus
-cuatro acciones.
+### Extensión del navegador
 
-### Límite de velocidad
-
-`global_speed_limit_bps` es global (token bucket compartido por todos los workers) y se puede
-cambiar en caliente: `segmenta settings set global_speed_limit_bps 1048576` para 1 MiB/s, `0`
-para ilimitado.
-
----
-
-## 5. Uso de la GUI
-
-`segmenta-gui` o la entrada **Segmenta** del menú de aplicaciones.
-
-- **Lista**: búsqueda (`Ctrl+F`), filtros por estado y colas, progreso, velocidad y ETA; la tarea
-  más nueva aparece arriba.
-- **Añadir** (`Ctrl+N`): URL, carpeta destino con el selector nativo del portal, nombre,
-  conexiones y "comenzar".
-- **Detalle**: barra de progreso, velocidad, ETA, estado y un bloque por segmento que se
-  parte en caliente; botones pausar/reanudar/cancelar/eliminar y abrir carpeta.
-- **Preferencias** (`Ctrl+,`): General (carpeta, conexiones, límite de velocidad, autostart),
-  Navegadores (estado real por navegador, preparar extensión, abrir página de extensiones,
-  copiar ruta, instalar manifiestos) y Descargas web (activar captura, `.torrent`/magnet, lista
-  de extensiones).
-- Tema claro/oscuro y color de acento del sistema, navegación completa por teclado, estados
-  vacío y error distintos, notificaciones al completar o fallar.
-
-La GUI nunca habla con la red ni con SQLite: es un cliente del socket del daemon, así que podés
-cerrarla y las descargas siguen.
-
----
-
-## 6. Arquitectura
-
-```
-crates/
-├── segmenta-core      Motor puro: sondeo, planificador, hot-split, pwrite_all, backoff, SSRF
-├── segmenta-daemon    SQLite WAL + JSON-RPC sobre Unix socket + orquestación, torrents y medios
-├── segmenta-cli       Cliente de terminal (add/list/status/pause/resume/cancel/settings/…)
-├── segmenta-gui       GTK4 + Libadwaita
-└── segmenta-i18n      Catálogos es/pt-BR/en
-extension/             Extensión Chromium MV3 y WebExtension Firefox, tests y empaquetado
-packaging/             Unidades systemd de usuario, .desktop, AppStream, icono, notes, gates
-docs/openspec/         Especificaciones normativas 01-11
-docs/qa/               Evidencia de QA por release
-odd/tasks/             Documento ODD de cada release con specs y evidencia
-```
-
-- **Socket**: NDJSON JSON-RPC 2.0 en `$XDG_RUNTIME_DIR/segmenta/daemon.sock` (`0600`), con
-  `SO_PEERCRED` y límite de 1 MiB por mensaje.
-- **Estado**: `$XDG_DATA_HOME/segmenta/segmenta.db` (WAL, `user_version` para migraciones).
-  Los secretos **no** están ahí: se guardan por alias en el Secret Service
-  (`secret-tool`); sin llavero, un alta con credenciales falla con
-  `ERR_KEYRING_UNAVAILABLE` (1031) en lugar de escribir un archivo.
-- **Eventos**: `download.event` con `seq_id` monótono y `system.resync_required` si un cliente
-  se atrasa.
-
----
-
-## 7. Alcance y límites
-
-**Incluido en 0.1.2**: motor HTTP/HTTPS segmentado con hot-split, reanudación validada, checksum
-opcional, límite de velocidad global, reintentos con `Retry-After`, torrents, YouTube y HLS/DASH
-públicos, extensión de navegador con host nativo, captura con confirmación y watchdog, daemon con
-SQLite WAL e IPC, CLI completa, GUI GTK4/Libadwaita, `.deb` y dos ZIP de extensión.
-
-**Límites reales de 0.1.2**:
-
-- **Planificador de colas**: `queue.schedule` y `max_active` se persisten, pero el daemon todavía
-  no abre ni cierra ventanas ni limita la concurrencia. Está aprobado para 0.2.0.
-- **Antivirus y post-procesamiento**: no existen todavía; no hay cuarentena ni `ERR_ANTIVIRUS_FOUND`
-  en 0.1.2. Están aprobados para 0.2.0.
-- **Site logins**: no hay credenciales por dominio; las credenciales de una tarea se pasan como
-  cabeceras explícitas al darla de alta. Basic está aprobado para 0.2.0, sin Digest.
-- **DASH `SegmentList`/`SegmentBase`** queda fuera de alcance (`1043`); se soporta
-  `SegmentTemplate`. DRM, AES-128, streams en vivo, subtítulos y multi-audio se rechazan.
-- **Probe de `.torrent` multiarchivo**: la descarga multiarchivo funciona, pero `torrent probe`
-  todavía informa un único archivo de longitud 0 para esos `.torrent`; R2 lo corrige en 0.2.0.
-- **Extensión**: sólo YouTube en el sniffer; no hay Vimeo, Twitter ni adaptadores nuevos. Sin
-  firmas ni tiendas: Chrome estable exige **Cargar descomprimida** y Firefox una carga temporal.
-- **Firefox snap** no puede ejecutar el host nativo; usá el Firefox oficial o el `.deb`.
-- **Cold start** de la captura: carrera irreducible si el navegador entrega la descarga antes de
-  que exista el service worker (ver §3).
-- **Descompresión al vuelo**: si un servidor ignora `Accept-Encoding: identity` y comprime, la
-  descarga falla con `ERR_UNSUPPORTED` en lugar de escribir bytes comprimidos.
-- **Otros formatos**: Flatpak, Snap, AppImage, Windows, macOS, telemetría y actualizaciones
-  automáticas no están soportados.
-
----
-
-## 8. Desarrollo
+La extensión se carga manualmente; el `.deb` instala el host nativo, los manifiestos y los ZIP,
+pero no escribe perfiles del navegador.
 
 ```bash
-cargo build --release --workspace
-cargo test --workspace
+segmenta extension status
+segmenta extension prepare --family chromium   # o firefox / all
+segmenta extension install-native
+segmenta extension open --browser chrome
+```
+
+- **Chrome/Chromium/Brave/Edge/Vivaldi/Opera:** `chrome://extensions` → activar **Modo de
+  desarrollador** → **Cargar descomprimida** → carpeta
+  `~/.local/share/segmenta/extensions/chromium-<versión>`.
+- **Firefox oficial:** `about:debugging#/runtime/this-firefox` → **Cargar complemento temporal**
+  → `manifest.json` de `~/.local/share/segmenta/extensions/firefox-<versión>`. Firefox snap no
+  puede ejecutar el host nativo.
+
+Si una descarga pequeña termina antes de que la confirmación pueda pausarla, la extensión muestra
+una notificación con la opción de añadir la URL a Segmenta. No se pierde el archivo y no queda un
+fallo silencioso.
+
+## Cómo funciona
+
+```text
+extensión / CLI / GUI
+          │  JSON-RPC 2.0 (NDJSON, socket 0600)
+          ▼
+   segmenta-daemon ── SQLite WAL + Keyring
+          │
+          ├── segmenta-core: probe, scheduler, hot-split, pwrite, retry
+          ├── torrents: librqbit
+          ├── medios: yt-dlp / HLS / DASH / ffmpeg
+          └── postproceso: hook argv + ClamAV opcional
+```
+
+La GUI no accede a la red ni a SQLite: es un cliente del daemon. Por eso podés cerrarla sin detener
+las descargas y reconectarla sin perder el estado.
+
+| Componente | Responsabilidad |
+| --- | --- |
+| `crates/segmenta-core` | Motor puro de sondeo, planificación, segmentos, escritura y reintentos |
+| `crates/segmenta-daemon` | SQLite, IPC, colas, torrents, medios, postproceso y eventos |
+| `crates/segmenta-cli` | Cliente de terminal con salida humana y `--json` |
+| `crates/segmenta-gui` | Cliente GTK4/Libadwaita |
+| `crates/segmenta-i18n` | Catálogos es/en/pt-BR |
+| `extension/` | Extensión Chromium MV3, Firefox y tests |
+| `packaging/` | `.deb`, systemd, manifiestos nativos, AppStream, icono y gates |
+
+## Desarrollo y CI
+
+```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-
-# Extensión
+cargo test --workspace
+xvfb-run -a cargo test -p segmenta-gui
 node extension/tests/run.mjs
 node extension/tools/sync-shared.mjs --check
 node extension/tools/pack.mjs --check
 ```
 
-Pruebas de red con servidor de rangos local (sin red externa), SQLite en directorios temporales,
-IPC sobre sockets temporales, GUI con `xvfb-run` y CLI de punta a punta contra un daemon real.
+El workflow de GitHub Actions corre esos gates, construye el `.deb` y lo instala en un contenedor
+**Ubuntu 26.04** limpio; también comprueba que la GUI arranque bajo Xvfb y que el `yt-dlp` embebido
+sea reciente.
 
-```bash
-# Sólo la suite de GUI (necesita display virtual)
-xvfb-run -a cargo test -p segmenta-gui
+## Estado y límites
 
-# Paquete
-packaging/fetch-ytdlp.sh
-cargo build --release --workspace
-cargo deb -p segmenta-gui --no-build -o dist/
-packaging/check-package.sh dist/segmenta_0.2.1-1_amd64.deb 0.2.1
-sha256sum dist/segmenta_0.2.1-1_amd64.deb > dist/segmenta_0.2.1-1_amd64.deb.sha256
-```
+- **v0.2.1 publicada**: [Release y assets](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.1).
+- La extensión se carga manualmente; Chrome estable no instala una extensión externa sin tienda ni
+  política, y Firefox snap no ejecuta el host nativo.
+- Una descarga extremadamente pequeña puede completarse antes de que el service worker pueda
+  pausarla; en ese caso se notifica y se ofrece añadirla a Segmenta.
+- Sin DRM, AES-128, streams en vivo, subtítulos ni multi-audio.
+- `.deb` para Ubuntu 26.04+; no hay Flatpak, Snap, AppImage, Windows ni macOS.
 
----
+## Documentación
 
-## 9. Documentación
+- [`CHANGELOG.md`](CHANGELOG.md) — historial completo por versión.
+- Notas de release: [0.2.1](packaging/release-notes-0.2.1.md) · [0.2.0](packaging/release-notes-0.2.0.md) · [0.1.2](packaging/release-notes-0.1.2.md) · [0.1.1](packaging/release-notes-0.1.1.md) · [0.1.0](packaging/release-notes-0.1.0.md).
+- [`docs/openspec/`](docs/openspec/) — contratos de arquitectura, motor, IPC, persistencia, extensión y empaquetado.
+- [`docs/qa/`](docs/qa/) — evidencia de QA en Ubuntu.
+- [`odd/tasks/`](odd/tasks/) — planes y evidencia ODD por release.
 
-1. [`docs/openspec/11-decision-log.md`](docs/openspec/11-decision-log.md) — alcance y precedencia.
-2. [`docs/openspec/05-implementation-roadmap-for-agents.md`](docs/openspec/05-implementation-roadmap-for-agents.md) — orden de fases.
-3. `01` arquitectura, `02` motor, `03` extensión y Native Messaging, `04` UI/UX, `06` HTTP,
-   `07` IPC, `08` persistencia y recuperación, `09` seguridad de la extensión, `10` empaquetado
-   y pruebas.
-4. [`CHANGELOG.md`](CHANGELOG.md) — cambios por release.
-5. [`docs/qa/segmenta-0.2.1-live.md`](docs/qa/segmenta-0.2.1-live.md) — evidencia del QA de 0.2.1.
-6. [`odd/tasks/segmenta-0.2.1.md`](odd/tasks/segmenta-0.2.1.md) — plan y evidencia de 0.2.1;
-   [`odd/tasks/segmenta-0.2.md`](odd/tasks/segmenta-0.2.md) — plan de 0.2.0.
-7. [`packaging/release-notes-0.2.1.md`](packaging/release-notes-0.2.1.md) y
-   [`packaging/release-notes-0.2.0.md`](packaging/release-notes-0.2.0.md) — notas de cada release.
-
-Licencia: GPL-3.0-or-later (ver [`LICENSE`](LICENSE)).
+Licencia: **GPL-3.0-or-later** (ver [`LICENSE`](LICENSE)).
