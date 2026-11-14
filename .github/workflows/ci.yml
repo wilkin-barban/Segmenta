@@ -199,6 +199,7 @@ jobs:
       # The daemon requires MIN_YTDLP_VERSION = 2026.10.01. The comparison is
       # YYYY*10000 + MM*100 + DD so it stays readable without extra tooling.
       - name: The embedded yt-dlp runs and is recent enough
+        shell: bash
         run: |
           set -euo pipefail
           test -x /usr/share/segmenta/bin/yt-dlp
