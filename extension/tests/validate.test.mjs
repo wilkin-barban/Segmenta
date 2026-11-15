@@ -103,7 +103,7 @@ export default function suite({ test }) {
       'javascript:alert(1)',
       'data:text/html,x',
       'file:///etc/passwd',
-      'https://youtu.be/dQw4w9WgXcQ',
+      'https://m.youtube.com/watch?v=dQw4w9WgXcQ',
       'https://www.youtube.com/',
     ]) {
       assert.equal(

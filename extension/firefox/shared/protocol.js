@@ -11,7 +11,11 @@
   const YOUTUBE_BASE = 'https://' + YOUTUBE_HOST;
   // Short and mobile YouTube hosts are never accepted: only the canonical
   // watch/playlist pages of the desktop host are in scope.
-  const DENIED_HOSTS = ['youtu.be', 'www.youtu.be', 'm.youtube.com'];
+  // Short links are a real entry point (copy link, mobile share); only the mobile host
+  // stays out of scope.
+  const SHORT_HOST = 'youtu.be';
+  const DENIED_HOSTS = ['www.youtu.be', 'm.youtube.com'];
+  const VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
   const YOUTUBE_PATHS = ['/watch', '/playlist'];
   const PROBE_KINDS = ['video', 'playlist', 'stream'];
   const ADD_MODES = ['video', 'audio', 'playlist'];
@@ -170,6 +174,10 @@
     if (!host || DENIED_HOSTS.indexOf(host) !== -1) {
       return false;
     }
+    if (host === SHORT_HOST) {
+      // `youtu.be/<id>` only: no extra path, no other shape.
+      return VIDEO_ID_PATTERN.test(parsed.pathname.replace(/^\//, ''));
+    }
     if (host === YOUTUBE_HOST) {
       return YOUTUBE_PATHS.indexOf(parsed.pathname) !== -1;
     }
@@ -195,11 +203,19 @@
 
   function watchUrlFrom(href) {
     const parsed = parseUrl(href);
-    if (!parsed || normalizedHost(parsed) !== YOUTUBE_HOST || parsed.pathname !== '/watch') {
+    if (!parsed) {
+      return null;
+    }
+    const host = normalizedHost(parsed);
+    if (host === SHORT_HOST) {
+      const videoId = parsed.pathname.replace(/^\//, '');
+      return VIDEO_ID_PATTERN.test(videoId) ? YOUTUBE_BASE + '/watch?v=' + videoId : null;
+    }
+    if (host !== YOUTUBE_HOST || parsed.pathname !== '/watch') {
       return null;
     }
     const videoId = parsed.searchParams.get('v') || '';
-    if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
+    if (!VIDEO_ID_PATTERN.test(videoId)) {
       return null;
     }
     return YOUTUBE_BASE + '/watch?v=' + videoId;
@@ -207,10 +223,15 @@
 
   function playlistIdFrom(href) {
     const parsed = parseUrl(href);
-    if (!parsed || normalizedHost(parsed) !== YOUTUBE_HOST) {
+    if (!parsed) {
       return null;
     }
-    if (YOUTUBE_PATHS.indexOf(parsed.pathname) === -1) {
+    const host = normalizedHost(parsed);
+    const shortLink = host === SHORT_HOST;
+    if (!shortLink && host !== YOUTUBE_HOST) {
+      return null;
+    }
+    if (!shortLink && YOUTUBE_PATHS.indexOf(parsed.pathname) === -1) {
       return null;
     }
     const listId = parsed.searchParams.get('list') || '';

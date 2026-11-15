@@ -32,7 +32,11 @@ export default function suite({ test }) {
       'scripting',
       'storage',
     ]);
-    assert.deepEqual(manifest.host_permissions, ['https://www.youtube.com/*']);
+    // The short host is the same site: copy-link and share produce `youtu.be/<id>`.
+    assert.deepEqual(manifest.host_permissions, [
+      'https://www.youtube.com/*',
+      'https://youtu.be/*',
+    ]);
     assert.equal(Array.isArray(manifest.optional_host_permissions), true);
     assert.equal(manifest.optional_host_permissions.includes('https://*/*'), true);
     assert.equal(manifest.background.service_worker, 'background.js');
@@ -54,7 +58,7 @@ export default function suite({ test }) {
     assert.equal(isolated.js[isolated.js.length - 1], 'content.js');
     assert.equal(isolated.run_at, 'document_start');
     for (const entry of scripts) {
-      assert.deepEqual(entry.matches, ['https://www.youtube.com/*']);
+      assert.deepEqual(entry.matches, ['https://www.youtube.com/*', 'https://youtu.be/*']);
       for (const file of entry.js) {
         assert.equal(existsExt('chromium', file), true, `missing chromium/${file}`);
       }

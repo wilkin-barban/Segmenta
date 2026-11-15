@@ -37,7 +37,7 @@ export default function suite({ test }) {
       'data:text/html,<b>x</b>',
       'file:///etc/passwd',
       'http://www.youtube.com/watch?v=dQw4w9WgXcQ',
-      'https://youtu.be/dQw4w9WgXcQ',
+      'https://m.youtube.com/watch?v=dQw4w9WgXcQ',
       'https://m.youtube.com/watch?v=dQw4w9WgXcQ',
       'https://www.youtube.com/',
       'https://www.youtube.com/feed/subscriptions',
@@ -64,7 +64,28 @@ export default function suite({ test }) {
     assert.equal(P.isAllowedUrl(stream, { allowStreams: false }), false);
     assert.equal(P.isAllowedUrl('javascript:alert(1)', { allowStreams: true }), false);
     assert.equal(P.isAllowedUrl('file:///tmp/x.m3u8', { allowStreams: true }), false);
-    assert.equal(P.isAllowedUrl('https://youtu.be/dQw4w9WgXcQ', { allowStreams: true }), false);
+    // A short link is YouTube itself: allowed, and never treated as a stream.
+    assert.equal(P.isAllowedUrl('https://youtu.be/dQw4w9WgXcQ', { allowStreams: true }), true);
+  });
+
+  test('a youtu.be short link is allowed and canonicalised', async () => {
+    const P = await loadShared('SegmentaProtocol', 'protocol.js');
+    // A mix/radio link: the video id is what matters, the list is metadata.
+    const short = 'https://youtu.be/FBhSudzU_ck?list=RD-kvp4kwdUr0';
+    assert.equal(P.isAllowedUrl(short), true);
+    assert.equal(P.watchUrlFrom(short), 'https://www.youtube.com/watch?v=FBhSudzU_ck');
+    assert.equal(P.playlistIdFrom(short), 'RD-kvp4kwdUr0');
+    // The same video on the long host keeps working, with and without the mix list.
+    assert.equal(
+      P.isAllowedUrl('https://www.youtube.com/watch?v=FBhSudzU_ck&list=RD-kvp4kwdUr0'),
+      true,
+    );
+    // The short host is only accepted for a real id, and nothing else is opened.
+    assert.equal(P.isAllowedUrl('https://youtu.be/'), false);
+    assert.equal(P.isAllowedUrl('https://youtu.be/short'), false);
+    assert.equal(P.isAllowedUrl('https://youtu.be/FBhSudzU_ck/extra'), false);
+    assert.equal(P.isAllowedUrl('https://m.youtube.com/watch?v=FBhSudzU_ck'), false);
+    assert.equal(P.isAllowedUrl('https://youtu.be.evil.example/FBhSudzU_ck'), false);
   });
 
   test('isStreamUrl detects m3u8 and mpd manifests', async () => {
@@ -81,7 +102,8 @@ export default function suite({ test }) {
     assert.equal(P.watchUrlFrom(`${WATCH}&list=PL1234567890abcdef&t=10`), WATCH);
     assert.equal(P.watchUrlFrom('https://www.youtube.com/watch?v=short'), null);
     assert.equal(P.watchUrlFrom(PLAYLIST), null);
-    assert.equal(P.watchUrlFrom('https://youtu.be/dQw4w9WgXcQ'), null);
+    assert.equal(P.watchUrlFrom('https://youtu.be/dQw4w9WgXcQ'), 'https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+    assert.equal(P.watchUrlFrom('https://youtu.be/dQw4w9WgXcQ/extra'), null);
     assert.equal(P.watchUrlFrom('https://www.youtube.com/watch'), null);
     assert.equal(P.watchUrlFrom(undefined), null);
   });

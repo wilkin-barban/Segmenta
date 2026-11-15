@@ -42,18 +42,36 @@
     "notifications",
     "alarms"
   ],
-  "host_permissions": ["https://www.youtube.com/*"],
-  "optional_host_permissions": ["https://*/*"],
+  "host_permissions": [
+    "https://www.youtube.com/*",
+    "https://youtu.be/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*"
+  ],
   "content_scripts": [
     {
-      "matches": ["https://www.youtube.com/*"],
-      "js": ["document.js"],
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://youtu.be/*"
+      ],
+      "js": [
+        "document.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
-      "matches": ["https://www.youtube.com/*"],
-      "js": ["shared/browser-api.js", "shared/protocol.js", "shared/panel.js", "content.js"],
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://youtu.be/*"
+      ],
+      "js": [
+        "shared/browser-api.js",
+        "shared/protocol.js",
+        "shared/panel.js",
+        "content.js"
+      ],
       "run_at": "document_start",
       "world": "ISOLATED"
     }
