@@ -24,7 +24,7 @@
 set -euo pipefail
 
 readonly EXPECTED_PACKAGE="segmenta"
-readonly EXPECTED_VERSION="${2:-${SEGMENTA_EXPECTED_VERSION:-0.2.1}}"
+readonly EXPECTED_VERSION="${2:-${SEGMENTA_EXPECTED_VERSION:-0.2.2}}"
 
 readonly REQUIRED_PATHS=(
     "usr/bin/segmenta"

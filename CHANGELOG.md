@@ -5,6 +5,28 @@ Todos los cambios notables de Segmenta se documentan en este archivo.
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el proyecto usa
 [Versionado semántico](https://semver.org/lang/es/).
 
+## [0.2.2] - 2026-11-15
+
+Remediación de la captura de YouTube: enlaces cortos y mixes, un menú contextual que ya no duplica
+su id al rearrancar y detección de versión para que una copia vieja de la extensión deje de pasar
+desapercibida. Sin tag ni Release publicada.
+
+### Added
+
+- **Enlaces cortos `youtu.be` y mixes**: el panel reconoce la forma corta y las URLs con `list` y
+  arma la descarga con `--no-playlist`, así que baja la pista pedida y no la lista entera.
+- **Detección de versión de la extensión**: `extension.status` expone `prepared_version`,
+  `shipped_version` y `version_sync` (`match`, `mismatch`, `not-prepared`), comparando el
+  `manifest.json` de la copia preparada con el del archivo que trae el paquete.
+- La página **Navegadores** advierte cuando la extensión preparada no es la enviada, nombra ambas
+  versiones y ofrece **Recargar**, que abre la página de extensiones del navegador.
+
+### Fixed
+
+- `Cannot create item with duplicate id segmenta-add-torrent` en Chrome: el menú contextual se
+  crea con `removeAll()` antes de cada alta y el callback consume el error de la promesa, así que
+  rearrancar el service worker ya no duplica el id ni deja menús muertos.
+
 ## [0.2.1] - 2026-11-13
 
 Correcciones de interfaz, captura y motor, y gestión segura de descargas. Publicada como `v0.2.1`.

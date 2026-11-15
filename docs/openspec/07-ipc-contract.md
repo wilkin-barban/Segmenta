@@ -324,6 +324,7 @@ Los tres reciben el objeto JSON crudo y validan campo por campo (no usan struct 
        "manifest_path": "/etc/opt/chrome/native-messaging-hosts/io.github.wilkin.segmenta.json",
        "manifest_present": true, "user_manifest_present": false,
        "extension_installed": false, "prepared_path": null, "archive_path": "…",
+       "prepared_version": null, "shipped_version": "0.2.2", "version_sync": "not-prepared",
        "state": "native-ready"}
     ]
   }
@@ -335,6 +336,13 @@ Los tres reciben el objeto JSON crudo y validan campo por campo (no usan struct 
   `extension_installed` es una lectura del perfil del navegador
   (`<perfil>/Extensions/<id>` en Chromium, `<perfil>/extensions/<gecko-id>*` en Firefox);
   el daemon nunca escribe en un perfil.
+* **Comparación de versión (0.2.2)** — `prepared_version` es el `version` del `manifest.json` de
+  la copia preparada (`null` si no hay ninguna) y `shipped_version` es el `version` del
+  `manifest.json` dentro del ZIP enviado, con la versión del paquete como respaldo cuando el
+  archivo no se puede leer. `version_sync` resume el par: `not-prepared` (nada preparado), `match`
+  (la copia es la enviada) o `mismatch` (otra versión, o un par no verificable, que nunca se
+  informa como coincidencia). Son sólo lectura: el daemon nunca recarga ni reinstala una extensión
+  en un perfil.
 * **`extension.prepare`** — `{"family"?: "chromium"|"firefox"|"all"}` (default `all`).
   Descomprime el ZIP instalado en
   `$XDG_DATA_HOME/segmenta/extensions/<familia>-<versión>` y responde
