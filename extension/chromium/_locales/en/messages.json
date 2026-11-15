@@ -279,5 +279,9 @@
   "captureMissedBody": {
     "message": "The file $1 finished before it could be confirmed. It stayed in the browser; click this notification to add it to Segmenta.",
     "description": "Cuerpo con el nombre del archivo en $1 y la acción de añadirlo."
+  },
+  "contextMenuAddTorrent": {
+    "message": "Add to Segmenta",
+    "description": "Send this page to the Segmenta download manager."
   }
 }

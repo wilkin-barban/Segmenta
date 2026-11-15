@@ -58,12 +58,16 @@ export default function suite({ test }) {
   });
 
   test('every user-visible key used by the extension exists in the catalogs', async () => {
-    const catalog = readJson('_locales', 'es', 'messages.json');
+    // background.js is not optional: `contextMenuAddTorrent` lived only there and
+    // its missing catalog entry surfaced in Chrome as an unchecked lastError on
+    // `browser-api.js:176` ("Could not load the message") every time the menu was
+    // created. Every locale is checked, not only `es`.
     const sources = [
       readExt('shared', 'panel.js'),
       readExt('chromium', 'content.js'),
       readExt('chromium', 'popup.js'),
       readExt('chromium', 'confirm.js'),
+      readExt('chromium', 'background.js'),
     ];
     const used = matchAllKeys(sources.join('\n'), [
       "\\bt\\(\\s*'([A-Za-z0-9_]+)'",
@@ -71,12 +75,15 @@ export default function suite({ test }) {
       "text\\(\\s*t\\s*,\\s*'([A-Za-z0-9_]+)'",
     ]);
     assert.equal(used.size > 5, true, 'no i18n keys detected in sources');
-    for (const key of used) {
-      assert.equal(
-        Object.prototype.hasOwnProperty.call(catalog, key),
-        true,
-        `locale key missing for ${key}`,
-      );
+    for (const locale of ['en', 'es', 'pt_BR']) {
+      const catalog = readJson('_locales', locale, 'messages.json');
+      for (const key of used) {
+        assert.equal(
+          Object.prototype.hasOwnProperty.call(catalog, key),
+          true,
+          `locale key missing for ${key} in ${locale}`,
+        );
+      }
     }
   });
 
