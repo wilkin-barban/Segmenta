@@ -431,6 +431,136 @@ pub fn get_prepared_path(family: &str) -> Option<PathBuf> {
     }
 }
 
+/// Version the package ships, from `Cargo.toml`.
+pub fn package_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+/// Version declared by a manifest body, when it is a JSON object with a non-empty `version`.
+pub fn manifest_version_from_json(body: &str) -> Option<String> {
+    let parsed: serde_json::Value = serde_json::from_str(body).ok()?;
+    let version = parsed.get("version")?.as_str()?.trim();
+    if version.is_empty() {
+        None
+    } else {
+        Some(version.to_string())
+    }
+}
+
+/// Version declared by a `manifest.json` file.
+pub fn manifest_version(path: &Path) -> Option<String> {
+    manifest_version_from_json(&std::fs::read_to_string(path).ok()?)
+}
+
+/// Version declared by the `manifest.json` inside a shipped ZIP archive.
+pub fn archive_manifest_version(archive: &Path) -> Option<String> {
+    let file = std::fs::File::open(archive).ok()?;
+    let mut zip = zip::ZipArchive::new(file).ok()?;
+    let mut entry = zip.by_name("manifest.json").ok()?;
+    let mut body = String::new();
+    std::io::Read::read_to_string(&mut entry, &mut body).ok()?;
+    manifest_version_from_json(&body)
+}
+
+/// Whether the prepared extension is the one this package shipped (0.2.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VersionSync {
+    /// No prepared extension directory is present.
+    NotPrepared,
+    /// The prepared manifest declares the shipped version.
+    Match,
+    /// The prepared manifest declares another version, or cannot be compared.
+    Mismatch,
+}
+
+impl VersionSync {
+    /// Stable wire value used by `extension.status`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NotPrepared => "not-prepared",
+            Self::Match => "match",
+            Self::Mismatch => "mismatch",
+        }
+    }
+}
+
+/// Prepared-versus-shipped extension versions, as `extension.status` reports them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtensionVersionReport {
+    /// `version` of the prepared extension manifest, when one is prepared.
+    pub prepared: Option<String>,
+    /// `version` of the shipped archive, falling back to the package version.
+    pub shipped: Option<String>,
+    /// Comparison result; an unverifiable pair never claims a match.
+    pub sync: VersionSync,
+}
+
+/// Compare the prepared extension with the shipped archive/package version.
+pub fn extension_version_report(
+    prepared_dir: Option<&Path>,
+    archive: Option<&Path>,
+) -> ExtensionVersionReport {
+    let prepared = prepared_dir.and_then(|dir| manifest_version(&dir.join("manifest.json")));
+    let shipped = archive
+        .and_then(archive_manifest_version)
+        .unwrap_or_else(|| package_version().to_string());
+    let sync = match prepared.as_deref() {
+        None => VersionSync::NotPrepared,
+        Some(loaded) if loaded == shipped => VersionSync::Match,
+        Some(_) => VersionSync::Mismatch,
+    };
+    ExtensionVersionReport {
+        prepared,
+        shipped: Some(shipped),
+        sync,
+    }
+}
+
+/// One `extension.status` browser object, including the version comparison (0.2.2).
+pub fn browser_status_json(
+    browser: &Browser,
+    home: &Path,
+    config_home: &Path,
+) -> serde_json::Value {
+    // The loaded extension is the prepared copy: compare it with what this package ships.
+    let versions = extension_version_report(
+        browser.prepared_path.as_deref(),
+        browser.archive_path.as_deref(),
+    );
+    let installed = extension_installed(browser.id, home, config_home);
+    let state = if browser.unsupported.is_some() {
+        "unsupported"
+    } else if browser.command.is_none() {
+        "not-installed"
+    } else if installed {
+        "extension-installed"
+    } else if browser.manifest_present {
+        "native-ready"
+    } else {
+        "native-missing"
+    };
+    serde_json::json!({
+        "id": browser.id,
+        "name": browser.name,
+        "family": browser.family,
+        "command": browser.command,
+        "version": browser.version,
+        "unsupported": browser.unsupported,
+        "manifest_path": browser.manifest_path.to_string_lossy(),
+        "manifest_present": browser.manifest_present,
+        "user_manifest_present": user_manifest_path(browser.id, home, config_home)
+            .map(|path| path.is_file())
+            .unwrap_or(false),
+        "extension_installed": installed,
+        "prepared_path": browser.prepared_path.as_ref().map(|p| p.to_string_lossy().into_owned()),
+        "archive_path": browser.archive_path.as_ref().map(|p| p.to_string_lossy().into_owned()),
+        "prepared_version": versions.prepared,
+        "shipped_version": versions.shipped,
+        "version_sync": versions.sync.as_str(),
+        "state": state,
+    })
+}
+
 /// Unzip and prepare browser extension(s) into $XDG_DATA_HOME/segmenta/extensions/<family>-<version>.
 pub fn prepare_extension(family: &str) -> Result<Vec<(String, PathBuf)>, String> {
     let families = match family {
@@ -667,6 +797,107 @@ mod tests {
             body.contains(FIREFOX_EXTENSION_ID),
             "manifest does not declare {FIREFOX_EXTENSION_ID}"
         );
+    }
+
+    /// The prepared manifest version is compared against the shipped one, and the
+    /// three states (`match`, `mismatch`, `not-prepared`) are distinguishable (0.2.2).
+    #[test]
+    fn version_report_compares_prepared_and_shipped_manifests() {
+        let dir = fake_dir();
+        let prepared = dir.path().join("prepared");
+        std::fs::create_dir_all(&prepared).unwrap();
+        std::fs::write(prepared.join("manifest.json"), "{\"version\": \"0.2.2\"}").unwrap();
+        let archive = dir.path().join("segmenta-chromium.zip");
+        create_test_zip(&archive, "{\"version\": \"0.2.2\"}", true);
+
+        // They match.
+        let report = extension_version_report(Some(&prepared), Some(&archive));
+        assert_eq!(report.prepared.as_deref(), Some("0.2.2"));
+        assert_eq!(report.shipped.as_deref(), Some("0.2.2"));
+        assert_eq!(report.sync, VersionSync::Match);
+        assert_eq!(report.sync.as_str(), "match");
+
+        // They differ: the loaded extension is older than the shipped package.
+        std::fs::write(prepared.join("manifest.json"), "{\"version\": \"0.2.1\"}").unwrap();
+        let report = extension_version_report(Some(&prepared), Some(&archive));
+        assert_eq!(report.prepared.as_deref(), Some("0.2.1"));
+        assert_eq!(report.shipped.as_deref(), Some("0.2.2"));
+        assert_eq!(report.sync, VersionSync::Mismatch);
+
+        // Nothing was prepared.
+        let report = extension_version_report(None, Some(&archive));
+        assert_eq!(report.prepared, None);
+        assert_eq!(report.sync, VersionSync::NotPrepared);
+        assert_eq!(report.sync.as_str(), "not-prepared");
+
+        // Without a readable archive the package version is the shipped reference,
+        // and an unverifiable pair never claims a match.
+        std::fs::write(prepared.join("manifest.json"), "{\"version\": \"9.9.9\"}").unwrap();
+        let report = extension_version_report(Some(&prepared), None);
+        assert_eq!(report.shipped.as_deref(), Some(env!("CARGO_PKG_VERSION")));
+        assert_eq!(report.sync, VersionSync::Mismatch);
+        std::fs::write(
+            prepared.join("manifest.json"),
+            format!("{{\"version\": \"{}\"}}", env!("CARGO_PKG_VERSION")),
+        )
+        .unwrap();
+        let report = extension_version_report(Some(&prepared), None);
+        assert_eq!(report.sync, VersionSync::Match);
+    }
+
+    /// `extension.status` exposes the comparison so the GUI can warn (0.2.2).
+    #[test]
+    fn extension_status_json_exposes_the_version_comparison() {
+        let dir = fake_dir();
+        let home = dir.path().join("home");
+        let config_home = home.join(".config");
+        let archive = dir.path().join("segmenta-chromium.zip");
+        create_test_zip(&archive, "{\"version\": \"0.2.2\"}", true);
+        let prepared = dir.path().join("chromium-0.2.2");
+        std::fs::create_dir_all(prepared.join("_locales/en")).unwrap();
+        std::fs::write(prepared.join("manifest.json"), "{\"version\": \"0.2.2\"}").unwrap();
+
+        let browser = Browser {
+            id: "chrome",
+            name: "Google Chrome",
+            family: "chromium",
+            command: Some("/usr/bin/google-chrome".to_string()),
+            version: None,
+            unsupported: None,
+            manifest_path: dir
+                .path()
+                .join("NativeMessagingHosts/io.github.wilkin.segmenta.json"),
+            manifest_present: true,
+            prepared_path: Some(prepared.clone()),
+            archive_path: Some(archive.clone()),
+        };
+
+        // Coinciden.
+        let ready = browser_status_json(&browser, &home, &config_home);
+        assert_eq!(ready["version_sync"], "match");
+        assert_eq!(ready["prepared_version"], "0.2.2");
+        assert_eq!(ready["shipped_version"], "0.2.2");
+        assert_eq!(ready["state"], "native-ready");
+
+        // Difieren: la copia preparada quedó atrás del paquete shipped.
+        std::fs::write(prepared.join("manifest.json"), "{\"version\": \"0.2.1\"}").unwrap();
+        let stale = browser_status_json(&browser, &home, &config_home);
+        assert_eq!(stale["version_sync"], "mismatch");
+        assert_eq!(stale["prepared_version"], "0.2.1");
+        assert_eq!(stale["shipped_version"], "0.2.2");
+
+        // Nada preparado.
+        let missing = browser_status_json(
+            &Browser {
+                prepared_path: None,
+                ..browser
+            },
+            &home,
+            &config_home,
+        );
+        assert_eq!(missing["version_sync"], "not-prepared");
+        assert!(missing["prepared_version"].is_null());
+        assert_eq!(missing["shipped_version"], "0.2.2");
     }
 
     #[test]

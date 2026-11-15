@@ -3193,41 +3193,12 @@ impl RpcHandler for Manager {
                             "chromium": crate::browsers::shipped_archive_path("chromium").map(|p| p.to_string_lossy().into_owned()),
                             "firefox": crate::browsers::shipped_archive_path("firefox").map(|p| p.to_string_lossy().into_owned()),
                         },
-                        "browsers": browsers.iter().map(|browser| json!({
-                            "id": browser.id,
-                            "name": browser.name,
-                            "family": browser.family,
-                            "command": browser.command,
-                            "version": browser.version,
-                            "unsupported": browser.unsupported,
-                            "manifest_path": browser.manifest_path.to_string_lossy(),
-                            "manifest_present": browser.manifest_present,
-                            "user_manifest_present": crate::browsers::user_manifest_path(
-                                browser.id,
-                                &home,
-                                &config_home,
-                            )
-                            .map(|path| path.is_file())
-                            .unwrap_or(false),
-                            "extension_installed": crate::browsers::extension_installed(
-                                browser.id,
-                                &home,
-                                &config_home,
-                            ),
-                            "prepared_path": browser.prepared_path.as_ref().map(|p| p.to_string_lossy().into_owned()),
-                            "archive_path": browser.archive_path.as_ref().map(|p| p.to_string_lossy().into_owned()),
-                            "state": if browser.unsupported.is_some() {
-                                "unsupported"
-                            } else if browser.command.is_none() {
-                                "not-installed"
-                            } else if crate::browsers::extension_installed(browser.id, &home, &config_home) {
-                                "extension-installed"
-                            } else if browser.manifest_present {
-                                "native-ready"
-                            } else {
-                                "native-missing"
-                            },
-                        })).collect::<Vec<_>>(),
+                        "browsers": browsers
+                            .iter()
+                            .map(|browser| {
+                                crate::browsers::browser_status_json(browser, &home, &config_home)
+                            })
+                            .collect::<Vec<_>>(),
                     }))
                 }
                 "extension.prepare" => {
