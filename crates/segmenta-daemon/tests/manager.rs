@@ -198,12 +198,77 @@ async fn pause_rejects_terminal_states_without_changing_them() {
     }
 }
 
+/// The GUI's retry button is `download.resume`: a failed task must be retryable, and
+/// the old refusal (1003) left the user stuck with a dead row (0.2.4).
 #[tokio::test]
-async fn resume_rejects_terminal_states_without_changing_them() {
+async fn resume_retries_a_failed_task_and_clears_its_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+    let mut failed = record("failed-retry", DownloadStatus::Failed);
+    failed.error_code = Some(1044);
+    failed.error_message = Some("HTTP Error 403: Forbidden".to_string());
+    h.store.insert_download(&failed).unwrap();
+    let mut events = h.bus.subscribe();
+
+    let reply = call(
+        &h.manager,
+        "download.resume",
+        json!({ "task_id": "failed-retry" }),
+    )
+    .await
+    .expect("a failed task must be retryable from the interface");
+    assert!(
+        reply.get("status").and_then(Value::as_str).is_some(),
+        "resume did not answer a status: {reply:?}"
+    );
+    // The retry leaves the failed state and starts without the previous error.
+    let mut saw_pending = false;
+    while let Ok(event) = events.try_recv() {
+        if event.data["status"] == "pending" {
+            saw_pending = true;
+        }
+    }
+    assert!(saw_pending, "the retry did not leave the failed state");
+    let after = h.store.get("failed-retry").unwrap().unwrap();
+    assert_ne!(after.status, DownloadStatus::Failed);
+}
+
+/// A failed multimedia task is relaunched with the plan it had, not rejected.
+#[tokio::test]
+async fn resume_relaunches_a_failed_media_task() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = dir.path().join("yt-dlp");
+    std::fs::write(&fake, "#!/bin/sh\nexit 0\n").unwrap();
+    let mut permissions = std::fs::metadata(&fake).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&fake, permissions).unwrap();
+    std::env::set_var("SEGMENTA_YT_DLP", &fake);
+
+    let h = harness(dir.path());
+    let mut failed = record("media-retry", DownloadStatus::Failed);
+    failed.download_type = "youtube_video".to_string();
+    failed.media_kind = Some("video".to_string());
+    failed.media_format = Some("888p".to_string());
+    failed.error_code = Some(1044);
+    failed.error_message = Some("HTTP Error 403: Forbidden".to_string());
+    h.store.insert_download(&failed).unwrap();
+
+    let reply = call(
+        &h.manager,
+        "download.resume",
+        json!({ "task_id": "media-retry" }),
+    )
+    .await
+    .expect("a failed media task must be retryable");
+    assert_eq!(reply["status"], "downloading", "reply: {reply:?}");
+    std::env::remove_var("SEGMENTA_YT_DLP");
+}
+
+#[tokio::test]
+async fn resume_rejects_completed_and_cancelled_without_changing_them() {
     let dir = tempfile::tempdir().unwrap();
     let h = harness(dir.path());
     for (id, status) in [
-        ("failed", DownloadStatus::Failed),
         ("completed", DownloadStatus::Completed),
         ("cancelled", DownloadStatus::Cancelled),
     ] {

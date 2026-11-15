@@ -925,6 +925,12 @@ impl Manager {
                 return Err(RpcError::task_already_active(task_id));
             }
             DownloadStatus::Paused | DownloadStatus::Retrying => {}
+            // The GUI's retry/play button is `download.resume`, so a failed task must
+            // be resumable: refusing it with 1003 left the user stuck with a download
+            // that could never be retried from the interface.
+            DownloadStatus::Failed => {
+                return self.retry_failed_task(&record);
+            }
             other => {
                 return Err(RpcError::task_not_resumable_state(task_id, other.as_str()));
             }
@@ -944,6 +950,99 @@ impl Manager {
             .map(|record| record.status.as_str().to_string())
             .unwrap_or_else(|| DownloadStatus::Pending.as_str().to_string());
         Ok(json!({ "task_id": task_id, "status": status }))
+    }
+
+    /// Retry one failed task from the interface: clear the failure, then relaunch it.
+    ///
+    /// Media tasks keep their plan in the record (`url`, `media_kind`, `media_format`,
+    /// `final_path`), so they are relaunched directly instead of going through the
+    /// queue gate, which only knows direct downloads. Everything else rejoins the
+    /// queue like a paused task, so a full queue or a closed window still defers it.
+    fn retry_failed_task(&self, record: &DownloadRecord) -> Result<Value, RpcError> {
+        let task_id = record.id.as_str();
+        tracing::info!(task_id = %task_id, "download.resume after failure");
+        // The previous error must not survive the retry: the row has to look alive
+        // again, and a second failure has to report its own code.
+        self.store
+            .set_status(task_id, DownloadStatus::Pending, None)
+            .map_err(store_error)?;
+        self.bus.publish(
+            "task_updated",
+            Some(task_id),
+            json!({ "status": "pending" }),
+        );
+
+        let media_kind = crate::media::MediaTaskKind::parse(&record.download_type).filter(|kind| {
+            // HLS/DASH manifests use the stream pipeline, which needs its own probe.
+            matches!(
+                kind,
+                crate::media::MediaTaskKind::YoutubeVideo
+                    | crate::media::MediaTaskKind::YoutubeAudio
+                    | crate::media::MediaTaskKind::YoutubePlaylist
+            )
+        });
+        if let Some(kind) = media_kind {
+            let plan = self.media_plan_from_record(record, kind)?;
+            let tool = crate::media::locate_tool("yt-dlp").map_err(Self::media_error)?;
+            let final_path = PathBuf::from(&record.final_path);
+            self.store
+                .set_status(task_id, DownloadStatus::Downloading, None)
+                .map_err(store_error)?;
+            self.start_media_task(task_id.to_string(), plan, tool, final_path)?;
+            self.bus.publish(
+                "task_updated",
+                Some(task_id),
+                json!({ "status": "downloading" }),
+            );
+            return Ok(json!({ "task_id": task_id, "status": "downloading" }));
+        }
+
+        self.start_pending_for_queue(&record.queue_name)?;
+        let status = self
+            .store
+            .get(task_id)
+            .map_err(store_error)?
+            .map(|record| record.status.as_str().to_string())
+            .unwrap_or_else(|| DownloadStatus::Pending.as_str().to_string());
+        Ok(json!({ "task_id": task_id, "status": status }))
+    }
+
+    /// Rebuild the `yt-dlp` plan of a stored media task.
+    ///
+    /// `media_format` carries the requested height as `{height}p` for video (the real
+    /// height, which `media.add` resolves with `height<=N`) and the audio format id
+    /// for audio, so the retry asks for exactly what the user chose.
+    fn media_plan_from_record(
+        &self,
+        record: &DownloadRecord,
+        kind: crate::media::MediaTaskKind,
+    ) -> Result<crate::media::DownloadPlan, RpcError> {
+        let final_path = PathBuf::from(&record.final_path);
+        let output = if kind.is_playlist() {
+            final_path.join("%(title)s.%(ext)s")
+        } else {
+            final_path.clone()
+        };
+        let height = record
+            .media_format
+            .as_deref()
+            .and_then(|value| value.strip_suffix('p'))
+            .and_then(|value| value.parse::<u32>().ok());
+        let format = match kind {
+            crate::media::MediaTaskKind::YoutubeAudio => record.media_format.clone(),
+            _ => None,
+        };
+        Ok(crate::media::DownloadPlan {
+            kind,
+            url: record.url.clone(),
+            output,
+            format,
+            playlist_limit: record
+                .playlist_count
+                .map(|count| count.max(1) as usize)
+                .unwrap_or(100),
+            height,
+        })
     }
 
     async fn cancel_task(&self, params: CancelParams) -> Result<Value, RpcError> {
