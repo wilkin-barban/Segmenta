@@ -724,7 +724,6 @@ export default function suite({ test }) {
     assert.deepEqual(env.nativeCalls.map((call) => call.message.method), [
       'download.add',
       'media.status',
-      'system.open',
     ]);
   });
 

@@ -321,16 +321,13 @@ export default function suite({ test }) {
       'cancel:101',
       'erase:101',
       'notify',
-      'native:system.open',
     ]);
     assert.deepEqual(env.nativeCalls.map((call) => call.message.method), [
       'download.add',
       'media.status',
-      'system.open',
     ]);
     assert.equal(env.nativeCalls[0].message.params.url, 'https://example.com/archive.zip');
     assert.deepEqual(env.nativeCalls[1].message.params, { task_id: 'task-000001' });
-    assert.deepEqual(env.nativeCalls[2].message.params, { task_id: 'task-000001' });
   });
 
   test('background capture: denylisted host skipped', async () => {
@@ -433,12 +430,10 @@ export default function suite({ test }) {
       'cancel:106',
       'erase:106',
       'notify',
-      'native:system.open',
     ]);
     assert.deepEqual(env.nativeCalls.map((call) => call.message.method), [
       'download.add',
       'media.status',
-      'system.open',
     ]);
   });
 
@@ -471,25 +466,21 @@ export default function suite({ test }) {
       'cancel:107',
       'erase:107',
       'notify',
-      'native:system.open',
       'pause:108',
       'native:torrent.add',
       'native:media.status',
       'cancel:108',
       'erase:108',
       'notify',
-      'native:system.open',
     ]);
     assert.deepEqual(env.nativeCalls.map((call) => call.message.method), [
       'torrent.add',
       'media.status',
-      'system.open',
       'torrent.add',
       'media.status',
-      'system.open',
     ]);
-    assert.deepEqual(env.nativeCalls[2].message.params, { task_id: 'task-000001' });
-    assert.deepEqual(env.nativeCalls[5].message.params, { task_id: 'task-000002' });
+    assert.deepEqual(env.nativeCalls[1].message.params, { task_id: 'task-000001' });
+    assert.deepEqual(env.nativeCalls[3].message.params, { task_id: 'task-000002' });
   });
 
   test('background capture: r0* and r1* prefix match', async () => {
@@ -520,26 +511,22 @@ export default function suite({ test }) {
       'cancel:109',
       'erase:109',
       'notify',
-      'native:system.open',
       'pause:110',
       'native:download.add',
       'native:media.status',
       'cancel:110',
       'erase:110',
       'notify',
-      'native:system.open',
     ]);
     assert.deepEqual(env.nativeCalls.map((call) => call.message.method), [
       'download.add',
       'media.status',
-      'system.open',
       'download.add',
       'media.status',
-      'system.open',
     ]);
   });
 
-  test('background add: successful media.add focuses the task after the add reply', async () => {
+  test('background add: a successful add notifies but never opens the GUI', async () => {
     const taskId = '123e4567-e89b-12d3-a456-426614174000';
     const env = setupFakeBrowser({}, {
       'media.add': { jsonrpc: '2.0', id: 1, result: { task_id: taskId, status: 'downloading' } },
@@ -554,6 +541,15 @@ export default function suite({ test }) {
 
     assert.equal(result.ok, true);
     assert.equal(result.data.task_id, taskId);
+    // The panel already follows the task: adding it must not steal focus from Chrome.
+    assert.deepEqual(env.events, ['native:media.add', 'notify']);
+    assert.equal(env.nativeCalls.length, 1, 'the add must not call the host twice');
+    assert.equal(env.nativeCalls[0].message.method, 'media.add');
+    assert.equal(env.notifications.length, 1, 'the system notification is still sent');
+
+    // The explicit action is what opens the window, focused on that task.
+    const opened = await bg.handle({ type: 'segmenta.open', taskId: taskId }, SENDER);
+    assert.equal(opened.ok, true);
     assert.deepEqual(env.events, ['native:media.add', 'notify', 'native:system.open']);
     assert.deepEqual(env.nativeCalls[1].message, {
       jsonrpc: '2.0',
@@ -563,12 +559,12 @@ export default function suite({ test }) {
     });
   });
 
-  test('background add: a failing system.open never changes the add result', async () => {
+  test('background add: a failing notification never changes the add result', async () => {
     const taskId = '123e4567-e89b-12d3-a456-426614174001';
     const env = setupFakeBrowser(
       {},
       { 'media.add': { jsonrpc: '2.0', id: 1, result: { task_id: taskId, status: 'downloading' } } },
-      { failingMethods: ['system.open'] },
+      { failingMethods: ['notifications.create'] },
     );
     await loadShared('SegmentaApi', 'browser-api.js');
     await loadShared('SegmentaProtocol', 'protocol.js');
@@ -580,7 +576,7 @@ export default function suite({ test }) {
 
     assert.equal(result.ok, true);
     assert.equal(result.data.task_id, taskId);
-    assert.deepEqual(env.events, ['native:media.add', 'notify', 'native:system.open']);
+    assert.deepEqual(env.events, ['native:media.add', 'notify']);
   });
 
   test('background add: a missing notifications API never fails the add', async () => {
@@ -600,7 +596,7 @@ export default function suite({ test }) {
 
     assert.equal(result.ok, true);
     assert.equal(env.notifications.length, 0);
-    assert.deepEqual(env.events, ['native:media.add', 'native:system.open']);
+    assert.deepEqual(env.events, ['native:media.add']);
   });
 
   test('background add: an add without task_id is not focused', async () => {
@@ -651,9 +647,7 @@ export default function suite({ test }) {
     assert.equal(env.notifications[1].message.includes('/srv/segmenta/video'), true);
     assert.deepEqual(env.nativeCalls.map((call) => call.message.method), [
       'download.add',
-      'system.open',
       'media.add',
-      'system.open',
     ]);
   });
 

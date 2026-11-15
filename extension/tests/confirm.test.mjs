@@ -372,7 +372,7 @@ export default function suite({ test }) {
     assert.deepEqual(env.canceled, [202]);
     assert.deepEqual(env.erased, [{ id: 202 }]);
     assert.deepEqual(env.resumed, []);
-    assert.deepEqual(env.methods(), ['download.add', 'media.status', 'system.open']);
+    assert.deepEqual(env.methods(), ['download.add', 'media.status']);
     assert.deepEqual(env.nativeCalls[0].message.params, {
       url: ZIP_URL,
       filename: 'archive.zip',
@@ -394,7 +394,7 @@ export default function suite({ test }) {
     assert.equal(reply.ok, true);
     assert.deepEqual(env.canceled, [203]);
     assert.deepEqual(env.erased, [{ id: 203 }]);
-    assert.deepEqual(env.methods(), ['download.add', 'media.status', 'system.open']);
+    assert.deepEqual(env.methods(), ['download.add', 'media.status']);
   });
 
   test('capture confirm: a torrent confirmation goes through torrent.add', async () => {
@@ -409,7 +409,7 @@ export default function suite({ test }) {
     );
 
     assert.equal(reply.ok, true);
-    assert.deepEqual(env.methods(), ['torrent.add', 'media.status', 'system.open']);
+    assert.deepEqual(env.methods(), ['torrent.add', 'media.status']);
     assert.deepEqual(env.canceled, [204]);
     assert.deepEqual(env.erased, [{ id: 204 }]);
   });
@@ -505,7 +505,6 @@ export default function suite({ test }) {
       'cancel:209',
       'erase:209',
       'notify',
-      'native:system.open',
     ]);
   });
 
@@ -574,7 +573,7 @@ export default function suite({ test }) {
     assert.equal(first.ok, true);
     assert.equal(second.ok, false);
     assert.equal(second.error.code, 'ERR_CAPTURE_DECIDED');
-    assert.deepEqual(env.methods(), ['download.add', 'media.status', 'system.open'], 'the download is only added once');
+    assert.deepEqual(env.methods(), ['download.add', 'media.status'], 'the download is only added once');
     assert.deepEqual(env.canceled, [214]);
   });
 

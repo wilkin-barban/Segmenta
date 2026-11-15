@@ -337,11 +337,14 @@ if (typeof importScripts === 'function') {
     );
   }
 
-  function openTask(taskId) {
-    return callHost(() => PROTOCOL.buildSystemOpen({ taskId: taskId }));
-  }
-
-  /** Notify first (with the destination folder), then focus the task. Never throws. */
+  /**
+   * Announce a new task without stealing focus.
+   *
+   * The panel already follows the task in real time, so opening the GUI here took the
+   * user out of the browser for something they were watching anyway. The window opens
+   * only on an explicit click ("Abrir Segmenta" / "Ver progreso"), which travels as
+   * `segmenta.open` -> `system.open`. Never throws.
+   */
   async function announceAddedTask(data) {
     const taskId = data && typeof data.task_id === 'string' ? data.task_id.trim() : '';
     if (!taskId) {
@@ -350,10 +353,12 @@ if (typeof importScripts === 'function') {
     try {
       await showTaskNotification(destinationFolder(data));
     } catch (err) {}
-    try {
-      await openTask(taskId);
-    } catch (err) {}
     return true;
+  }
+
+  /** Focus an existing task in the desktop GUI (explicit user action only). */
+  function openTask(taskId) {
+    return callHost(() => PROTOCOL.buildSystemOpen({ taskId: taskId }));
   }
 
   // Calls the host once; on success it also announces the new task without ever
