@@ -121,8 +121,10 @@ Notas que este documento fija para no contradecir el código:
 * **Default: 720p** (`DEFAULT_QUALITY_HEIGHT`); si ese tier no está, se marca el tier más cercano.
   La comparación es por tier, no por altura: un grupo de 888 preselecciona 720p. La misma regla se
   aplica en `protocol.js` (`defaultQuality`, `qualityTier`) y en el daemon
-  (`media::default_quality`), que sigue agrupando el ladder `qualities` por altura exacta; por eso
-  la extensión completa los tiers desde la lista cruda `formats`.
+  (`media::default_quality`). Desde 0.2.4 el daemon agrupa por los mismos tiers nominales
+  (`media::quality_tier`, `QUALITY_TIERS`) y ambos extremos conservan la altura real del ganador.
+  La extensión conserva el fallback a la lista cruda `formats` cuando un daemon no envía un tier
+  para una altura resoluble.
 * Entradas adicionales, sólo cuando aplican:
   * `Playlist completa (N)` con límite editable (default 100, máximo 500) si el probe reporta
     playlist;
@@ -155,6 +157,16 @@ Notas que este documento fija para no contradecir el código:
 | `1043` | `ERR_STREAM_UNSUPPORTED` | subtítulos, multi-audio o formato fuera de alcance |
 | `1044` | `ERR_MEDIA_BACKEND` | `yt-dlp`/`ffmpeg` ausente, falló o quedó desactualizado |
 | `1045` | `ERR_MEDIA_NOT_PUBLIC` | contenido privado, con edad o no disponible |
+
+### 3.6. Catálogos de mensajes (0.2.4)
+* Toda clave de mensaje utilizada desde JavaScript debe existir en `en`, `es` y `pt_BR`.
+* Una clave faltante no es un vacío silencioso: provoca un `runtime.lastError` sin capturar
+  («Could not load the message») que en Chromium se manifiesta en `shared/browser-api.js:176`
+  al invocar `i18n.getMessage(key)`.
+* Los catálogos canónicos residen en `extension/_locales` y `pack.mjs` los copia a cada destino de
+  navegador (`extension/chromium/_locales` y `extension/firefox/_locales`).
+* La suite `extension/tests/locales.test.mjs` valida la paridad de uso en los tres catálogos e
+  inspecciona tanto los scripts de interfaz como `background.js`.
 
 ---
 

@@ -254,7 +254,7 @@ en una sola vista; estos son los enlaces directos:
 
 | Versión | Publicación | Release | Notas |
 | --- | --- | --- | --- |
-| **0.2.3** (última) | 2026-11-15 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.3) | [Notas](packaging/release-notes-0.2.3.md) |
+| **0.2.3** (última publicada) | 2026-11-15 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.3) | [Notas](packaging/release-notes-0.2.3.md) |
 | 0.2.1 | 2026-11-14 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.1) | [Notas](packaging/release-notes-0.2.1.md) |
 | 0.2.0 | 2026-11-13 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.0) | [Notas](packaging/release-notes-0.2.0.md) |
 | 0.1.2 | 2026-11-12 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.2) | [Notas](packaging/release-notes-0.1.2.md) |
@@ -265,6 +265,9 @@ en una sola vista; estos son los enlaces directos:
 
 ## Estado y límites
 
+- **0.2.4 no está publicada**: es el paquete local con el ladder `qualities` del daemon por tier
+  nominal, la clave de localización del menú contextual y el arranque robusto del content script.
+  Se instala desde el árbol (`dist/`), no desde un release.
 - **v0.2.3 publicada**: [Release y assets](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.3).
   Trae el panel de calidades por tier nominal, la detección de versión de la extensión, el menú
   contextual idempotente y el soporte de enlaces `youtu.be` y mixes de YouTube.

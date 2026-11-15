@@ -632,13 +632,17 @@ Respuesta:
 - `formats` llega deduplicado por altura: un solo candidato por altura, el mejor según muxed
   (vídeo+audio en un archivo), luego DASH video-only, luego el de mayor bitrate. `audio` va
   ordenado por bitrate descendente.
-- `qualities` es la escalera agrupada que consume la extensión: como máximo `2160` (etiqueta
-  `4K`), `1080`, `720`, `360` y una entrada `audio`, en ese orden y sólo cuando existen. Las
-  demás alturas que reporta el backend (480, 240, …) se omiten en la escalera aunque sigan en
-  `formats`. Cada entrada lleva `quality`, `label`, `height` (`null` para audio) y el
-  `format_id` del candidato elegido para esa altura.
-- `default_quality` vale `720` cuando está disponible; si no, la altura disponible más cercana
-  (los empates resuelven hacia la mayor calidad); si no hay ninguna altura, `audio`.
+- `qualities` (0.2.4) es la escalera agrupada que consume la extensión: se agrupa por **tier
+  nominal** (`>=1800` para `2160` con etiqueta `4K`, `>=900` para `1080`, `>=600` para `720`,
+  `>=300` para `360`), como máximo una entrada por tier ordenada de mayor a menor más una única
+  entrada `audio`, en ese orden y sólo cuando existen. `quality` y `label` llevan el tier nominal
+  (`4K` o `{tier}p`), mientras que `height` conserva la altura **real** del ganador del tier
+  (`null` para audio) para que `media.add` resuelva con `height<=N`; `format_id` lleva el ID del
+  candidato ganador. Las alturas por debajo de 300 se omiten de la escalera aunque sigan en
+  `formats`.
+- `default_quality` (0.2.4) compara por tier nominal: vale `"720"` cuando ese tier está disponible
+  (incluso si su altura real es distinta, ej. 888); si no, el tier disponible más cercano (los
+  empates resuelven hacia la mayor calidad); si no hay ningún tier de video, `audio`.
 - Los manifiestos HLS/DASH devuelven la misma escalera calculada sobre sus variantes o
   representaciones, sin entrada `audio`.
 - El daemon valida esquema y host; sólo `https://` y sin credenciales embebidas. Un host

@@ -7,8 +7,9 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 
 ## [0.2.4] - 2026-11-15
 
-El ladder de calidades del daemon usa los mismos tiers nominales que la extensión y la extensión deja
-de reportar un error de localización en Chrome.
+El ladder de calidades del daemon usa los mismos tiers nominales que la extensión, la extensión deja
+de reportar un error de localización en Chrome y el content script arranca también en documentos
+prerenderizados. Sin tag ni Release publicada.
 
 ### Fixed
 
@@ -19,6 +20,15 @@ de reportar un error de localización en Chrome.
   real y el `format_id` de su mejor candidato, para que `media.add` siga resolviendo con `height<=N`.
 - **`default_quality` por tier**: responde `720` cuando ese tier existe aunque su altura real sea
   888, en lugar de comparar distancias de altura.
+- **El content script no arrancaba en documentos prerenderizados**: al inyectarse antes de que
+  existiera `document.body`, el único listener era `DOMContentLoaded`; si ese evento ya había pasado
+  el panel no aparecía nunca y no quedaba ningún error. Ahora arranca con reintento acotado (evento
+  `load` + sondeo) e idempotente.
+- **Un contexto invalidado ya no rompe la página**: tras recargar la extensión, la pestaña abierta
+  conserva un content script huérfano y `chrome.i18n.getMessage` lanzaba «Extension context
+  invalidated» en `shared/browser-api.js:176`. `getMessage` devuelve `''` en ese caso, consume el
+  `lastError` de una clave ausente y las llamadas al runtime fallan con un código explícito
+  (`ERR_CONTEXT_INVALIDATED`) en lugar de un error nativo por llamada.
 - **`contextMenuAddTorrent` faltaba en los catálogos**: el menú contextual de torrents usaba
   `API.getMessage('contextMenuAddTorrent')` sin entrada en `_locales`, así que Chrome registraba un
   `lastError` sin leer («Could not load the message») señalado en `shared/browser-api.js:176`. La

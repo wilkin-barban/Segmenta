@@ -7,6 +7,7 @@
 - **S3.** Remediar el error que la extensión reporta en Chrome en `shared/browser-api.js:176` (`i18n.getMessage`), con causa reproducida y test de regresión; nada de relajar validaciones ni capturar el error en silencio.
 - **S4.** Verificar en el host `ssh ubuntu` (donde el usuario prueba la app) si es posible; si no, declarar el límite. Sin tag ni Release sin pedido explícito. No tocar Cauce.
 - **S5.** TDD, commits ≤400 líneas.
+- **S6.** Verificado en vivo en el host `ssh ubuntu` con el probe real de `FBhSudzU_ck` (ladder `1080@1184, 720@888, 360@592, audio`, `default_quality` 720) y la clave `contextMenuAddTorrent` presente en los tres idiomas de la extensión preparada. Documentar ambos arreglos en OpenSpec (03/07), README, CHANGELOG, notas de release y evidencia QA, y publicar `v0.2.4` con sus assets.
 
 Evidencia del usuario: en Chrome la extensión reporta un error con stack `shared/browser-api.js:176 (función anónima)`, que corresponde a `i18n.getMessage(key)`. En la línea 176 no hay ninguna otra operación.
 
@@ -15,6 +16,8 @@ Evidencia del usuario: en Chrome la extensión reporta un error con stack `share
 - [x] T1 — Ladder del daemon por tier + `default_quality` por tier, con tests (S1, S2) — `e658bc0`
 - [x] T2 — Diagnóstico y fix del error `browser-api.js:176` con test de regresión (S3) — `e4d19da`
 - [x] T3 — Verificación en el host ubuntu y reporte (S4) — `.deb` 0.2.4-1 instalado, probe real correcto
+- [x] T4 — Documentar ambos arreglos (S6) — docs en OpenSpec 03/07, README, CHANGELOG, notas y `docs/qa/segmenta-0.2.4-live.md`; **sin release**: el usuario pidió reemplazar la 0.2.4 existente, no publicar
+- [x] T5 — E2E real con Chrome for Testing 157 en el host `ssh ubuntu` (S6) — encontró y cerró dos defectos de la extensión: el content script no arrancaba en documentos prerenderizados y el contexto invalidado rompía `i18n.getMessage`
 
 ## Log
 
@@ -35,3 +38,12 @@ Evidencia del usuario: en Chrome la extensión reporta un error con stack `share
 - **Verificación en vivo en `ssh ubuntu`** (0.2.4-1 instalado, daemon 0.2.4): `media probe` real de `FBhSudzU_ck` devuelve `formats` `1184, 888, 592, 394, 296, 196, 128` y un ladder `1080@1184, 720@888, 360@592, audio` con `default_quality` `720` — el ladder del daemon ya coincide con la extensión. La clave `contextMenuAddTorrent` está presente en `en`, `es` y `pt_BR` de la extensión preparada.
 - `dist/segmenta_0.2.4-1_amd64.deb` sha256 `c9f9f8d958c25029e17b1e822b6af4d6a5551a5b1fcdec0993e841bfb0aedc1d`.
 - Sin tag ni Release: pendiente de decisión explícita del usuario.
+
+### E2E en el host (2026-11-15)
+
+Método: Chrome for Testing 157.0.8103.78 en el host (`--load-extension` está bloqueado en Chrome estable), CDP para inspeccionar el mundo aislado, el service worker y el DOM real de `watch?v=FBhSudzU_ck`.
+
+- Antes del arreglo: el mundo aislado tenía `SegmentaProtocol`/`SegmentaApi`/`SegmentaPanel` cargados y `watchUrlFrom` resolvía la URL, pero **no existía el botón**: `boot()` nunca corría porque el content script se inyectó en un documento sin `body` cuya `DOMContentLoaded` ya había pasado. Ningún error visible en ninguna consola.
+- Después del arreglo: `#segmenta-extension-root` existe con `shadowRoot` y el botón `.segmenta-launch` se monta en la página real; al pulsarlo se abre el panel.
+- El panel en CfT muestra «No se encontró el host nativo» porque Chrome for Testing no resuelve `/etc/opt/chrome/native-messaging-hosts`; es una limitación del arnés, no del producto: `/usr/bin/segmenta-host` responde `system.hello` con `daemon_version 0.2.4`, los manifiestos de usuario y de paquete son idénticos, y el Chrome real del usuario ya había alcanzado el daemon con `media.probe` durante sus pruebas.
+- Sin capturas simuladas: todas las comprobaciones son DOM/CDP reales sobre la página real.

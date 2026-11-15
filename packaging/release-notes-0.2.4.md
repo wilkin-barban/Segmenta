@@ -36,6 +36,16 @@ la etiqueta que la extensión preselecciona.
 `background.js` y los tres idiomas: antes miraba sólo los cuatro scripts de página y el catálogo
 español, que es exactamente por qué la clave faltante pasó desapercibida.
 
+## Verificación en vivo
+
+Prueba en vivo en el equipo del usuario (host `ssh ubuntu`, paquete `0.2.4-1` instalado, daemon `0.2.4`):
+el sondeo real con `media.probe` sobre `https://www.youtube.com/watch?v=FBhSudzU_ck` devuelve los
+formatos con alturas `1184, 888, 592, 394, 296, 196, 128` y un ladder
+`1080@1184, 720@888, 360@592, audio` con `default_quality: 720`, alineado con la extensión.
+La extensión preparada en `~/.local/share/segmenta/extensions/chromium-0.2.4` incluye la clave
+`contextMenuAddTorrent` en sus tres idiomas (`en`, `es`, `pt_BR`). La evidencia detallada está en
+[`docs/qa/segmenta-0.2.4-live.md`](https://github.com/wilkin-barban/Segmenta/blob/main/docs/qa/segmenta-0.2.4-live.md).
+
 ## Verificación
 
 - `cargo test --workspace` → 408 tests; `cargo fmt --all -- --check`, `cargo clippy -D warnings`.
@@ -43,6 +53,9 @@ español, que es exactamente por qué la clave faltante pasó desapercibida.
   extensión en cada idioma.
 - Test de regresión del daemon con las alturas reales de `FBhSudzU_ck`: el ladder queda
   `1080/720/360/audio` con alturas `1184/888/592` y `default_quality` responde `720`.
+- `packaging/check-package.sh dist/segmenta_0.2.4-1_amd64.deb 0.2.4` → `paths=23/23`.
+
+`.deb` sha256: `c9f9f8d958c25029e17b1e822b6af4d6a5551a5b1fcdec0993e841bfb0aedc1d`.
 
 ## Instalación
 
@@ -59,4 +72,4 @@ Segmenta en `chrome://extensions` (Chromium) o `about:debugging#/runtime/this-fi
 
 ### Todas las releases
 
-[0.2.4](https://github.com/wilkin-barban/Segmenta/releases) · [0.2.3](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.3) · [0.2.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.1) · [0.2.0](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.0) · [0.1.2](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.2) · [0.1.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.1) · [0.1.0](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.0) · [0.0.2](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.0.2) · [0.0.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.0.1)
+[0.2.4](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.4) · [0.2.3](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.3) · [0.2.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.1) · [0.2.0](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.0) · [0.1.2](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.2) · [0.1.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.1) · [0.1.0](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.0) · [0.0.2](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.0.2) · [0.0.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.0.1)
