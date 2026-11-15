@@ -7,9 +7,10 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 
 ## [0.2.4] - 2026-11-15
 
-El ladder de calidades del daemon usa los mismos tiers nominales que la extensión, la extensión deja
-de reportar un error de localización en Chrome y el content script arranca también en documentos
-prerenderizados. Sin tag ni Release publicada.
+El ladder de calidades usa los mismos tiers nominales en el daemon y en la extensión, la extensión
+deja de reportar errores de localización y de arranque, las descargas se recuperan de un fallo
+transitorio, la interfaz puede reintentar una tarea fallida y la extensión informa sin abrir la
+ventana. Publicada como `v0.2.4`.
 
 ### Fixed
 

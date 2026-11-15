@@ -135,8 +135,8 @@ jobs:
       - name: cargo deb -p segmenta-gui --no-build
         run: cargo deb -p segmenta-gui --no-build -o dist/
 
-      - name: packaging/check-package.sh dist/*.deb 0.2.1
-        run: packaging/check-package.sh dist/*.deb 0.2.1
+      - name: packaging/check-package.sh dist/*.deb 0.2.4
+        run: packaging/check-package.sh dist/*.deb 0.2.4
 
       - name: Upload the .deb
         uses: actions/upload-artifact@v4

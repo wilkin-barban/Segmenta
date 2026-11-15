@@ -100,11 +100,11 @@ sólo después de que el daemon demuestra que tiene los bytes.
 ### Opción recomendada: Release `.deb`
 
 Descargá el paquete y los checksums desde la
-[Release v0.2.3](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.3), luego:
+[Release v0.2.4](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.4), luego:
 
 ```bash
-sha256sum -c segmenta_0.2.3-SHA256SUMS
-sudo apt install ./segmenta_0.2.3-1_amd64.deb
+sha256sum -c segmenta_0.2.4-SHA256SUMS
+sudo apt install ./segmenta_0.2.4-1_amd64.deb
 systemctl --user daemon-reload
 systemctl --user enable --now segmenta.socket
 segmenta hello
@@ -254,7 +254,8 @@ en una sola vista; estos son los enlaces directos:
 
 | Versión | Publicación | Release | Notas |
 | --- | --- | --- | --- |
-| **0.2.3** (última publicada) | 2026-11-15 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.3) | [Notas](packaging/release-notes-0.2.3.md) |
+| **0.2.4** (última) | 2026-11-15 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.4) | [Notas](packaging/release-notes-0.2.4.md) |
+| 0.2.3 | 2026-11-15 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.3) | [Notas](packaging/release-notes-0.2.3.md) |
 | 0.2.1 | 2026-11-14 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.1) | [Notas](packaging/release-notes-0.2.1.md) |
 | 0.2.0 | 2026-11-13 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.0) | [Notas](packaging/release-notes-0.2.0.md) |
 | 0.1.2 | 2026-11-12 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.2) | [Notas](packaging/release-notes-0.1.2.md) |
@@ -265,9 +266,10 @@ en una sola vista; estos son los enlaces directos:
 
 ## Estado y límites
 
-- **0.2.4 no está publicada**: es el paquete local con el ladder `qualities` del daemon por tier
-  nominal, la clave de localización del menú contextual y el arranque robusto del content script.
-  Se instala desde el árbol (`dist/`), no desde un release.
+- **v0.2.4 publicada**: [Release y assets](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.4).
+  Alinea el ladder `qualities` a tiers nominales en el daemon y en la extensión, arregla la
+  localización del menú contextual, agrega un fallback progresivo ante un 403 transitorio, permite
+  reintentar tareas fallidas desde la interfaz y deja de abrir la ventana al añadir una descarga.
 - **v0.2.3 publicada**: [Release y assets](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.3).
   Trae el panel de calidades por tier nominal, la detección de versión de la extensión, el menú
   contextual idempotente y el soporte de enlaces `youtu.be` y mixes de YouTube.
