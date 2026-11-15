@@ -102,15 +102,27 @@ Notas que este documento fija para no contradecir el código:
   (`config.onProbe`) y el panel se pinta cuando llega la respuesta; sin click no hay llamada al
   daemon ni al host.
 
-### 3.3. Panel de calidades de 0.1.2
-* El daemon devuelve una escalera agrupada (`media::QUALITY_HEIGHTS`) y el panel renderiza **sólo**
-  esa escalera, deduplicada por altura y en este orden:
-  * `4K` (2160p), `1080p`, `720p`, `360p`, y una única entrada **«Solo audio»**.
-* Las alturas fuera de la escalera (480p, 240p, …) se descartan: no se muestra la lista cruda de
-  formatos de `yt-dlp`.
-* **Default: 720p** (`DEFAULT_QUALITY_HEIGHT`); si 720p no existe, se marca la altura más cercana.
-  La misma regla se aplica en `protocol.js` (`defaultQuality`) y en el daemon
-  (`media::default_quality`).
+### 3.3. Panel de calidades (0.2.3: tiers nominales)
+* La escalera es **nominal**: el panel agrupa por *tier* de resolución y no por altura exacta, en
+  este orden:
+  * `4K` (≥1800), `1080p` (≥900), `720p` (≥600), `360p` (≥300), y una única entrada
+    **«Solo audio»**.
+* El primer candidato de cada tier —el mejor según el orden del daemon— gana el grupo y **conserva
+  su altura real y su `format_id`**; el `quality` del grupo es el tier. Enviar la altura real es
+  válido porque `media.add` resuelve con `height<=N`
+  (`b[height<=N]/18/bv*[height<=N]+ba/…`): un grupo de tier 720 con altura real 888 selecciona la
+  pista de 888 y nunca sobrepasa el tier.
+* Las alturas por debajo del tier más bajo (240p, 144p) se descartan: no se muestra la lista cruda
+  de formatos de `yt-dlp`.
+* **Caso real que motivó el cambio**: `media.probe --kind video` de `FBhSudzU_ck` devuelve alturas
+  `1184, 888, 592, 394, 296, 196, 128` y un ladder `qualities` que sólo trae audio. Agrupando por
+  altura exacta no quedaba ninguna opción de video y el panel caía al fallback de sólo audio; con
+  tiers nominales ofrece `1080p`, `720p`, `360p` y «Solo audio».
+* **Default: 720p** (`DEFAULT_QUALITY_HEIGHT`); si ese tier no está, se marca el tier más cercano.
+  La comparación es por tier, no por altura: un grupo de 888 preselecciona 720p. La misma regla se
+  aplica en `protocol.js` (`defaultQuality`, `qualityTier`) y en el daemon
+  (`media::default_quality`), que sigue agrupando el ladder `qualities` por altura exacta; por eso
+  la extensión completa los tiers desde la lista cruda `formats`.
 * Entradas adicionales, sólo cuando aplican:
   * `Playlist completa (N)` con límite editable (default 100, máximo 500) si el probe reporta
     playlist;

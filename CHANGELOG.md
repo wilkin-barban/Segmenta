@@ -8,7 +8,9 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 ## [0.2.3] - 2026-11-15
 
 La extensión vuelve a ofrecer resoluciones de video cuando YouTube reporta alturas que no son las
-de la escalera nominal. Sin tag ni Release publicada.
+de la escalera nominal. Publicada como `v0.2.3`. Con esa release, quien venía de 0.2.1 recibe
+también el soporte de enlaces cortos y mixes, el menú contextual idempotente y la detección de
+versión de extensión de 0.2.2, que no se publicó como versión independiente.
 
 ### Fixed
 

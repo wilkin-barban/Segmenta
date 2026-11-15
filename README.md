@@ -100,11 +100,11 @@ sólo después de que el daemon demuestra que tiene los bytes.
 ### Opción recomendada: Release `.deb`
 
 Descargá el paquete y los checksums desde la
-[Release v0.2.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.1), luego:
+[Release v0.2.3](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.3), luego:
 
 ```bash
-sha256sum -c segmenta_0.2.1-SHA256SUMS
-sudo apt install ./segmenta_0.2.1-1_amd64.deb
+sha256sum -c segmenta_0.2.3-SHA256SUMS
+sudo apt install ./segmenta_0.2.3-1_amd64.deb
 systemctl --user daemon-reload
 systemctl --user enable --now segmenta.socket
 segmenta hello
@@ -254,7 +254,8 @@ en una sola vista; estos son los enlaces directos:
 
 | Versión | Publicación | Release | Notas |
 | --- | --- | --- | --- |
-| **0.2.1** (última) | 2026-11-14 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.1) | [Notas](packaging/release-notes-0.2.1.md) |
+| **0.2.3** (última) | 2026-11-15 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.3) | [Notas](packaging/release-notes-0.2.3.md) |
+| 0.2.1 | 2026-11-14 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.1) | [Notas](packaging/release-notes-0.2.1.md) |
 | 0.2.0 | 2026-11-13 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.0) | [Notas](packaging/release-notes-0.2.0.md) |
 | 0.1.2 | 2026-11-12 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.2) | [Notas](packaging/release-notes-0.1.2.md) |
 | 0.1.1 | 2026-11-12 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.1.1) | [Notas](packaging/release-notes-0.1.1.md) |
@@ -264,7 +265,12 @@ en una sola vista; estos son los enlaces directos:
 
 ## Estado y límites
 
-- **v0.2.1 publicada**: [Release y assets](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.1).
+- **v0.2.3 publicada**: [Release y assets](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.3).
+  Trae el panel de calidades por tier nominal, la detección de versión de la extensión, el menú
+  contextual idempotente y el soporte de enlaces `youtu.be` y mixes de YouTube.
+- **0.2.2 no se publicó** como versión independiente: fue un paquete local de remediación. Quien
+  venía de 0.2.1 recibe sus cambios dentro de 0.2.3.
+- **v0.2.1**: [Release y assets](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.1).
 - La extensión se carga manualmente; Chrome estable no instala una extensión externa sin tienda ni
   política, y Firefox snap no ejecuta el host nativo.
 - Una descarga extremadamente pequeña puede completarse antes de que el service worker pueda

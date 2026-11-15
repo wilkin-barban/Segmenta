@@ -7,6 +7,7 @@
 - **S3.** Test de regresión con las alturas reales `1184, 888, 592, 394, 296, 196, 128`: grupos 1080/720/360 y audio, `defaultQuality` 720. Además un caso 1920×888 / 1280×592.
 - **S4.** Bump a **0.2.3** para extensión y paquete, ZIPs y `.deb` regenerados, instalado en Ubuntu y extensión preparada. Sin tag ni Release.
 - **S5.** Pasos de reload y sha256 en el reporte. No tocar Cauce.
+- **S6.** Verificado en vivo por el usuario en el host `ssh ubuntu` (el panel ya ofrece resoluciones y descarga el video). Documentar las mejoras acumuladas desde 0.2.1 —soporte `youtu.be`/mix, menú contextual idempotente, detección de versión y tiers nominales de calidad— en OpenSpec, README, CHANGELOG, notas de release y evidencia QA, y publicar `v0.2.3` con sus assets (`.deb`, `sha256`, ZIPs). Sin publicar `v0.2.2`: esa versión fue un paquete local de remediación, nunca distribuido.
 
 Causa confirmada por el usuario: `media.probe --kind video` de `FBhSudzU_ck` devuelve `1184, 888, 592, 394, 296, 196, 128` y `qualities` sólo audio; `groupQualities()` conservaba únicamente `2160/1080/720/360` exactos, no encontraba ningún video y caía al fallback de sólo audio. No es YouTube.
 
@@ -19,6 +20,7 @@ Causa confirmada por el usuario: `media.probe --kind video` de `FBhSudzU_ck` dev
 - [x] T5 — ZIPs y `.deb` regenerados, tests y `check-package.sh` (S4) — `dist/segmenta-extension-0.2.3.zip`, `dist/segmenta-firefox-0.2.3.zip`, `dist/segmenta_0.2.3-1_amd64.deb`, gate `paths=23/23`
 - [x] T6 — `.deb` instalado y extensión 0.2.3 preparada (S4) — `dpkg -s segmenta` = `0.2.3-1`, `daemon 0.2.3 (protocol v1)`, preparadas `chromium-0.2.3` y `firefox-0.2.3`
 - [x] T7 — Reporte con sha256 y pasos de reload (S5)
+- [ ] T8 — Documentar las mejoras y publicar `v0.2.3` con assets (S6)
 
 ## Log
 
