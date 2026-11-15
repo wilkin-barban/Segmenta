@@ -18,6 +18,8 @@ Evidencia del usuario: en Chrome la extensión reporta un error con stack `share
 - [x] T3 — Verificación en el host ubuntu y reporte (S4) — `.deb` 0.2.4-1 instalado, probe real correcto
 - [x] T4 — Documentar ambos arreglos (S6) — docs en OpenSpec 03/07, README, CHANGELOG, notas y `docs/qa/segmenta-0.2.4-live.md`; **sin release**: el usuario pidió reemplazar la 0.2.4 existente, no publicar
 - [x] T6 — Descargas del host: clasificación de fallos transitorios (S7)
+- [x] T7 — Reintento acotado en `run_download` con fallback `18` ante fallo transitorio de stream (S8) — `41ad5dc`
+- [x] T8 — `resume_task` acepta `Failed`, limpia el error y relanza la tarea multimedia (S9) — `ca3cf1e`
 - [x] T5 — E2E real con Chrome for Testing 157 en el host `ssh ubuntu` (S6) — encontró y cerró dos defectos de la extensión: el content script no arrancaba en documentos prerenderizados y el contexto invalidado rompía `i18n.getMessage`
 
 ## Log
@@ -57,3 +59,10 @@ Método: Chrome for Testing 157.0.8103.78 en el host (`--load-extension` está b
 - Se corrigieron dos clasificaciones: un 403 ya no se reporta como «no es público» sino como «el host rechazó este stream; reintentá la descarga», y sólo un `yt-dlp: not found` real afirma que falta la herramienta.
 - Después del arreglo, tres descargas consecutivas del mismo video terminaron en `completed` (0.2.4-1, sha256 `c805e1462e38c04c76c59d62dae3a3227895f08ff023fe212cd388a6cec68ae2`).
 - Pendiente propuesto (requiere decisión): reintento automático acotado en `run_download` con el fallback progresivo `18` cuando el stderr es transitorio; hoy el usuario debe reintentar.
+
+### Reintento y reintento desde la UI (2026-11-15)
+
+- `run_download` hace un solo reintento con el formato progresivo `18` cuando el stderr es un fallo transitorio de stream (403/Forbidden, `unable to download video data`, bot-check, timeout, connection reset) en una tarea de YouTube; el resto de los fallos y el segundo intento conservan su código. Test unitario de la decisión.
+- `resume_task` acepta `DownloadStatus::Failed`: limpia `error_code`/`error_message`, y para tareas multimedia reconstruye el plan desde el registro (`media_plan_from_record`: playlist usa `%(title)s.%(ext)s`, audio conserva el `format_id`, video toma la altura real de `media_format`) y llama `start_media_task`; el resto vuelve a la cola. Tests: tarea directa fallida y tarea de YouTube fallida.
+- Verificación en el host con `.deb` 0.2.4-1 (sha256 `da75169515c110f7bc9948ce8e12fe30a0e1126b289143398e8d23c983cfab83`): `segmenta-cli resume f5a5c645…` sobre la tarea que había fallado con 1045 respondió `downloading` y terminó en `completed` con 26 841 221 bytes, en la ruta original.
+- Limpieza en `~/Descargas`: se borraron los duplicados de prueba con sufijo `(1)`…`(9)` y un fragmento `.f251.webm`; queda el archivo original. La carpeta pasó de 516 MB a 284 MB.

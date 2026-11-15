@@ -29,6 +29,14 @@ prerenderizados. Sin tag ni Release publicada.
   invalidated» en `shared/browser-api.js:176`. `getMessage` devuelve `''` en ese caso, consume el
   `lastError` de una clave ausente y las llamadas al runtime fallan con un código explícito
   (`ERR_CONTEXT_INVALIDATED`) en lugar de un error nativo por llamada.
+- **Reintento automático de un stream transitorio**: cuando el host de medios responde 403 a un
+  formato concreto (habitual desde IPs de datacenter), `run_download` hace **un** intento más con el
+  formato progresivo `18` antes de marcar la tarea como fallida. Cualquier otro fallo, y el segundo
+  intento, conservan su propio código.
+- **Reintento desde la interfaz**: `download.resume` acepta tareas en `Failed`, limpia
+  `error_code`/`error_message` y relanza la tarea multimedia con el plan guardado (URL, tipo, altura
+  o formato de audio, destino). Antes respondía `1003` y el botón de reintentar de la GUI no podía
+  recuperar una descarga fallida.
 - **`contextMenuAddTorrent` faltaba en los catálogos**: el menú contextual de torrents usaba
   `API.getMessage('contextMenuAddTorrent')` sin entrada en `_locales`, así que Chrome registraba un
   `lastError` sin leer («Could not load the message») señalado en `shared/browser-api.js:176`. La
