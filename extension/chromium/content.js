@@ -248,16 +248,55 @@
     }
   }
 
+  let booted = false;
+
   function boot() {
+    if (booted) {
+      return;
+    }
+    booted = true;
     startSniffer();
     sync();
     global.document.addEventListener('yt-navigate-finish', sync, true);
     global.addEventListener('popstate', sync, true);
   }
 
-  if (global.document && global.document.body) {
-    boot();
-  } else if (global.document) {
+  /**
+   * Boots as soon as the document can hold the panel.
+   *
+   * Waiting only for `DOMContentLoaded` is not enough: when the injection lands in a
+   * prerendered page, or after that event already fired with no body yet, the
+   * listener never runs again and the floating button never appears: the panel is
+   * simply absent with no error anywhere. A bounded retry covers both cases and
+   * stays idempotent through `booted`.
+   */
+  function scheduleBoot() {
+    if (!global.document) {
+      return;
+    }
+    if (global.document.body) {
+      boot();
+      return;
+    }
     global.document.addEventListener('DOMContentLoaded', boot, { once: true });
+    global.addEventListener('load', boot, { once: true });
+    if (typeof global.setTimeout !== 'function') {
+      return;
+    }
+    let attempts = 0;
+    const retry = () => {
+      if (booted || attempts >= 40) {
+        return;
+      }
+      attempts += 1;
+      if (global.document && global.document.body) {
+        boot();
+        return;
+      }
+      global.setTimeout(retry, 250);
+    };
+    global.setTimeout(retry, 250);
   }
+
+  scheduleBoot();
 })(typeof globalThis !== 'undefined' ? globalThis : this);

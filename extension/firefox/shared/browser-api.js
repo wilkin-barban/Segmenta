@@ -40,7 +40,35 @@
 
   function lastError(api) {
     const runtime = api && api.runtime;
-    return runtime && runtime.lastError ? runtime.lastError : null;
+    const error = runtime && runtime.lastError ? runtime.lastError : null;
+    // Reading it is what clears it. An unread `lastError` is reported by Chrome as
+    // an extension error on the very line that triggered it, which is how a missing
+    // catalog entry used to surface as a red error on `browser-api.js:176`.
+    if (error && runtime) {
+      runtime.lastError = undefined;
+    }
+    return error;
+  }
+
+  /**
+   * The extension was reloaded or updated while this page stayed open: the content
+   * script keeps running but its extension context is gone and every browser call
+   * throws. One clear, actionable error beats a native throw per call.
+   */
+  function invalidatedContextError() {
+    const error = new Error('segmenta: extension context invalidated; reload the page');
+    error.code = 'ERR_CONTEXT_INVALIDATED';
+    return error;
+  }
+
+  function isInvalidatedContext(error) {
+    const message = error && error.message ? String(error.message) : '';
+    return /context invalidated/i.test(message);
+  }
+
+  function runtimeUnavailableError() {
+    const anyApi = global.browser || global.chrome || global.segmentaApi;
+    return anyApi ? invalidatedContextError() : new Error('segmenta: runtime unavailable');
   }
 
   // Wraps both callback style and promise style APIs in a single promise.
@@ -70,7 +98,7 @@
       } catch (err) {
         if (!settled) {
           settled = true;
-          reject(err);
+          reject(isInvalidatedContext(err) ? invalidatedContextError() : err);
         }
         return;
       }
@@ -84,7 +112,7 @@
         }, (err) => {
           if (!settled) {
             settled = true;
-            reject(err);
+            reject(isInvalidatedContext(err) ? invalidatedContextError() : err);
           }
         });
         return;
@@ -151,7 +179,7 @@
   function sendMessage(message) {
     const api = resolveRuntime();
     if (!api || !api.runtime) {
-      return Promise.reject(new Error('segmenta: runtime unavailable'));
+      return Promise.reject(runtimeUnavailableError());
     }
     return invoke(api, api.runtime, 'sendMessage', [message]);
   }
@@ -162,20 +190,38 @@
   function sendNative(message) {
     const api = resolveRuntime();
     if (!api || !api.runtime) {
-      return Promise.reject(new Error('segmenta: runtime unavailable'));
+      return Promise.reject(runtimeUnavailableError());
     }
     return invoke(api, api.runtime, 'sendNativeMessage', [NATIVE_HOST, message]);
   }
 
+  /**
+   * Translates one catalog key, never throwing.
+   *
+   * Every call site already falls back to a default when the answer is empty, so a
+   * missing entry, a non-string key or an orphaned context (the extension was
+   * reloaded under an open tab) resolve to '' instead of breaking page scripts.
+   */
   function getMessage(key, substitutions) {
     const i18n = resolveI18n();
     if (!i18n || typeof i18n.getMessage !== 'function') {
       return '';
     }
-    const text = substitutions === undefined
-      ? i18n.getMessage(key)
-      : i18n.getMessage(key, substitutions);
-    return typeof text === 'string' ? text : '';
+    if (typeof key !== 'string' || key === '') {
+      return '';
+    }
+    try {
+      const text = substitutions === undefined
+        ? i18n.getMessage(key)
+        : i18n.getMessage(key, substitutions);
+      // A missing catalog entry leaves a lastError behind; consume it here.
+      if (lastError(resolveRuntime())) {
+        return '';
+      }
+      return typeof text === 'string' ? text : '';
+    } catch (err) {
+      return '';
+    }
   }
 
   function addListener(listener) {

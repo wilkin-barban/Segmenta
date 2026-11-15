@@ -118,4 +118,67 @@ export default function suite({ test }) {
     assert.equal(api.getMessage('toastSaved', ['/home/x']), 'toastSaved:/home/x');
     assert.equal(api.getMessage('missingKey'), '');
   });
+
+  // Reloading the extension leaves every open tab with an orphaned content script:
+  // `chrome.i18n.getMessage` then throws "Extension context invalidated" at
+  // browser-api.js:176, which Chrome reports as an anonymous function even though
+  // the catalog is complete. The helper must not re-throw into the page.
+  test('getMessage survives an invalidated extension context', async () => {
+    installFakeChrome();
+    const api = await loadShared('SegmentaApi', 'browser-api.js');
+    globalThis.chrome.i18n.getMessage = () => {
+      throw new Error('Extension context invalidated.');
+    };
+    assert.equal(api.getMessage('panelTitle'), '');
+    assert.equal(api.getMessage('toastSaved', ['/home/x']), '');
+  });
+
+  test('getMessage ignores a non-string key instead of calling the browser api', async () => {
+    installFakeChrome();
+    const api = await loadShared('SegmentaApi', 'browser-api.js');
+    const seen = [];
+    globalThis.chrome.i18n.getMessage = (key) => {
+      seen.push(key);
+      return 'ok';
+    };
+    assert.equal(api.getMessage(undefined), '');
+    assert.equal(api.getMessage(null), '');
+    assert.equal(api.getMessage({}), '');
+    assert.equal(api.getMessage(''), '');
+    assert.deepEqual(seen, []);
+    assert.equal(api.getMessage('panelTitle'), 'ok');
+  });
+
+  test('a missing catalog entry never leaves an unchecked lastError behind', async () => {
+    installFakeChrome();
+    const api = await loadShared('SegmentaApi', 'browser-api.js');
+    globalThis.chrome.i18n.getMessage = () => {
+      globalThis.chrome.runtime.lastError = { message: 'Could not load the message.' };
+      return '';
+    };
+    assert.equal(api.getMessage('missingKey'), '');
+    // Consumed: the next call must not fail because of a stale lastError.
+    globalThis.chrome.i18n.getMessage = () => 'panelTitle';
+    assert.equal(api.getMessage('panelTitle'), 'panelTitle');
+  });
+
+  test('a dead runtime reports the invalidated context instead of a native throw', async () => {
+    installFakeChrome();
+    const api = await loadShared('SegmentaApi', 'browser-api.js');
+    // What Chrome leaves behind in an orphaned content script: the namespace is
+    // there, every call throws "Extension context invalidated" and nothing answers.
+    globalThis.chrome.runtime = {
+      id: EXTENSION_ID,
+      lastError: undefined,
+      sendMessage() {
+        throw new Error('Extension context invalidated.');
+      },
+      sendNativeMessage() {
+        throw new Error('Extension context invalidated.');
+      },
+    };
+    globalThis.segmentaApi = globalThis.chrome;
+    await assert.rejects(api.sendMessage({ ping: 1 }), /context invalidated/i);
+    await assert.rejects(api.sendNative({ jsonrpc: '2.0' }), /context invalidated/i);
+  });
 }
