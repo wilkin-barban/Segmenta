@@ -20,7 +20,7 @@ Causa confirmada por el usuario: `media.probe --kind video` de `FBhSudzU_ck` dev
 - [x] T5 — ZIPs y `.deb` regenerados, tests y `check-package.sh` (S4) — `dist/segmenta-extension-0.2.3.zip`, `dist/segmenta-firefox-0.2.3.zip`, `dist/segmenta_0.2.3-1_amd64.deb`, gate `paths=23/23`
 - [x] T6 — `.deb` instalado y extensión 0.2.3 preparada (S4) — `dpkg -s segmenta` = `0.2.3-1`, `daemon 0.2.3 (protocol v1)`, preparadas `chromium-0.2.3` y `firefox-0.2.3`
 - [x] T7 — Reporte con sha256 y pasos de reload (S5)
-- [ ] T8 — Documentar las mejoras y publicar `v0.2.3` con assets (S6)
+- [x] T8 — Documentar las mejoras y publicar `v0.2.3` con assets (S6) — `fc2df81` + tag `v0.2.3` + Release con 5 assets
 
 ## Log
 
@@ -45,4 +45,10 @@ Causa confirmada por el usuario: `media.probe --kind video` de `FBhSudzU_ck` dev
 - `packaging/check-package.sh dist/segmenta_0.2.3-1_amd64.deb 0.2.3` → `summary: OK … version=0.2.3-1 paths=23/23 lintian=not installed, skipped`.
 - `.deb` sha256 `4c9726c88ab160671d9dffb61e8a3ffb3b83955546f9ef67f7404b117359d4a0`.
 - `media.probe` real desde este host devolvió `1045 ERR_MEDIA_NOT_PUBLIC` para `FBhSudzU_ck` (IP de datacenter); la captura real la aportó el usuario y el test la reproduce byte a byte. No se simuló ninguna captura.
-- Sin tag ni GitHub Release (S4). Cauce sin cambios.
+- Sin tag ni GitHub Release durante la implementación (S4); la publicación llegó después con autorización explícita del usuario. Cauce sin cambios.
+
+### Publicación (2026-11-15)
+
+- Docs: `fc2df81` — OpenSpec 03 §3.3 (tiers nominales) y 04 (panel + advertencia de versión en Navegadores), README (instalación y tabla de releases a 0.2.3, nota de que 0.2.2 no se publicó), CHANGELOG 0.2.3, `packaging/release-notes-0.2.3.md` reescrito para publicación y `docs/qa/segmenta-0.2.3-live.md` con la verificación del usuario.
+- Tag anotado `v0.2.3` pusheado; GitHub Release publicada (no draft, no prerelease) con `segmenta_0.2.3-1_amd64.deb`, su `.sha256`, `segmenta_0.2.3-SHA256SUMS` (deb + ambos ZIP), `segmenta-extension-0.2.3.zip` y `segmenta-firefox-0.2.3.zip`.
+- `v0.2.2` no se taggeó: nunca se distribuyó; sus cambios van incluidos en 0.2.3.
