@@ -5,6 +5,26 @@ Todos los cambios notables de Segmenta se documentan en este archivo.
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el proyecto usa
 [Versionado semántico](https://semver.org/lang/es/).
 
+## [0.2.4] - 2026-11-15
+
+El ladder de calidades del daemon usa los mismos tiers nominales que la extensión y la extensión deja
+de reportar un error de localización en Chrome.
+
+### Fixed
+
+- **Ladder `qualities` por tier**: `media::group_probe` agrupaba por altura exacta, así que un video
+  con pistas de `1184/888/592/394/296/196/128` producía un ladder con **sólo audio** y la extensión
+  no tenía nada que ofrecer aunque agrupara bien. Ahora `quality_tier` aplica los mismos cortes que
+  `protocol.js` (≥1800 → 4K, ≥900 → 1080, ≥600 → 720, ≥300 → 360) y cada entrada conserva la altura
+  real y el `format_id` de su mejor candidato, para que `media.add` siga resolviendo con `height<=N`.
+- **`default_quality` por tier**: responde `720` cuando ese tier existe aunque su altura real sea
+  888, en lugar de comparar distancias de altura.
+- **`contextMenuAddTorrent` faltaba en los catálogos**: el menú contextual de torrents usaba
+  `API.getMessage('contextMenuAddTorrent')` sin entrada en `_locales`, así que Chrome registraba un
+  `lastError` sin leer («Could not load the message») señalado en `shared/browser-api.js:176`. La
+  clave existe ahora en `en`, `es` y `pt_BR`, y el test de locales escanea `background.js` y los tres
+  idiomas, que era el hueco que lo dejaba pasar.
+
 ## [0.2.3] - 2026-11-15
 
 La extensión vuelve a ofrecer resoluciones de video cuando YouTube reporta alturas que no son las

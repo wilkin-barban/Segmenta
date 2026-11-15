@@ -126,8 +126,8 @@ sudo apt-get install build-essential pkg-config libgtk-4-dev libadwaita-1-dev \
 packaging/fetch-ytdlp.sh
 cargo build --release --workspace
 cargo deb -p segmenta-gui --no-build -o dist/
-packaging/check-package.sh dist/segmenta_0.2.3-1_amd64.deb 0.2.3
-sudo apt install ./dist/segmenta_0.2.3-1_amd64.deb
+packaging/check-package.sh dist/segmenta_0.2.4-1_amd64.deb 0.2.4
+sudo apt install ./dist/segmenta_0.2.4-1_amd64.deb
 systemctl --user daemon-reload
 systemctl --user enable --now segmenta.socket
 ```
