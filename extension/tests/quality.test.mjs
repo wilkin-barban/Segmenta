@@ -136,6 +136,78 @@ export default function suite({ test }) {
     assert.equal(P.defaultQuality(null), '');
   });
 
+  // YouTube ships real heights, not the nominal ladder: `FBhSudzU_ck` probes
+  // 1184/888/592/394/296/196/128 and the daemon ladder only carries audio. Grouping
+  // by exact height found no video at all and fell back to audio-only.
+  test('groupQualities tiers real heights instead of matching them exactly', async () => {
+    const P = await loadShared('SegmentaProtocol', 'protocol.js');
+    const probe = {
+      title: 'Mix',
+      formats: [
+        videoFormat('399', 1184),
+        videoFormat('398', 888),
+        videoFormat('397', 592),
+        videoFormat('18', 394),
+        videoFormat('136', 296),
+        videoFormat('135', 196),
+        videoFormat('160', 128),
+      ],
+      audio: [audioFormat('251')],
+      // The daemon grouped nothing but audio for this video.
+      qualities: [{ quality: 'audio', label: 'audio', height: null, format_id: '251' }],
+      playlist: { count: 0, entries: [] },
+    };
+    const grouped = P.groupQualities(probe);
+    assert.deepEqual(
+      grouped.map((entry) => entry.quality),
+      ['1080', '720', '360', 'audio'],
+    );
+    // The real height and the chosen format id survive, so the request stays valid.
+    const video = grouped.filter((entry) => entry.mode === 'video');
+    assert.deepEqual(
+      video.map((entry) => entry.height),
+      [1184, 888, 592],
+    );
+    assert.deepEqual(
+      video.map((entry) => entry.formatId),
+      ['399', '398', '397'],
+    );
+    assert.deepEqual(
+      video.map((entry) => entry.label),
+      ['1080p', '720p', '360p'],
+    );
+    // 720 is the tier, not the real height.
+    assert.equal(P.defaultQuality(grouped), '720');
+    assert.equal(grouped[grouped.length - 1].mode, 'audio');
+  });
+
+  test('groupQualities tiers near-ladder sizes like 1920x888 and 1280x592', async () => {
+    const P = await loadShared('SegmentaProtocol', 'protocol.js');
+    const grouped = P.groupQualities({
+      formats: [videoFormat('398', 888), videoFormat('397', 592)],
+      audio: [audioFormat('251')],
+    });
+    assert.deepEqual(
+      grouped.map((entry) => [entry.quality, entry.height, entry.formatId]),
+      [
+        ['720', 888, '398'],
+        ['360', 592, '397'],
+        ['audio', null, '251'],
+      ],
+    );
+    assert.equal(P.defaultQuality(grouped), '720');
+    // The first candidate of a tier wins, and a second one never adds a tier.
+    const repeated = P.groupQualities({
+      formats: [videoFormat('a1', 900), videoFormat('a2', 1080), videoFormat('a3', 1184)],
+    });
+    assert.deepEqual(
+      repeated.map((entry) => entry.quality),
+      ['1080'],
+    );
+    assert.equal(repeated[0].formatId, 'a1');
+    assert.equal(repeated[0].height, 900);
+  });
+
   test('the audio-only probe defaults to the audio target', async () => {
     const P = await loadShared('SegmentaProtocol', 'protocol.js');
     const grouped = P.groupQualities({ formats: [], audio: [audioFormat('140')] });

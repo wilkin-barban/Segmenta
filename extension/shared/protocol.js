@@ -27,7 +27,15 @@
   const MAX_HEIGHT = 4320;
   const MAX_TEXT_LENGTH = 200;
   // Grouped quality ladder (S9): the panel never renders the raw backend list.
+  // The ladder is nominal: a real height lands in a tier, it is never matched
+  // exactly, because YouTube reports 1184/888/592/394 instead of 1080/720/360.
   const QUALITY_HEIGHTS = [2160, 1080, 720, 360];
+  const QUALITY_TIERS = [
+    { height: 2160, min: 1800 },
+    { height: 1080, min: 900 },
+    { height: 720, min: 600 },
+    { height: 360, min: 300 },
+  ];
   const DEFAULT_QUALITY_HEIGHT = 720;
   const AUDIO_QUALITY = 'audio';
   const STREAM_PATTERN = /\.(m3u8|mpd)$/i;
@@ -284,11 +292,31 @@
   }
 
   /**
-   * Dedupes the probe formats by height and returns only the documented ladder:
-   * 2160, 1080, 720, 360 and one audio-only entry, in that order. Heights outside
-   * the ladder (480, 240, ...) are dropped, so the panel can never render an
-   * endless raw list. Accepts a probe result or a raw format array, and is pure:
-   * no DOM, no browser APIs.
+   * Nominal tier of a real height: 1184 lands in 1080, 888 in 720, 592 in 360.
+   * Heights below the lowest tier (240, 144) stay out of the documented ladder,
+   * so `null` means "not offered", never "closest tier".
+   */
+  function qualityTier(height) {
+    const real = heightOf(height);
+    if (real === null) {
+      return null;
+    }
+    for (const tier of QUALITY_TIERS) {
+      if (real >= tier.min) {
+        return tier.height;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Dedupes the probe formats by nominal tier and returns only the documented
+   * ladder: 2160, 1080, 720, 360 and one audio-only entry, in that order. The
+   * first (best) candidate of a tier wins and keeps its real height and its
+   * `format_id`, so the request the panel sends stays valid; heights below the
+   * lowest tier (240, 144) are dropped, so the panel can never render an endless
+   * raw list. Accepts a probe result or a raw format array, and is pure: no DOM,
+   * no browser APIs.
    */
   function groupQualities(formats) {
     const source = formats && typeof formats === 'object' && !Array.isArray(formats) ? formats : null;
@@ -302,14 +330,17 @@
 
     const kept = {};
     function keep(height, formatId) {
-      if (Object.prototype.hasOwnProperty.call(kept, height)) {
+      const tier = qualityTier(height);
+      if (tier === null || Object.prototype.hasOwnProperty.call(kept, tier)) {
         return;
       }
-      kept[height] = {
-        quality: String(height),
-        label: qualityLabel(height),
+      kept[tier] = {
+        quality: String(tier),
+        label: qualityLabel(tier),
         mode: 'video',
-        height: height,
+        // The real height, not the tier: `media.add` clamps with `height<=N`, so
+        // sending 1184 still resolves to the 1184 candidate and never overshoots.
+        height: heightOf(height),
         formatId: sanitizeText(formatId, 64),
       };
     }
@@ -375,8 +406,9 @@
   }
 
   /**
-   * Preselected quality: 720 whenever it is in the ladder, else the closest
-   * available height (ties resolve to the higher quality), else 'audio'.
+   * Preselected quality: 720 whenever that tier is in the ladder, else the
+   * closest tier (ties resolve to the higher quality), else 'audio'. Compares
+   * tiers, not real heights, so a 888 tier still preselects 720.
    */
   function defaultQuality(qualities) {
     const list = Array.isArray(qualities) ? qualities : [];
@@ -386,15 +418,16 @@
       if (!entry || typeof entry !== 'object') {
         continue;
       }
-      const height = heightOf(entry.height);
-      if (height === null) {
+      // An entry may carry its tier in `quality`; the height is the fallback.
+      const tier = qualityTier(entry.height) || qualityTier(entry.quality);
+      if (tier === null) {
         continue;
       }
-      const tag = typeof entry.quality === 'string' && entry.quality ? entry.quality : String(height);
-      if (height === DEFAULT_QUALITY_HEIGHT) {
+      const tag = typeof entry.quality === 'string' && entry.quality ? entry.quality : String(tier);
+      if (tier === DEFAULT_QUALITY_HEIGHT) {
         return tag;
       }
-      const distance = Math.abs(height - DEFAULT_QUALITY_HEIGHT);
+      const distance = Math.abs(tier - DEFAULT_QUALITY_HEIGHT);
       if (closestDistance === null || distance < closestDistance) {
         closestDistance = distance;
         closestTag = tag;
@@ -666,6 +699,7 @@
     clampPlaylistLimit: clampPlaylistLimit,
     clampHeight: clampHeight,
     qualityLabel: qualityLabel,
+    qualityTier: qualityTier,
     groupQualities: groupQualities,
     defaultQuality: defaultQuality,
     parseHttpUrl: parseHttpUrl,
