@@ -297,6 +297,12 @@
       const ns = resolveNamespace(null, 'contextMenus');
       return invoke(resolveRuntime(), ns, 'create', [createProperties]);
     },
+    // Removing first is what makes a second worker boot idempotent: the menu survives the
+    // suspension and creating the same id again is an error.
+    removeAll() {
+      const ns = resolveNamespace(null, 'contextMenus');
+      return invoke(resolveRuntime(), ns, 'removeAll', []);
+    },
     onClicked: createEventWrapper('contextMenus', 'onClicked'),
   };
 

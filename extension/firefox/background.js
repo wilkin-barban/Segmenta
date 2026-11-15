@@ -180,6 +180,17 @@ if (typeof importScripts === 'function') {
   const NOTIFICATION_ID = 'segmenta-task-added';
   const NOTIFICATION_TIMEOUT_MS = 2000;
   const NOTIFICATION_ICON = 'icons/icon-128.png';
+  const CONTEXT_MENU_ID = 'segmenta-add-torrent';
+
+  /// Debug line, off unless the diagnostic flag is set. Never prints a URL or a secret.
+  function trace(where, message) {
+    if (!globalThis.SEGMENTA_DEBUG_CAPTURE) {
+      return;
+    }
+    if (typeof console !== 'undefined' && console.debug) {
+      console.debug('segmenta: ' + where + ': ' + message);
+    }
+  }
   const CAPTURE_KEPT_NOTIFICATION_ID = 'segmenta-capture-kept';
   const CAPTURE_MISSED_TITLE_FALLBACK = 'Descarga terminada en el navegador';
   const CAPTURE_MISSED_BODY_FALLBACK =
@@ -1386,15 +1397,41 @@ if (typeof importScripts === 'function') {
     API.windows.onRemoved.addListener(onWindowRemoved);
   }
 
+  /// Creates the torrent shortcut exactly once per browser session.
+  ///
+  /// Menus outlive a suspended service worker, so every boot runs this again; creating the
+  /// same id twice is an error (`Cannot create item with duplicate id`) that lands in
+  /// `runtime.lastError`. Removing first is the idempotent, warning-free path.
   function setupContextMenus() {
-    if (API && API.contextMenus && typeof API.contextMenus.create === 'function') {
-      API.contextMenus.create({
-        id: 'segmenta-add-torrent',
-        title: API.getMessage ? (API.getMessage('contextMenuAddTorrent') || 'Anadir a Segmenta') : 'Anadir a Segmenta',
-        contexts: ['link'],
-        targetUrlPatterns: ['magnet:*', 'http://*/*.torrent', 'https://*/*.torrent'],
-      });
+    const menus = API && API.contextMenus ? API.contextMenus : null;
+    if (!menus || typeof menus.create !== 'function') {
+      return;
     }
+    const create = () => {
+      // The promise form consumes `runtime.lastError`, so a duplicate can never surface as
+      // an unchecked error in the console.
+      return Promise.resolve(
+        menus.create({
+          id: CONTEXT_MENU_ID,
+          title: API.getMessage
+            ? API.getMessage('contextMenuAddTorrent') || 'Anadir a Segmenta'
+            : 'Anadir a Segmenta',
+          contexts: ['link'],
+          targetUrlPatterns: ['magnet:*', 'http://*/*.torrent', 'https://*/*.torrent'],
+        }),
+      ).catch((err) => {
+        trace('contextMenus.create', err && err.message ? err.message : String(err));
+      });
+    };
+    if (typeof menus.removeAll === 'function') {
+      Promise.resolve(menus.removeAll())
+        .catch((err) => {
+          trace('contextMenus.removeAll', err && err.message ? err.message : String(err));
+        })
+        .then(create);
+      return;
+    }
+    create();
   }
 
   // Context menus outlive a suspended worker, so creating the shortcut on every boot
@@ -1512,6 +1549,7 @@ if (typeof importScripts === 'function') {
     runReconcile: runReconcile,
     getCachedSettings: getCachedSettings,
     matchExtension: matchExtension,
+    setupContextMenus: setupContextMenus,
     isHostDenylisted: isHostDenylisted,
     parentDirectory: parentDirectory,
     destinationFolder: destinationFolder,

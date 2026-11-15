@@ -175,7 +175,22 @@ function setupFakeBrowser(settings, nativeReplies = {}, options = {}) {
       },
     },
     contextMenus: {
-      create(props, cb) { if (cb) cb(); },
+      // Chrome keeps the menu across worker suspensions and rejects a second create with
+      // the same id: the fake must reproduce that or the test proves nothing.
+      menus: [],
+      duplicates: 0,
+      create(props, cb) {
+        if (this.menus.some((entry) => entry.id === props.id)) {
+          this.duplicates += 1;
+          if (globalThis.chrome.runtime) {
+            globalThis.chrome.runtime.lastError = { message: 'Cannot create item with duplicate id ' + props.id };
+          }
+        } else {
+          this.menus.push(props);
+        }
+        if (cb) cb();
+      },
+      removeAll(cb) { this.menus = []; if (cb) cb(); },
       onClicked: { listeners: [], addListener(fn) { this.listeners.push(fn); } },
     },
   };
@@ -184,7 +199,7 @@ function setupFakeBrowser(settings, nativeReplies = {}, options = {}) {
     globalThis.chrome.notifications = notificationsApi;
   }
 
-  return { canceled, erased, nativeCalls, notifications, events, storageData, alarms, statusCalls: () => statusCalls };
+  return { canceled, erased, nativeCalls, notifications, events, storageData, alarms, statusCalls: () => statusCalls, menus: () => globalThis.chrome.contextMenus.menus, menuDuplicates: () => globalThis.chrome.contextMenus.duplicates };
 }
 
 function statusEventIndices(events) {
@@ -204,6 +219,35 @@ function resetTiming(bg) {
 }
 
 export default function suite({ test }) {
+  test('the torrent menu is created once and never logs a duplicate id', async () => {
+    // A suspended worker boots again with the menu already there: creating the same id
+    // lands in runtime.lastError unless the old one is removed first.
+    const env = setupFakeBrowser({
+      capture_enabled: true,
+      capture_extensions: ['zip'],
+      domain_denylist: [],
+    });
+    await loadShared('SegmentaApi', 'browser-api.js');
+    await loadShared('SegmentaProtocol', 'protocol.js');
+    await loadShared('SegmentaValidate', 'validate.js');
+    // Two boots in one process: the module is imported once per worker instance, so the
+    // second boot is modelled by re-running the exported setup.
+    await import(new URL('../chromium/background.js', import.meta.url).href);
+    const bg = globalThis.SegmentaBackground;
+    if (typeof bg.setupContextMenus === 'function') {
+      bg.setupContextMenus();
+    }
+    // `removeAll` and `create` settle asynchronously through the API adapter.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const created = env.menus().filter((entry) => entry.id === 'segmenta-add-torrent');
+    assert.equal(created.length, 1, 'the shortcut must exist exactly once');
+    assert.equal(
+      env.menuDuplicates(),
+      0,
+      'creating the menu twice reported a duplicate id',
+    );
+  });
+
   test('protocol buildDownloadAdd and buildTorrentAdd work correctly', async () => {
     const P = await loadShared('SegmentaProtocol', 'protocol.js');
     const dl = P.buildDownloadAdd({ url: 'https://example.com/file.zip', filename: 'file.zip', referrer: 'https://example.com/', id: 1 });
