@@ -17,6 +17,7 @@ Evidencia del usuario: en Chrome la extensión reporta un error con stack `share
 - [x] T2 — Diagnóstico y fix del error `browser-api.js:176` con test de regresión (S3) — `e4d19da`
 - [x] T3 — Verificación en el host ubuntu y reporte (S4) — `.deb` 0.2.4-1 instalado, probe real correcto
 - [x] T4 — Documentar ambos arreglos (S6) — docs en OpenSpec 03/07, README, CHANGELOG, notas y `docs/qa/segmenta-0.2.4-live.md`; **sin release**: el usuario pidió reemplazar la 0.2.4 existente, no publicar
+- [x] T6 — Descargas del host: clasificación de fallos transitorios (S7)
 - [x] T5 — E2E real con Chrome for Testing 157 en el host `ssh ubuntu` (S6) — encontró y cerró dos defectos de la extensión: el content script no arrancaba en documentos prerenderizados y el contexto invalidado rompía `i18n.getMessage`
 
 ## Log
@@ -47,3 +48,12 @@ Método: Chrome for Testing 157.0.8103.78 en el host (`--load-extension` está b
 - Después del arreglo: `#segmenta-extension-root` existe con `shadowRoot` y el botón `.segmenta-launch` se monta en la página real; al pulsarlo se abre el panel.
 - El panel en CfT muestra «No se encontró el host nativo» porque Chrome for Testing no resuelve `/etc/opt/chrome/native-messaging-hosts`; es una limitación del arnés, no del producto: `/usr/bin/segmenta-host` responde `system.hello` con `daemon_version 0.2.4`, los manifiestos de usuario y de paquete son idénticos, y el Chrome real del usuario ya había alcanzado el daemon con `media.probe` durante sus pruebas.
 - Sin capturas simuladas: todas las comprobaciones son DOM/CDP reales sobre la página real.
+
+### Descargas del host (2026-11-15, T6)
+
+- El video que fallaba (`QobqGf8JSzE`, task `f5a5c645`) quedaba en `1045 the media is not public`.
+- Verificación: los **mismos args** que usa el daemon, ejecutados a mano, descargan el video (26.8 MiB); `media.add` por CLI y `media.add` con los envelopes reales de la extensión (alturas 720/888/1184) quedan en `completed`.
+- Los fallos restantes son transitorios del host de medios: `HTTP Error 403: Forbidden` intermitente en `googlevideo` (también visto en el navegador) y `[Errno 2] No such file or directory` de un temporal de yt-dlp.
+- Se corrigieron dos clasificaciones: un 403 ya no se reporta como «no es público» sino como «el host rechazó este stream; reintentá la descarga», y sólo un `yt-dlp: not found` real afirma que falta la herramienta.
+- Después del arreglo, tres descargas consecutivas del mismo video terminaron en `completed` (0.2.4-1, sha256 `c805e1462e38c04c76c59d62dae3a3227895f08ff023fe212cd388a6cec68ae2`).
+- Pendiente propuesto (requiere decisión): reintento automático acotado en `run_download` con el fallback progresivo `18` cuando el stderr es transitorio; hoy el usuario debe reintentar.
