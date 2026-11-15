@@ -904,13 +904,73 @@ pub fn parse_progress_line(line: &str) -> Option<ProgressLine> {
     })
 }
 
+/// Progressive format every YouTube video still serves as one file.
+pub const PROGRESSIVE_FALLBACK_FORMAT: &str = "18";
+
+/// Whether a failed stream deserves one retry with the progressive fallback.
+///
+/// YouTube answers 403 to a specific stream (and to many DASH video-only formats from
+/// datacenter IPs) and serves the same media seconds later through the progressive
+/// file; failing the whole task on that answer made downloads look broken when the
+/// fix was simply asking again. Bounded to one retry: a real removal or a private
+/// video still fails, with its own code, on the second attempt.
+pub fn transient_retry_format(stderr: &str, kind: MediaTaskKind) -> Option<&'static str> {
+    if !matches!(
+        kind,
+        MediaTaskKind::YoutubeVideo | MediaTaskKind::YoutubePlaylist
+    ) {
+        return None;
+    }
+    let lowered = stderr.to_lowercase();
+    let transient = lowered.contains("http error 403")
+        || lowered.contains("forbidden")
+        || lowered.contains("unable to download video data")
+        || lowered.contains("sign in to confirm")
+        || lowered.contains("timed out")
+        || lowered.contains("connection reset");
+    transient.then_some(PROGRESSIVE_FALLBACK_FORMAT)
+}
+
 /// Stream a `yt-dlp` download, forwarding progress through `on_progress`.
+///
+/// One transient stream failure is retried with the progressive format before the
+/// task is marked failed.
 pub async fn run_download(
     tool: &Path,
     plan: &DownloadPlan,
     cancel: segmenta_core::engine::Canceller,
-    mut on_progress: impl FnMut(ProgressLine),
+    mut on_progress: impl FnMut(ProgressLine) + Send,
 ) -> Result<(), MediaError> {
+    let mut result = run_download_once(tool, plan, cancel.clone(), &mut on_progress).await;
+    if let Err((error, stderr)) = &result {
+        if let Some(format) = transient_retry_format(stderr, plan.kind) {
+            if plan.format.as_deref() != Some(format) {
+                tracing::warn!(
+                    url = %plan.url,
+                    code = error.code,
+                    format,
+                    "media stream failed; retrying once with the progressive format"
+                );
+                let fallback = DownloadPlan {
+                    format: Some(format.to_string()),
+                    height: None,
+                    ..plan.clone()
+                };
+                result = run_download_once(tool, &fallback, cancel, &mut on_progress).await;
+            }
+        }
+    }
+    result.map_err(|(error, _)| error)
+}
+
+/// One `yt-dlp` attempt. The stderr travels back with the error so the caller can
+/// decide whether the failure is worth a retry.
+async fn run_download_once(
+    tool: &Path,
+    plan: &DownloadPlan,
+    cancel: segmenta_core::engine::Canceller,
+    on_progress: &mut (dyn FnMut(ProgressLine) + Send),
+) -> Result<(), (MediaError, String)> {
     let mut child = Command::new(tool)
         .args(plan.args())
         .stdin(Stdio::null())
@@ -918,12 +978,17 @@ pub async fn run_download(
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|err| MediaError::backend(format!("cannot run {}: {err}", tool.display())))?;
+        .map_err(|err| {
+            (
+                MediaError::backend(format!("cannot run {}: {err}", tool.display())),
+                String::new(),
+            )
+        })?;
 
     let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| MediaError::backend("no stdout"))?;
+        .ok_or_else(|| (MediaError::backend("no stdout"), String::new()))?;
     let stderr = child.stderr.take();
 
     // `--progress-template` lines go to stderr while stdout carries the destination
@@ -980,16 +1045,20 @@ pub async fn run_download(
     let status = child
         .wait()
         .await
-        .map_err(|err| MediaError::backend(err.to_string()))?;
+        .map_err(|err| (MediaError::backend(err.to_string()), String::new()))?;
     if killed || cancel.is_cancelled() {
-        return Err(MediaError {
-            code: 1030,
-            name: "ERR_CANCELLED",
-            message: "cancelled".to_string(),
-        });
+        return Err((
+            MediaError {
+                code: 1030,
+                name: "ERR_CANCELLED",
+                message: "cancelled".to_string(),
+            },
+            stderr_text,
+        ));
     }
     if !status.success() {
-        return Err(classify_backend_failure(&stderr_text, status.code()));
+        let error = classify_backend_failure(&stderr_text, status.code());
+        return Err((error, stderr_text));
     }
     Ok(())
 }
@@ -1156,6 +1225,33 @@ mod tests {
             "1080"
         );
         assert_eq!(default_quality(&[option("audio", None)]), "audio");
+    }
+
+    /// One retry with the progressive format is reserved for transient stream
+    /// failures of YouTube tasks (0.2.4).
+    #[test]
+    fn transient_stream_failures_are_retried_with_the_progressive_format() {
+        let stream = "ERROR: unable to download video data: HTTP Error 403: Forbidden";
+        assert_eq!(
+            transient_retry_format(stream, MediaTaskKind::YoutubeVideo),
+            Some(PROGRESSIVE_FALLBACK_FORMAT)
+        );
+        assert_eq!(
+            transient_retry_format(stream, MediaTaskKind::YoutubePlaylist),
+            Some(PROGRESSIVE_FALLBACK_FORMAT)
+        );
+        // Not a YouTube task: the progressive format means nothing there.
+        assert_eq!(transient_retry_format(stream, MediaTaskKind::Hls), None);
+        assert_eq!(
+            transient_retry_format(stream, MediaTaskKind::YoutubeAudio),
+            None
+        );
+        // A real, permanent answer must not be retried with another format.
+        assert_eq!(
+            transient_retry_format("ERROR: Video unavailable", MediaTaskKind::YoutubeVideo),
+            None
+        );
+        assert_eq!(PROGRESSIVE_FALLBACK_FORMAT, "18");
     }
 
     #[test]
