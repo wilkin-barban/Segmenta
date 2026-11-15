@@ -20,6 +20,7 @@ Evidencia del usuario: en Chrome la extensión reporta un error con stack `share
 - [x] T6 — Descargas del host: clasificación de fallos transitorios (S7)
 - [x] T7 — Reintento acotado en `run_download` con fallback `18` ante fallo transitorio de stream (S8) — `41ad5dc`
 - [x] T8 — `resume_task` acepta `Failed`, limpia el error y relanza la tarea multimedia (S9) — `ca3cf1e`
+- [x] T9 — La extensión deja de abrir la GUI al añadir: sólo notifica; `segmenta.open` sigue abriendo (S10) — `92a6e34`
 - [x] T5 — E2E real con Chrome for Testing 157 en el host `ssh ubuntu` (S6) — encontró y cerró dos defectos de la extensión: el content script no arrancaba en documentos prerenderizados y el contexto invalidado rompía `i18n.getMessage`
 
 ## Log
@@ -66,3 +67,10 @@ Método: Chrome for Testing 157.0.8103.78 en el host (`--load-extension` está b
 - `resume_task` acepta `DownloadStatus::Failed`: limpia `error_code`/`error_message`, y para tareas multimedia reconstruye el plan desde el registro (`media_plan_from_record`: playlist usa `%(title)s.%(ext)s`, audio conserva el `format_id`, video toma la altura real de `media_format`) y llama `start_media_task`; el resto vuelve a la cola. Tests: tarea directa fallida y tarea de YouTube fallida.
 - Verificación en el host con `.deb` 0.2.4-1 (sha256 `da75169515c110f7bc9948ce8e12fe30a0e1126b289143398e8d23c983cfab83`): `segmenta-cli resume f5a5c645…` sobre la tarea que había fallado con 1045 respondió `downloading` y terminó en `completed` con 26 841 221 bytes, en la ruta original.
 - Limpieza en `~/Descargas`: se borraron los duplicados de prueba con sufijo `(1)`…`(9)` y un fragmento `.f251.webm`; queda el archivo original. La carpeta pasó de 516 MB a 284 MB.
+
+### Sin apertura automática de la GUI (2026-11-15, T9)
+
+- `announceAddedTask` en `extension/chromium/background.js` ya no llama `openTask(taskId)`: sólo muestra la notificación del sistema con la carpeta de destino. El flujo explícito `segmenta.open` → `system.open` queda intacto y es el único que abre la ventana.
+- Tests adaptados: el add emite `['native:media.add', 'notify']` con una sola llamada al host; un fallo de notificación no cambia el resultado del add; el test que era de `system.open` en el add ahora verifica que el clic explícito sí abre con el `task_id`.
+- Verificación en el host con `.deb` 0.2.4-1 reinstallado a la fuerza: el ZIP embebido (`sha256 7d563d08…cc11`) y la extensión preparada tienen `grep -c "await openTask(taskId)"` = 0 en chromium y firefox, la notificación sigue presente y `buildSystemOpen` sigue en su sitio.
+- **Hallazgo de despliegue**: `apt-get install ./paquete.deb` con la **misma versión** ya instalada no reemplaza archivos (dice «already newest» y no hace nada). Hay que usar `--reinstall`; los «INSTALL_OK» anteriores de esta sesión no garantizaban contenido nuevo.

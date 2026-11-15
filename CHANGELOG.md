@@ -29,6 +29,10 @@ prerenderizados. Sin tag ni Release publicada.
   invalidated» en `shared/browser-api.js:176`. `getMessage` devuelve `''` en ese caso, consume el
   `lastError` de una clave ausente y las llamadas al runtime fallan con un código explícito
   (`ERR_CONTEXT_INVALIDATED`) en lugar de un error nativo por llamada.
+- **La extensión ya no abre Segmenta al añadir una descarga**: el panel flotante sigue el progreso
+  en tiempo real, así que `announceAddedTask` sólo muestra la notificación del sistema con la carpeta
+  de destino. La ventana se abre únicamente con el clic explícito en **Abrir Segmenta** / **Ver
+  progreso** (`segmenta.open` → `system.open`), sin robarle el foco al navegador.
 - **Reintento automático de un stream transitorio**: cuando el host de medios responde 403 a un
   formato concreto (habitual desde IPs de datacenter), `run_download` hace **un** intento más con el
   formato progresivo `18` antes de marcar la tarea como fallida. Cualquier otro fallo, y el segundo
