@@ -7,7 +7,7 @@
 
 use serde_json::{json, Value};
 
-use segmenta_gui::prefs::{browser_rows, load_steps, BrowserState};
+use segmenta_gui::prefs::{browser_rows, load_steps, BrowserState, VersionSync};
 use segmenta_i18n::Locale;
 
 const PREPARED: &str = "/home/user/.local/share/segmenta/extensions/chromium-0.2.0";
@@ -33,6 +33,9 @@ fn status() -> Value {
                 "extension_installed": false,
                 "prepared_path": PREPARED,
                 "archive_path": "/usr/share/segmenta/extensions/segmenta-chromium.zip",
+                "prepared_version": "0.2.1",
+                "shipped_version": "0.2.2",
+                "version_sync": "mismatch",
                 "state": "unsupported"
             },
             {
@@ -48,6 +51,9 @@ fn status() -> Value {
                 "extension_installed": false,
                 "prepared_path": PREPARED,
                 "archive_path": "/usr/share/segmenta/extensions/segmenta-chromium.zip",
+                "prepared_version": "0.2.2",
+                "shipped_version": "0.2.2",
+                "version_sync": "match",
                 "state": "native-ready"
             },
             {
@@ -63,6 +69,9 @@ fn status() -> Value {
                 "extension_installed": false,
                 "prepared_path": null,
                 "archive_path": "/usr/share/segmenta/extensions/segmenta-chromium.zip",
+                "prepared_version": null,
+                "shipped_version": "0.2.2",
+                "version_sync": "not-prepared",
                 "state": "not-installed"
             },
             {
@@ -78,6 +87,9 @@ fn status() -> Value {
                 "extension_installed": true,
                 "prepared_path": null,
                 "archive_path": "/usr/share/segmenta/extensions/segmenta-firefox.zip",
+                "prepared_version": null,
+                "shipped_version": "0.2.2",
+                "version_sync": "not-prepared",
                 "state": "extension-installed"
             }
         ]
@@ -264,4 +276,84 @@ fn load_steps_are_numbered_and_family_specific() {
     }
     // An unknown family has no steps instead of a guessed how-to.
     assert!(load_steps(Locale::En, "other").is_empty());
+}
+
+/// 0.2.2: the loaded extension is the prepared copy, so the row must say when it
+/// is not the version the package ships — that stale copy is what kept a dead
+/// `segmenta-add-torrent` menu alive in Chrome.
+#[test]
+fn a_prepared_extension_in_the_shipped_version_is_not_a_warning() {
+    let matched = row(Locale::Es, "chrome");
+    assert_eq!(matched.version_sync, VersionSync::Match);
+    assert_eq!(matched.prepared_version.as_deref(), Some("0.2.2"));
+    assert_eq!(matched.shipped_version.as_deref(), Some("0.2.2"));
+    let text = matched.status.to_lowercase();
+    assert!(
+        !text.contains("atención"),
+        "a matching extension is warned about: {text}"
+    );
+    assert!(
+        !text.contains("0.2.1"),
+        "a matching extension names another version: {text}"
+    );
+}
+
+#[test]
+fn an_older_prepared_extension_is_warned_with_both_versions() {
+    for locale in [Locale::En, Locale::Es, Locale::PtBr] {
+        let stale = row(locale, "chromium");
+        assert_eq!(stale.version_sync, VersionSync::Mismatch);
+        assert!(stale.version_sync.is_warning());
+        assert_eq!(stale.prepared_version.as_deref(), Some("0.2.1"));
+        assert_eq!(stale.shipped_version.as_deref(), Some("0.2.2"));
+        assert!(
+            stale.status.contains("0.2.1") && stale.status.contains("0.2.2"),
+            "the warning does not name both versions ({}): {}",
+            locale.code(),
+            stale.status
+        );
+        assert!(
+            stale.status.to_lowercase().contains(match locale {
+                Locale::En => "warning",
+                Locale::Es => "atención",
+                Locale::PtBr => "atenção",
+            }),
+            "the mismatch is not a warning ({}): {}",
+            locale.code(),
+            stale.status
+        );
+        // The reload action rides on the same `extension.open` RPC, so the row
+        // still offers it.
+        assert!(!stale.actions.open || stale.state == BrowserState::Unsupported);
+    }
+}
+
+#[test]
+fn nothing_prepared_is_reported_without_a_warning() {
+    let nothing = row(Locale::Es, "firefox");
+    assert_eq!(nothing.version_sync, VersionSync::NotPrepared);
+    assert!(!nothing.version_sync.is_warning());
+    assert_eq!(nothing.prepared_version, None);
+    assert!(
+        !nothing.status.to_lowercase().contains("atención"),
+        "nothing prepared is painted as a version mismatch: {}",
+        nothing.status
+    );
+}
+
+#[test]
+fn a_daemon_without_the_comparison_is_never_a_false_warning() {
+    let mut payload = status();
+    for browser in payload["browsers"].as_array_mut().unwrap() {
+        let object = browser.as_object_mut().unwrap();
+        object.remove("prepared_version");
+        object.remove("shipped_version");
+        object.remove("version_sync");
+    }
+    let rows = browser_rows(Locale::Es, &payload);
+    assert!(!rows.is_empty());
+    for row in rows {
+        assert_eq!(row.version_sync, VersionSync::Unknown, "{}", row.id);
+        assert!(!row.version_sync.is_warning(), "{}", row.id);
+    }
 }

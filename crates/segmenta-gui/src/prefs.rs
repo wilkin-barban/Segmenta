@@ -702,6 +702,12 @@ pub struct BrowserRow {
     pub actions: BrowserActions,
     /// Folder `extension.prepare` left ready, when it exists.
     pub prepared_path: Option<String>,
+    /// Version declared by the prepared manifest, when one is prepared.
+    pub prepared_version: Option<String>,
+    /// Version the package ships, as `extension.status` reports it.
+    pub shipped_version: Option<String>,
+    /// Whether the prepared copy is the shipped one (0.2.2).
+    pub version_sync: VersionSync,
 }
 
 /// The `state` of one browser, as `extension.status` defines it.
@@ -743,6 +749,37 @@ impl BrowserState {
         } else {
             BrowserState::NativeMissing
         }
+    }
+}
+
+/// How the prepared extension compares with the version the package ships
+/// (`version_sync` of `extension.status`, 0.2.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VersionSync {
+    /// No prepared extension folder exists yet.
+    NotPrepared,
+    /// The prepared manifest declares the shipped version.
+    Match,
+    /// The prepared manifest declares another version, or cannot be compared.
+    Mismatch,
+    /// The daemon did not report the comparison (an older daemon).
+    Unknown,
+}
+
+impl VersionSync {
+    /// Reads the daemon `version_sync`; a missing field is never a warning.
+    fn from_status(browser: &Value) -> VersionSync {
+        match browser.get("version_sync").and_then(Value::as_str) {
+            Some("not-prepared") => VersionSync::NotPrepared,
+            Some("match") => VersionSync::Match,
+            Some("mismatch") => VersionSync::Mismatch,
+            _ => VersionSync::Unknown,
+        }
+    }
+
+    /// Whether the row must warn that the loaded extension is out of sync.
+    pub fn is_warning(self) -> bool {
+        self == VersionSync::Mismatch
     }
 }
 
@@ -791,6 +828,26 @@ pub fn browser_rows(locale: Locale, status: &Value) -> Vec<BrowserRow> {
                 .get("prepared_path")
                 .and_then(Value::as_str)
                 .map(str::to_string);
+            let prepared_version = browser
+                .get("prepared_version")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let shipped_version = browser
+                .get("shipped_version")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let version_sync = VersionSync::from_status(browser);
+            let mut status = browser_status_text(locale, state, unsupported);
+            // A loaded extension older than the package is the defect that made
+            // Chrome keep a stale context menu: say it in the same row (0.2.2).
+            if version_sync.is_warning() {
+                status.push(' ');
+                status.push_str(
+                    &tr(locale, Msg::BrowserVersionMismatch)
+                        .replace("{prepared}", prepared_version.as_deref().unwrap_or("?"))
+                        .replace("{shipped}", shipped_version.as_deref().unwrap_or("?")),
+                );
+            }
             Some(BrowserRow {
                 id: browser
                     .get("id")
@@ -812,13 +869,16 @@ pub fn browser_rows(locale: Locale, status: &Value) -> Vec<BrowserRow> {
                     .and_then(Value::as_str)
                     .map(str::to_string),
                 state,
-                status: browser_status_text(locale, state, unsupported),
+                status,
                 actions: BrowserActions {
                     prepare: usable,
                     open: usable,
                     copy_path: usable && prepared_path.is_some(),
                 },
                 prepared_path,
+                prepared_version,
+                shipped_version,
+                version_sync,
             })
         })
         .collect()
@@ -943,8 +1003,19 @@ pub fn fill_browser_rows(
 
         let mut open = None;
         if data.actions.open {
-            let button = gtk::Button::with_label(tr(locale, Msg::ExtensionOpenShort));
-            button.set_tooltip_text(Some(tr(locale, Msg::ExtensionOpen)));
+            // An out-of-sync copy is reloaded from the browser's own page: that is
+            // the only reload a page cannot trigger for the user (0.2.2).
+            let (label, tooltip) = if data.version_sync.is_warning() {
+                (Msg::ExtensionReloadShort, Msg::ExtensionReload)
+            } else {
+                (Msg::ExtensionOpenShort, Msg::ExtensionOpen)
+            };
+            let button = gtk::Button::with_label(tr(locale, label));
+            button.set_tooltip_text(Some(tr(locale, tooltip)));
+            if data.version_sync.is_warning() {
+                button.add_css_class("suggested-action");
+                row.add_css_class("warning");
+            }
             let handler = Rc::clone(&handlers.open);
             let browser_id = data.id.clone();
             button.connect_clicked(move |_| handler(&browser_id));

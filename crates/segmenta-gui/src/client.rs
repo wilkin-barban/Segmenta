@@ -461,7 +461,7 @@ impl Client for DemoClient {
                 "extension_id": "kdeldnifdbpemnhfpmhonlnibbhnoaan",
                 "firefox_extension_id": "segmenta@wilkin.github.io",
                 "host_path": "/usr/bin/segmenta-host",
-                "extension_version": "0.1.2",
+                "extension_version": "0.2.2",
                 "shipped_archives": {
                     "chromium": "/usr/share/segmenta/extensions/segmenta-chromium.zip",
                     "firefox": "/usr/share/segmenta/extensions/segmenta-firefox.zip"
@@ -478,8 +478,11 @@ impl Client for DemoClient {
                         "manifest_present": true,
                         "user_manifest_present": false,
                         "extension_installed": false,
-                        "prepared_path": "/home/user/.local/share/segmenta/extensions/chromium-0.1.2",
+                        "prepared_path": "/home/user/.local/share/segmenta/extensions/chromium-0.2.2",
                         "archive_path": "/usr/share/segmenta/extensions/segmenta-chromium.zip",
+                        "prepared_version": "0.2.2",
+                        "shipped_version": "0.2.2",
+                        "version_sync": "match",
                         "state": "native-ready"
                     },
                     {
@@ -493,8 +496,11 @@ impl Client for DemoClient {
                         "manifest_present": true,
                         "user_manifest_present": false,
                         "extension_installed": false,
-                        "prepared_path": "/home/user/.local/share/segmenta/extensions/firefox-0.1.2",
+                        "prepared_path": "/home/user/.local/share/segmenta/extensions/firefox-0.2.2",
                         "archive_path": "/usr/share/segmenta/extensions/segmenta-firefox.zip",
+                        "prepared_version": "0.2.2",
+                        "shipped_version": "0.2.2",
+                        "version_sync": "match",
                         "state": "native-ready"
                     }
                 ]

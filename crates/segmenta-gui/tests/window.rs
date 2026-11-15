@@ -1263,3 +1263,81 @@ fn browser_row_suffixes_leave_room_for_the_title() {
         );
     });
 }
+
+/// 0.2.2: a loaded extension that is not the shipped one must be a warning with a
+/// reload action, because a stale copy is exactly what kept the dead
+/// `segmenta-add-torrent` menu alive in Chrome.
+#[test]
+fn an_out_of_sync_extension_row_warns_and_offers_reload() {
+    run_gui("browsers_page_version_sync", || {
+        let log: Rc<RefCell<Vec<(&'static str, String)>>> = Rc::new(RefCell::new(Vec::new()));
+        let mut status = browser_status();
+        status["browsers"][1]["prepared_version"] = json!("0.2.1");
+        status["browsers"][1]["shipped_version"] = json!("0.2.2");
+        status["browsers"][1]["version_sync"] = json!("mismatch");
+        let page = prefs::browsers_page(
+            segmenta_i18n::Locale::Es,
+            &status,
+            prefs::BrowserHandlers {
+                prepare: {
+                    let log = Rc::clone(&log);
+                    Rc::new(move |value: &str| {
+                        log.borrow_mut().push(("prepare", value.to_string()))
+                    })
+                },
+                open: {
+                    let log = Rc::clone(&log);
+                    Rc::new(move |value: &str| log.borrow_mut().push(("open", value.to_string())))
+                },
+                copy_path: {
+                    let log = Rc::clone(&log);
+                    Rc::new(move |value: &str| log.borrow_mut().push(("copy", value.to_string())))
+                },
+                install_native: Rc::new(|| {}),
+            },
+        );
+        let row = page
+            .rows
+            .iter()
+            .find(|view| view.data.id == "chrome")
+            .expect("chrome has no row");
+        let subtitle = row.row.subtitle().unwrap_or_default().to_string();
+        assert!(
+            subtitle.contains("0.2.1") && subtitle.contains("0.2.2"),
+            "the row does not name both versions: {subtitle}"
+        );
+        assert!(
+            subtitle.contains("Atención"),
+            "the out-of-sync row is not a warning: {subtitle}"
+        );
+        let reload = row.open.as_ref().expect("no reload button");
+        assert_eq!(
+            reload.label().map(|text| text.to_string()).as_deref(),
+            Some("Recargar"),
+            "the out-of-sync row does not offer a reload"
+        );
+        reload.emit_clicked();
+        assert_eq!(*log.borrow(), vec![("open", "chrome".to_string())]);
+
+        // A matching version stays a plain open action.
+        let matched = prefs::browsers_page(
+            segmenta_i18n::Locale::Es,
+            &browser_status(),
+            prefs::BrowserHandlers {
+                prepare: Rc::new(|_: &str| {}),
+                open: Rc::new(|_: &str| {}),
+                copy_path: Rc::new(|_: &str| {}),
+                install_native: Rc::new(|| {}),
+            },
+        );
+        let chrome = matched
+            .rows
+            .iter()
+            .find(|view| view.data.id == "chrome")
+            .expect("chrome has no row");
+        assert_eq!(
+            chrome.open.as_ref().unwrap().label().map(|t| t.to_string()),
+            Some("Abrir".to_string())
+        );
+    });
+}
