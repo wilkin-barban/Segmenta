@@ -560,7 +560,21 @@ pub fn classify_backend_failure(stderr: &str, status: Option<i32>) -> MediaError
     {
         return MediaError::not_public("the media is not public");
     }
-    if lowered.contains("no such file") || stderr.contains("yt-dlp: not found") {
+    // A transient 403 from the media host is neither a private video nor a broken
+    // backend: YouTube answers 403 for a specific stream and serves it again on the
+    // next attempt (seen repeatedly against googlevideo from datacenter IPs). Say
+    // what happened and what to do, instead of a generic backend failure.
+    if lowered.contains("http error 403") || lowered.contains("forbidden") {
+        let detail = stderr.lines().last().unwrap_or("http 403").trim();
+        return MediaError::backend(format!(
+            "the media host answered 403 for this stream; download it again ({detail})"
+        ));
+    }
+    // Only a real "the shell could not find the binary" answer means the tool is
+    // missing. A bare "No such file or directory" is usually a temporary fragment
+    // yt-dlp already removed, and reporting it as a missing tool sent users to
+    // reinstall a package that was installed.
+    if stderr.contains("yt-dlp: not found") || lowered.contains("cannot run ") {
         return MediaError::backend(
             "yt-dlp is not installed; install it with `sudo apt install yt-dlp`",
         );
@@ -1142,6 +1156,48 @@ mod tests {
             "1080"
         );
         assert_eq!(default_quality(&[option("audio", None)]), "audio");
+    }
+
+    #[test]
+    fn a_missing_temporary_file_is_not_a_missing_tool() {
+        let err = classify_backend_failure(
+            "ERROR: [Errno 2] No such file or directory: '/tmp/x.f398.mp4.part'",
+            Some(1),
+        );
+        assert_eq!(err.code, 1044);
+        assert!(
+            !err.message.contains("is not installed"),
+            "a temporary file is reported as a missing tool: {}",
+            err.message
+        );
+        // The real signal still maps to the actionable install message.
+        let missing = classify_backend_failure("sh: 1: yt-dlp: not found", Some(127));
+        assert!(
+            missing.message.contains("is not installed"),
+            "{}",
+            missing.message
+        );
+    }
+
+    /// A transient 403 is reported as retryable, never as "not public".
+    #[test]
+    fn a_transient_403_is_not_reported_as_a_private_video() {
+        let err = classify_backend_failure(
+            "ERROR: unable to download video data: HTTP Error 403: Forbidden",
+            Some(1),
+        );
+        assert_eq!(err.code, 1044);
+        assert!(err.message.contains("403"), "{}", err.message);
+        assert!(
+            err.message.contains("again"),
+            "the message does not say what to do: {}",
+            err.message
+        );
+        // The old text sent users to look for a private video that was public.
+        assert_ne!(err.message, "the media is not public");
+        // A real privacy answer keeps its own code.
+        let private = classify_backend_failure("ERROR: Private video. Sign in", Some(1));
+        assert_eq!(private.code, 1045);
     }
 
     #[test]
