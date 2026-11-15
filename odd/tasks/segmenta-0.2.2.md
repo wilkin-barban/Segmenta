@@ -12,10 +12,10 @@ Contexto del bug original: Chrome mostraba `Cannot create item with duplicate id
 
 ## Tasks
 
-- [ ] T1 — `extension.status` expone y compara versión preparada vs shipped (S1) — daemon `browsers.rs` + `manager.rs` — commit `feat(extension): compare prepared and shipped extension versions`
-- [ ] T2 — GUI advierte desincronización con acción a `chrome://extensions`/recargar (S1) — `crates/segmenta-gui/src/prefs.rs`, `crates/segmenta-i18n/src/lib.rs` — commit `feat(gui): warn when the loaded extension is out of sync`
-- [ ] T3 — Tests de los tres estados: coinciden, difieren, nada preparado (S1) — tests daemon + GUI — incluido en T1/T2
-- [ ] T4 — Bump extensión y paquete a 0.2.2 + CHANGELOG + notas (S2) — commit `chore(release): bump to 0.2.2`
+- [x] T1 — `extension.status` expone y compara versión preparada vs shipped (S1) — daemon `browsers.rs` (`extension_version_report`, `browser_status_json`) + `manager.rs` — `c6ac0fa`
+- [x] T2 — GUI advierte desincronización con acción a `chrome://extensions`/recargar (S1) — `prefs.rs` (`VersionSync`, fila con ambas versiones, botón **Recargar**), `segmenta-i18n` (3 mensajes nuevos) — `6c92f73`
+- [x] T3 — Tests de los tres estados: coinciden, difieren, nada preparado (S1) — `browsers.rs` (2 unit tests), `tests/browser_prefs.rs` (4 tests), `tests/window.rs` (1 test GTK con clic en Recargar) — `c6ac0fa`, `6c92f73`
+- [x] T4 — Bump extensión y paquete a 0.2.2 + CHANGELOG + notas (S2) — `4054f82`
 - [ ] T5 — Regenerar ZIPs y `.deb`, tests Node, cargo, fmt/clippy, `packaging/check-package.sh` (S3) — commit de artefactos si corresponde
 - [ ] T6 — Instalar el `.deb` en Ubuntu y dejar la extensión 0.2.2 preparada (S3)
 - [ ] T7 — Reporte final: archivos, tests, sha256, ruta de extensión, pasos de recarga (S5)
