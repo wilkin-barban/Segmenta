@@ -40,8 +40,26 @@ pub struct MediaFormat {
 /// `formats` list keeps every distinct height for programmatic callers).
 pub const QUALITY_HEIGHTS: [u32; 4] = [2160, 1080, 720, 360];
 
+/// Minimum real height of each nominal tier, highest first.
+///
+/// YouTube reports real heights (1184, 888, 592, 394, 296, 196, 128) instead of the
+/// nominal ones, so a format belongs to the first tier it reaches. Must stay
+/// identical to `qualityTier` in `extension/shared/protocol.js`.
+pub const QUALITY_TIERS: [(u32, u32); 4] = [(2160, 1800), (1080, 900), (720, 600), (360, 300)];
+
 /// Height preselected whenever it is available (S9).
 pub const DEFAULT_QUALITY_HEIGHT: u32 = 720;
+
+/// Nominal tier of a real height: 1184 → 1080, 888 → 720, 592 → 360.
+///
+/// `None` means the height is below the lowest documented tier (240, 144) and is
+/// therefore not offered; it never means "closest tier".
+pub fn quality_tier(height: u32) -> Option<u32> {
+    QUALITY_TIERS
+        .iter()
+        .find(|(_, minimum)| height >= *minimum)
+        .map(|(tier, _)| *tier)
+}
 
 /// Label for one grouped quality: `4K` for 2160, `{height}p` otherwise.
 pub fn quality_label(height: u32) -> String {
@@ -341,16 +359,22 @@ fn classify_formats(info: &Value) -> (Vec<MediaFormat>, Vec<MediaFormat>) {
 }
 
 /// Build the grouped ladder from an already ordered format list (S9).
+///
+/// The ladder is nominal (0.2.4): one entry per tier, and the entry keeps the real
+/// height of its best candidate because `media.add` resolves with `height<=N`.
 fn quality_ladder(formats: &[MediaFormat], audio: &[MediaFormat]) -> Vec<QualityOption> {
     let mut ladder = Vec::new();
-    for height in QUALITY_HEIGHTS {
-        let Some(found) = formats.iter().find(|format| format.height == Some(height)) else {
+    for tier in QUALITY_HEIGHTS {
+        let Some(found) = formats
+            .iter()
+            .find(|format| format.height.and_then(quality_tier) == Some(tier))
+        else {
             continue;
         };
         ladder.push(QualityOption {
-            quality: height.to_string(),
-            label: quality_label(height),
-            height: Some(height),
+            quality: tier.to_string(),
+            label: quality_label(tier),
+            height: found.height,
             format_id: found.format_id.clone(),
         });
     }
@@ -365,23 +389,37 @@ fn quality_ladder(formats: &[MediaFormat], audio: &[MediaFormat]) -> Vec<Quality
     ladder
 }
 
-/// `720` when available, else the closest available height, else `audio`.
+/// `720` when that tier is available, else the closest tier, else `audio`.
 ///
-/// Equidistant heights resolve towards the higher quality (the ladder is ordered
-/// highest first, so the first minimum wins).
+/// The comparison is by nominal tier, never by the real height: a ladder whose 720
+/// entry has real height 888 still answers `720`, which is the tag the extension
+/// preselects. Equidistant tiers resolve towards the higher one (the ladder is
+/// ordered highest first, so the first minimum wins).
 pub fn default_quality(qualities: &[QualityOption]) -> String {
+    let tier_of = |quality: &QualityOption| -> Option<u32> {
+        quality
+            .quality
+            .parse::<u32>()
+            .ok()
+            .and_then(quality_tier)
+            .or_else(|| quality.height.and_then(quality_tier))
+    };
     if let Some(exact) = qualities
         .iter()
-        .find(|quality| quality.height == Some(DEFAULT_QUALITY_HEIGHT))
+        .find(|quality| tier_of(quality) == Some(DEFAULT_QUALITY_HEIGHT))
     {
         return exact.quality.clone();
     }
-    if let Some(height) = qualities
+    if let Some(closest) = qualities
         .iter()
-        .filter_map(|quality| quality.height)
-        .min_by_key(|height| height.abs_diff(DEFAULT_QUALITY_HEIGHT))
+        .filter(|quality| tier_of(quality).is_some())
+        .min_by_key(|quality| {
+            tier_of(quality)
+                .map(|tier| tier.abs_diff(DEFAULT_QUALITY_HEIGHT))
+                .unwrap_or(u32::MAX)
+        })
     {
-        return height.to_string();
+        return closest.quality.clone();
     }
     qualities
         .iter()
@@ -1034,6 +1072,51 @@ mod tests {
         assert_eq!(probe.qualities[1].label, "1080p");
         assert_eq!(probe.qualities[4].label, "audio");
         assert_eq!(probe.qualities[4].format_id, "140");
+        assert_eq!(probe.default_quality, "720");
+    }
+
+    /// YouTube reports real heights, not the nominal ladder (`FBhSudzU_ck` probes
+    /// 1184/888/592/394/296/196/128). Grouping by exact height left the ladder with
+    /// audio only, so the extension had nothing to offer (0.2.4).
+    #[test]
+    fn qualities_group_by_nominal_tier_not_by_exact_height() {
+        let info: Value = serde_json::from_str(
+            r#"{"title":"x","formats":[
+                {"format_id":"399","height":1184,"ext":"mp4","vcodec":"avc1","acodec":"none","tbr":4400},
+                {"format_id":"398","height":888,"ext":"mp4","vcodec":"avc1","acodec":"none","tbr":2200},
+                {"format_id":"900","height":900,"ext":"mp4","vcodec":"avc1","acodec":"none","tbr":2100},
+                {"format_id":"397","height":592,"ext":"mp4","vcodec":"avc1","acodec":"none","tbr":1200},
+                {"format_id":"18","height":394,"ext":"mp4","vcodec":"avc1","acodec":"mp4a","tbr":700},
+                {"format_id":"136","height":296,"ext":"mp4","vcodec":"avc1","acodec":"none","tbr":400},
+                {"format_id":"135","height":196,"ext":"mp4","vcodec":"avc1","acodec":"none","tbr":250},
+                {"format_id":"160","height":128,"ext":"mp4","vcodec":"avc1","acodec":"none","tbr":140},
+                {"format_id":"140","ext":"m4a","vcodec":"none","acodec":"mp4a","abr":128}]}"#,
+        )
+        .unwrap();
+        let probe = parse_probe_json(&info, "video").unwrap();
+        let tags: Vec<&str> = probe
+            .qualities
+            .iter()
+            .map(|entry| entry.quality.as_str())
+            .collect();
+        // 296/196/128 fall below the lowest tier and keep the ladder at four entries.
+        assert_eq!(tags, ["1080", "720", "360", "audio"]);
+        // The tier is the tag; the height stays the real one the backend reported.
+        assert_eq!(probe.qualities[0].height, Some(1184));
+        assert_eq!(probe.qualities[1].height, Some(888));
+        assert_eq!(probe.qualities[2].height, Some(592));
+        assert_eq!(probe.qualities[0].label, "1080p");
+        assert_eq!(probe.qualities[1].format_id, "398");
+        // 900 and 1184 are the same tier: only the best candidate survives.
+        assert_eq!(
+            probe
+                .qualities
+                .iter()
+                .filter(|entry| entry.quality == "1080")
+                .count(),
+            1_u32 as usize,
+            "a tier must hold a single candidate"
+        );
         assert_eq!(probe.default_quality, "720");
     }
 
