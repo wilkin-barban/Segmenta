@@ -5,6 +5,22 @@ Todos los cambios notables de Segmenta se documentan en este archivo.
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el proyecto usa
 [Versionado semántico](https://semver.org/lang/es/).
 
+## [0.2.3] - 2026-11-15
+
+La extensión vuelve a ofrecer resoluciones de video cuando YouTube reporta alturas que no son las
+de la escalera nominal. Sin tag ni Release publicada.
+
+### Fixed
+
+- **Selector de calidad en videos reales**: `groupQualities()` agrupaba por altura exacta
+  (`2160/1080/720/360`), así que un video cuyas pistas miden `1184/888/592/394/296/196/128`
+  —y cuyo ladder del daemon sólo traía audio— no producía ningún grupo de video y el panel caía
+  al fallback de sólo audio. Ahora agrupa por **tier nominal** (>=1800 → 4K, >=900 → 1080,
+  >=600 → 720, >=300 → 360) y conserva la altura real y el `format_id` del mejor candidato del
+  tier, de modo que `media.add` sigue resolviendo con `height<=N`.
+- `defaultQuality()` elige el tier 720 por tier, no por altura exacta: un grupo de 888
+  preselecciona 720 en lugar de caer al más cercano.
+
 ## [0.2.2] - 2026-11-15
 
 Remediación de la captura de YouTube: enlaces cortos y mixes, un menú contextual que ya no duplica
