@@ -18,6 +18,11 @@ use tokio::sync::watch;
 
 const MB: usize = 1024 * 1024;
 
+/// Serializes the tests that mutate `SEGMENTA_GUI`: the variable is process-global, so
+/// two of them running at once could spawn the wrong binary or lose the file the other
+/// one is waiting for.
+static GUI_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 fn record(id: &str, status: DownloadStatus) -> DownloadRecord {
     DownloadRecord {
         id: id.to_string(),
@@ -543,6 +548,7 @@ async fn system_open_launches_the_gui_with_the_task_as_an_argument() {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&gui, std::fs::Permissions::from_mode(0o755)).unwrap();
 
+    let _env = GUI_ENV.lock().await;
     std::env::set_var("SEGMENTA_GUI", &gui);
     let result = call(&h.manager, "system.open", json!({ "task_id": "focus-me" })).await;
     std::env::remove_var("SEGMENTA_GUI");
@@ -552,9 +558,10 @@ async fn system_open_launches_the_gui_with_the_task_as_an_argument() {
     assert_eq!(value["task_id"], json!("focus-me"));
     assert_eq!(value["gui_path"], json!(gui.to_string_lossy()));
 
-    // The child is detached, so its argv is read with a bounded wait.
+    // The child is detached, so its argv is read with a bounded wait. Under a full
+    // workspace run the spawn can take longer than two seconds.
     let mut argv = String::new();
-    for _ in 0..100 {
+    for _ in 0..250 {
         if let Ok(text) = std::fs::read_to_string(&args_file) {
             argv = text;
             break;
