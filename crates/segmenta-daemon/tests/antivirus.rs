@@ -6,6 +6,10 @@
 //! `SEGMENTA_ANTIVIRUS_PATH`, the same kind of override `SEGMENTA_YT_DLP` is for media, so
 //! a test never needs the real ClamAV and never inherits one from the host.
 
+/// Serializes the tests that write a fake scanner and run it: exec of a freshly
+/// written script races with the forks of the other tests in this binary (ETXTBSY).
+static FAKE_EXEC: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -120,6 +124,7 @@ fn declared_type(path: &Path, column: &str) -> String {
 
 #[test]
 fn migration_from_v3_adds_the_three_v4_columns_and_keeps_every_row() {
+    let _serial = FAKE_EXEC.lock().unwrap_or_else(|err| err.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("segmenta-v3.db");
     seed_v3(&path);
@@ -162,6 +167,7 @@ fn migration_from_v3_adds_the_three_v4_columns_and_keeps_every_row() {
 
 #[test]
 fn the_v4_migration_is_idempotent_on_reopen() {
+    let _serial = FAKE_EXEC.lock().unwrap_or_else(|err| err.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("segmenta-v3.db");
     seed_v3(&path);
@@ -191,6 +197,7 @@ fn the_v4_migration_is_idempotent_on_reopen() {
 
 #[test]
 fn settings_ship_the_documented_antivirus_defaults() {
+    let _serial = FAKE_EXEC.lock().unwrap_or_else(|err| err.into_inner());
     let settings = Settings::default();
     assert!(!settings.antivirus_enabled, "the scan is opt-in");
     assert_eq!(settings.antivirus_timeout_secs, 120);
@@ -207,6 +214,7 @@ fn settings_ship_the_documented_antivirus_defaults() {
 
 #[test]
 fn settings_update_accepts_and_persists_the_antivirus_keys() {
+    let _serial = FAKE_EXEC.lock().unwrap_or_else(|err| err.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("segmenta.db")).unwrap();
     let quarantine = dir.path().join("cuarentena");
@@ -235,6 +243,7 @@ fn settings_update_accepts_and_persists_the_antivirus_keys() {
 
 #[test]
 fn settings_reject_out_of_range_antivirus_values() {
+    let _serial = FAKE_EXEC.lock().unwrap_or_else(|err| err.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("segmenta.db")).unwrap();
 
@@ -288,6 +297,7 @@ fn scan_options(timeout: Duration) -> ScanOptions {
 
 #[test]
 fn engine_detection_prefers_clamdscan_over_clamscan() {
+    let _serial = FAKE_EXEC.lock().unwrap_or_else(|err| err.into_inner());
     let dir = tempfile::tempdir().unwrap();
     script(dir.path(), "clamscan", "exit 0");
     script(dir.path(), "clamdscan", "exit 0");
@@ -300,6 +310,7 @@ fn engine_detection_prefers_clamdscan_over_clamscan() {
 
 #[test]
 fn engine_detection_falls_back_to_clamscan() {
+    let _serial = FAKE_EXEC.lock().unwrap_or_else(|err| err.into_inner());
     let dir = tempfile::tempdir().unwrap();
     script(dir.path(), "clamscan", "exit 0");
 
@@ -311,6 +322,7 @@ fn engine_detection_falls_back_to_clamscan() {
 
 #[test]
 fn engine_detection_ignores_what_cannot_be_executed() {
+    let _serial = FAKE_EXEC.lock().unwrap_or_else(|err| err.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("clamscan");
     std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
@@ -324,6 +336,7 @@ fn engine_detection_ignores_what_cannot_be_executed() {
 
 #[test]
 fn no_engine_is_reported_as_unavailable() {
+    let _serial = FAKE_EXEC.lock().unwrap_or_else(|err| err.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let file = target_file(dir.path(), "file.bin");
 
@@ -341,6 +354,7 @@ fn no_engine_is_reported_as_unavailable() {
 
 #[test]
 fn a_clean_file_is_clean() {
+    let _serial = FAKE_EXEC.lock().unwrap_or_else(|err| err.into_inner());
     let dir = tempfile::tempdir().unwrap();
     script(dir.path(), "clamscan", "exit 0");
     let file = target_file(dir.path(), "file.bin");
@@ -359,6 +373,7 @@ fn a_clean_file_is_clean() {
 
 #[test]
 fn an_infected_file_is_infected_with_the_scanner_message() {
+    let _serial = FAKE_EXEC.lock().unwrap_or_else(|err| err.into_inner());
     let dir = tempfile::tempdir().unwrap();
     // ClamAV exits 1 on infection; the file travels as the last argument after
     // `--no-summary`, so a fake can echo it back without any shell interpretation.
@@ -392,6 +407,7 @@ fn an_infected_file_is_infected_with_the_scanner_message() {
 
 #[test]
 fn an_infected_file_leaves_the_downloads_folder_for_the_quarantine() {
+    let _serial = FAKE_EXEC.lock().unwrap_or_else(|err| err.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let downloads = dir.path().join("Descargas");
     let quarantine_dir = dir.path().join("cuarentena");
@@ -416,6 +432,7 @@ fn an_infected_file_leaves_the_downloads_folder_for_the_quarantine() {
 
 #[test]
 fn a_second_infected_file_with_the_same_name_does_not_overwrite_the_first() {
+    let _serial = FAKE_EXEC.lock().unwrap_or_else(|err| err.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let quarantine_dir = dir.path().join("cuarentena");
     let first = target_file(dir.path(), "same.bin");
@@ -432,6 +449,7 @@ fn a_second_infected_file_with_the_same_name_does_not_overwrite_the_first() {
 
 #[test]
 fn a_scan_timeout_is_a_failure_and_never_an_infection() {
+    let _serial = FAKE_EXEC.lock().unwrap_or_else(|err| err.into_inner());
     let dir = tempfile::tempdir().unwrap();
     script(dir.path(), "clamscan", "/bin/sleep 30");
     let file = target_file(dir.path(), "file.bin");
@@ -457,6 +475,7 @@ fn a_scan_timeout_is_a_failure_and_never_an_infection() {
 
 #[test]
 fn a_scanner_error_is_a_failure_and_never_an_infection() {
+    let _serial = FAKE_EXEC.lock().unwrap_or_else(|err| err.into_inner());
     let dir = tempfile::tempdir().unwrap();
     script(
         dir.path(),

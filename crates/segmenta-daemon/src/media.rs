@@ -1113,9 +1113,22 @@ mod tests {
         let tool = directory.path().join("yt-dlp");
         std::fs::write(&tool, "#!/bin/sh\necho 2026.03.17\n").unwrap();
         std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let error = check_version(&tool).unwrap_err();
+        // Exec'ing a script that was written moments ago can hit ETXTBSY while other
+        // tests in this binary fork; retry the call instead of the assertion.
+        let mut error = check_version(&tool).unwrap_err();
+        for _ in 0..5 {
+            if error.message.contains("too old") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            error = check_version(&tool).unwrap_err();
+        }
         assert_eq!(error.code, 1044);
-        assert!(error.message.contains("too old"));
+        assert!(
+            error.message.contains("too old"),
+            "the old backend was not reported as old: {}",
+            error.message
+        );
     }
 
     #[test]

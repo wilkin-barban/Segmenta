@@ -7,6 +7,13 @@ use segmenta_daemon::secrets::{
     open_with, FileSecretStore, KeyringSecretStore, SecretError, SecretStore,
 };
 
+/// Serializes the tests that write a fake executable and immediately run it.
+///
+/// Writing a script and exec'ing it while another test in this binary forks can fail
+/// with ETXTBSY ("Text file busy"), which made the keyring tests fail roughly one run
+/// in five. Every test that spawns a fresh fake takes this lock.
+static FAKE_EXEC: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Write a fake `secret-tool` that mimics libsecret: `--version` fails with exit 2,
 /// `lookup` exits 1 when there is no match, `store`/`clear` keep state in `state/`.
 fn fake_secret_tool(dir: &Path, state: &Path) -> std::path::PathBuf {
@@ -53,6 +60,7 @@ exit 1
 
 #[test]
 fn keyring_is_detected_without_the_version_flag() {
+    let _serial = FAKE_EXEC.lock().unwrap_or_else(|err| err.into_inner());
     // `secret-tool --version` is not a libsecret command: it exits 2. Detection must
     // rely on `lookup` returning 0 or 1 instead.
     let dir = tempfile::tempdir().unwrap();
@@ -75,12 +83,14 @@ fn keyring_is_detected_without_the_version_flag() {
 
 #[test]
 fn detection_fails_when_the_tool_does_not_exist() {
+    let _serial = FAKE_EXEC.lock().unwrap_or_else(|err| err.into_inner());
     let dir = tempfile::tempdir().unwrap();
     assert!(!KeyringSecretStore::probe_tool(&dir.path().join("nope")));
 }
 
 #[test]
 fn the_keyring_backend_stores_and_reads_through_the_tool() {
+    let _serial = FAKE_EXEC.lock().unwrap_or_else(|err| err.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let state = dir.path().join("state");
     std::fs::create_dir_all(&state).unwrap();
@@ -98,6 +108,7 @@ fn the_keyring_backend_stores_and_reads_through_the_tool() {
 
 #[test]
 fn a_legacy_secret_file_is_imported_into_the_keyring_and_removed() {
+    let _serial = FAKE_EXEC.lock().unwrap_or_else(|err| err.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let state = dir.path().join("state");
     std::fs::create_dir_all(&state).unwrap();

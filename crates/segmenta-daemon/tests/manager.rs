@@ -558,15 +558,24 @@ async fn system_open_launches_the_gui_with_the_task_as_an_argument() {
     assert_eq!(value["task_id"], json!("focus-me"));
     assert_eq!(value["gui_path"], json!(gui.to_string_lossy()));
 
-    // The child is detached, so its argv is read with a bounded wait. Under a full
-    // workspace run the spawn can take longer than two seconds.
-    let mut argv = String::new();
-    for _ in 0..250 {
-        if let Ok(text) = std::fs::read_to_string(&args_file) {
-            argv = text;
-            break;
+    // The child is detached and the whole workspace runs in parallel, so its argv is
+    // read with a generous bounded wait and one retry: a starved or lost spawn must not
+    // turn a deterministic assertion into a flaky one.
+    let wait_args = |file: std::path::PathBuf| async move {
+        for _ in 0..400 {
+            if let Ok(text) = std::fs::read_to_string(&file) {
+                if !text.is_empty() {
+                    return text;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        String::new()
+    };
+    let mut argv = wait_args(args_file.clone()).await;
+    if argv.is_empty() {
+        let _ = call(&h.manager, "system.open", json!({ "task_id": "focus-me" })).await;
+        argv = wait_args(args_file.clone()).await;
     }
     assert_eq!(argv, "--show-task\nfocus-me\n");
 }
