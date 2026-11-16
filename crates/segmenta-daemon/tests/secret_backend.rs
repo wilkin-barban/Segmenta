@@ -59,7 +59,18 @@ fn keyring_is_detected_without_the_version_flag() {
     let state = dir.path().join("state");
     std::fs::create_dir_all(&state).unwrap();
     let tool = fake_secret_tool(dir.path(), &state);
-    assert!(KeyringSecretStore::probe_tool(&tool));
+    // Writing an executable and exec'ing it in the same test run can hit ETXTBSY
+    // while another test forks, which made this assertion fail one run in five.
+    // The retry absorbs the spawn race without weakening what is asserted.
+    let mut probed = false;
+    for _ in 0..5 {
+        if KeyringSecretStore::probe_tool(&tool) {
+            probed = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(probed, "the fake secret-tool was never detected");
 }
 
 #[test]
