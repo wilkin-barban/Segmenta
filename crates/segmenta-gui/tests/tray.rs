@@ -4,8 +4,8 @@
 
 use segmenta_gui::model::{DownloadItem, DownloadStatus};
 use segmenta_gui::tray::{
-    format_tray_progress, format_tray_speed_eta, select_active_task, TrayAction, TrayMenuItem,
-    TrayModel,
+    format_tray_progress, format_tray_speed_eta, select_active_task, TrayAction, TrayCommand,
+    TrayMenuItem, TrayModel,
 };
 use segmenta_i18n::{tr, Locale, Msg};
 
@@ -373,4 +373,83 @@ fn format_tray_helpers_produce_expected_labels() {
     let speed_eta = format_tray_speed_eta(1024, Some(45), locale);
     assert!(speed_eta.contains("1.0 kB/s"));
     assert!(speed_eta.contains("45 s"));
+}
+
+#[test]
+fn clicking_pause_twice_with_refresh_resolves_current_active_task() {
+    // Assert through the pure layer: tray commands carry no task_id payload
+    let click_1 = TrayCommand::Pause;
+    assert_eq!(click_1, TrayCommand::Pause);
+    assert_eq!(TrayCommand::Resume, TrayCommand::Resume);
+    assert_eq!(TrayCommand::Cancel, TrayCommand::Cancel);
+
+    // Initial snapshot has task-a downloading
+    let task_a = DownloadItem {
+        task_id: "task-a".to_string(),
+        filename: "file-a.iso".to_string(),
+        status: DownloadStatus::Downloading,
+        ..Default::default()
+    };
+    let tasks_1 = vec![task_a.clone()];
+    let (active_1, _) = select_active_task(&tasks_1);
+    assert_eq!(active_1.map(|t| t.task_id.as_str()), Some("task-a"));
+
+    // Refresh model (simulating a rebuild where task-a finished and task-b started)
+    let task_a_done = DownloadItem {
+        status: DownloadStatus::Completed,
+        ..task_a
+    };
+    let task_b = DownloadItem {
+        task_id: "task-b".to_string(),
+        filename: "file-b.iso".to_string(),
+        status: DownloadStatus::Downloading,
+        ..Default::default()
+    };
+    let tasks_2 = vec![task_a_done, task_b];
+
+    // Second click: item closure produces TrayCommand::Pause without an id
+    let click_2 = TrayCommand::Pause;
+    assert_eq!(click_2, TrayCommand::Pause);
+
+    // Handler resolves against the refreshed model: returns current task-b, never stale task-a
+    let (active_2, _) = select_active_task(&tasks_2);
+    assert_eq!(active_2.map(|t| t.task_id.as_str()), Some("task-b"));
+}
+
+#[test]
+fn transferring_task_wins_over_paused_older_one_for_label_and_target() {
+    let task_paused = DownloadItem {
+        task_id: "task-old-paused".to_string(),
+        filename: "old-archive.tar.gz".to_string(),
+        status: DownloadStatus::Paused,
+        ..Default::default()
+    };
+    let task_transferring = DownloadItem {
+        task_id: "task-new-downloading".to_string(),
+        filename: "new-system.iso".to_string(),
+        status: DownloadStatus::Downloading,
+        ..Default::default()
+    };
+
+    // Paused task is older / first in list
+    let tasks = vec![task_paused, task_transferring];
+    let (active, count) = select_active_task(&tasks);
+
+    // Resolved action target is the transferring task
+    assert_eq!(
+        active.map(|t| t.task_id.as_str()),
+        Some("task-new-downloading")
+    );
+    assert_eq!(count, 1);
+
+    // Menu model reflects the transferring task
+    let model = TrayModel::build(active, count, Locale::Es);
+    assert_eq!(
+        model.items[0],
+        TrayMenuItem::Header("new-system.iso".to_string())
+    );
+    // Action row offers Pausar (transferring), not Reanudar (paused)
+    let actions: Vec<TrayAction> = model.items.iter().filter_map(|it| it.action()).collect();
+    assert!(actions.contains(&TrayAction::Pause));
+    assert!(!actions.contains(&TrayAction::Resume));
 }

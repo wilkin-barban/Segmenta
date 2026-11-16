@@ -167,34 +167,14 @@ pub fn build_window_for_client(app: &adw::Application) {
             loop {
                 match receiver.try_recv() {
                     Ok(cmd) => match cmd {
-                        TrayCommand::Open => {
-                            window_handle.window().set_visible(true);
-                            window_handle.window().present();
-                        }
-                        TrayCommand::FocusTask(task_id) => {
-                            window_handle.window().set_visible(true);
-                            window_handle.window().present();
-                            window_handle.focus_task(&task_id);
-                        }
-                        TrayCommand::Pause(task_id) => {
-                            window_handle.pause_task(&task_id);
-                        }
-                        TrayCommand::Resume(task_id) => {
-                            window_handle.resume_task(&task_id);
-                        }
-                        TrayCommand::Cancel(task_id) => {
-                            window_handle.cancel_task(&task_id);
-                        }
-                        TrayCommand::Preferences => {
-                            window_handle.window().set_visible(true);
-                            window_handle.window().present();
-                            window_handle.open_preferences();
-                        }
                         TrayCommand::Quit => {
                             window_handle.set_tray_active(false);
                             APP_HOLD.with(|slot| *slot.borrow_mut() = None);
                             app_handle.quit();
                             return crate::glib::ControlFlow::Break;
+                        }
+                        cmd => {
+                            window_handle.handle_tray_command(cmd);
                         }
                     },
                     Err(std::sync::mpsc::TryRecvError::Empty) => break,

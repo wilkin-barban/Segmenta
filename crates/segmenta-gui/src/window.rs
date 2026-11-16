@@ -829,6 +829,76 @@ impl SegmentaWindow {
         );
     }
 
+    /// Resolves the currently active task according to tray selection rules.
+    pub fn active_task(&self) -> Option<DownloadItem> {
+        let store = self.0.store.borrow();
+        let (task, _) = crate::tray::select_active_task(store.items());
+        task.cloned()
+    }
+
+    /// Pauses the currently active task from the tray or an external trigger.
+    ///
+    /// If there is no active task or it cannot be paused, does nothing and does not error.
+    pub fn pause_active_task(&self) {
+        if let Some(task) = self.active_task() {
+            if task.status.can_pause() {
+                self.pause_task(&task.task_id);
+            }
+        }
+    }
+
+    /// Resumes the currently active task from the tray or an external trigger.
+    ///
+    /// If there is no active task or it cannot be resumed, does nothing and does not error.
+    pub fn resume_active_task(&self) {
+        if let Some(task) = self.active_task() {
+            if task.status.can_resume() {
+                self.resume_task(&task.task_id);
+            }
+        }
+    }
+
+    /// Cancels the currently active task from the tray or an external trigger.
+    ///
+    /// If there is no active task or it cannot be cancelled, does nothing and does not error.
+    pub fn cancel_active_task(&self) {
+        if let Some(task) = self.active_task() {
+            if task.status.can_cancel() {
+                self.cancel_task(&task.task_id);
+            }
+        }
+    }
+
+    /// Dispatches a tray command against this window and its model.
+    pub fn handle_tray_command(&self, cmd: crate::tray::TrayCommand) {
+        match cmd {
+            crate::tray::TrayCommand::Open => {
+                self.0.window.set_visible(true);
+                self.0.window.present();
+            }
+            crate::tray::TrayCommand::Pause => {
+                self.pause_active_task();
+            }
+            crate::tray::TrayCommand::Resume => {
+                self.resume_active_task();
+            }
+            crate::tray::TrayCommand::Cancel => {
+                self.cancel_active_task();
+            }
+            crate::tray::TrayCommand::Preferences => {
+                self.0.window.set_visible(true);
+                self.0.window.present();
+                self.open_preferences();
+            }
+            crate::tray::TrayCommand::Quit => {
+                self.set_tray_active(false);
+                if let Some(app) = self.0.window.application() {
+                    app.quit();
+                }
+            }
+        }
+    }
+
     /// Opens the preferences dialog.
     pub fn open_preferences(&self) {
         let settings = self.0.settings.borrow().clone();

@@ -18,6 +18,7 @@ use segmenta_gui::adw::prelude::*;
 use segmenta_gui::client::{Client, DemoClient};
 use segmenta_gui::model::{DownloadStatus, Filter, Settings, ERR_ANTIVIRUS_UNAVAILABLE};
 use segmenta_gui::prefs;
+use segmenta_gui::tray::TrayCommand;
 use segmenta_gui::window::{SegmentaWindow, ViewState};
 use segmenta_gui::{adw, glib, gtk};
 
@@ -1439,4 +1440,78 @@ fn window_close_should_quit_policy_reflects_tray_presence() {
     assert!(!segmenta_gui::window::close_should_quit(true));
     // When the tray is not active, closing the window terminates the application as usual.
     assert!(segmenta_gui::window::close_should_quit(false));
+}
+
+#[test]
+fn tray_pause_command_acts_on_current_active_task_or_noop() {
+    run_gui(
+        "tray_pause_command_acts_on_current_active_task_or_noop",
+        || {
+            let app_active = app("io.github.wilkin.Segmenta.TestTrayPause");
+
+            // 1. With an active downloading task in the model: handler issues download.pause for task-active
+            let fake =
+                DemoClient::with_downloads(vec![download_row("task-active", "downloading", 1)]);
+            let window = window_with(&app_active, &fake);
+
+            assert!(
+                pump_until(|| window.rows().len() == 1, Duration::from_secs(5)),
+                "the listed download never became a row"
+            );
+
+            window.handle_tray_command(TrayCommand::Pause);
+
+            assert!(
+                pump_until(
+                    || !fake.calls_to("download.pause").is_empty(),
+                    Duration::from_secs(5)
+                ),
+                "download.pause was never issued for the active task"
+            );
+            let pause_calls = fake.calls_to("download.pause");
+            assert_eq!(pause_calls.len(), 1, "expected 1 download.pause call");
+            assert_eq!(pause_calls[0]["task_id"], "task-active");
+
+            // 2. With no active task (empty model): handler issues nothing and does not error
+            let app_empty = app("io.github.wilkin.Segmenta.TestTrayPauseEmpty");
+            let fake_empty = DemoClient::empty();
+            let window_empty = window_with(&app_empty, &fake_empty);
+
+            assert!(
+                pump_until(
+                    || window_empty.view_state() == ViewState::Empty,
+                    Duration::from_secs(5)
+                ),
+                "empty window never reached ViewState::Empty"
+            );
+
+            window_empty.handle_tray_command(TrayCommand::Pause);
+            let _ = pump_until(|| false, Duration::from_millis(200));
+            assert!(
+                fake_empty.calls_to("download.pause").is_empty(),
+                "download.pause should not be called when model is empty"
+            );
+
+            // 3. With only completed tasks (no active task): handler issues nothing and does not error
+            let app_completed = app("io.github.wilkin.Segmenta.TestTrayPauseCompleted");
+            let fake_completed =
+                DemoClient::with_downloads(vec![download_row("task-done", "completed", 1)]);
+            let window_completed = window_with(&app_completed, &fake_completed);
+
+            assert!(
+                pump_until(
+                    || window_completed.rows().len() == 1,
+                    Duration::from_secs(5)
+                ),
+                "completed download never became a row"
+            );
+
+            window_completed.handle_tray_command(TrayCommand::Pause);
+            let _ = pump_until(|| false, Duration::from_millis(200));
+            assert!(
+                fake_completed.calls_to("download.pause").is_empty(),
+                "download.pause should not be called when task is completed"
+            );
+        },
+    );
 }

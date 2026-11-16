@@ -239,18 +239,20 @@ pub fn format_tray_speed_eta(speed_bps: u64, eta_seconds: Option<u64>, locale: L
 }
 
 /// Commands dispatched from the tray thread to the GTK main thread.
+///
+/// Actions resolve their target task at click time on the GTK main thread rather
+/// than embedding a task id when the menu is rendered. The commands mean
+/// "act on the currently active task".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrayCommand {
     /// Present the main window.
     Open,
-    /// Present the main window focused on a specific task.
-    FocusTask(String),
-    /// Pause a task.
-    Pause(String),
-    /// Resume a task.
-    Resume(String),
-    /// Cancel a task.
-    Cancel(String),
+    /// Pause the active task.
+    Pause,
+    /// Resume the active task.
+    Resume,
+    /// Cancel the active task.
+    Cancel,
     /// Open the preferences dialog.
     Preferences,
     /// Terminate the application.
@@ -289,12 +291,25 @@ impl ksni::Tray for SegmentaTray {
         let _ = self.sender.send(TrayCommand::Open);
     }
 
+    // In ksni 0.3, `Handle` only exposes `Handle::update`, which triggers a rebuild
+    // through `Tray::menu(&self)`. When only informational labels change and the layout
+    // structure remains identical, ksni's internal diff emits `items_properties_updated`
+    // instead of `layout_updated`, preserving DBusMenu item IDs across refreshes.
+    //
+    // However, desktop hosts like GNOME Shell AppIndicator may cache open menus or
+    // deliver clicks across an update tick. To ensure rebuilds are NOT on the click
+    // path, the item closures below capture NO task state (Part A). A click on
+    // Pausar, Reanudar, or Cancelar produces a stateless `TrayCommand`, and the GTK
+    // main thread resolves the current active task at the moment the command runs.
+    //
+    // The action rows also maintain stable positions across refreshes: index 4 swaps
+    // between Pausar and Reanudar as state requires, while Open (3), Cancel (5),
+    // Preferences (6), Separator (7), and Quit (8) keep identical positions.
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
         use ksni::menu::*;
         let locale = segmenta_i18n::current();
         let model = TrayModel::build(self.active_task.as_ref(), self.active_count, locale);
         let sender = self.sender.clone();
-        let active_task_id = self.active_task.as_ref().map(|t| t.task_id.clone());
 
         model
             .items
@@ -324,34 +339,15 @@ impl ksni::Tray for SegmentaTray {
                 TrayMenuItem::Separator => MenuItem::Separator,
                 TrayMenuItem::Action(action, label) => {
                     let sender = sender.clone();
-                    let task_id = active_task_id.clone();
                     StandardItem {
                         label,
                         enabled: true,
                         activate: Box::new(move |_| {
                             let cmd = match action {
                                 TrayAction::Open => TrayCommand::Open,
-                                TrayAction::Pause => {
-                                    if let Some(id) = &task_id {
-                                        TrayCommand::Pause(id.clone())
-                                    } else {
-                                        return;
-                                    }
-                                }
-                                TrayAction::Resume => {
-                                    if let Some(id) = &task_id {
-                                        TrayCommand::Resume(id.clone())
-                                    } else {
-                                        return;
-                                    }
-                                }
-                                TrayAction::Cancel => {
-                                    if let Some(id) = &task_id {
-                                        TrayCommand::Cancel(id.clone())
-                                    } else {
-                                        return;
-                                    }
-                                }
+                                TrayAction::Pause => TrayCommand::Pause,
+                                TrayAction::Resume => TrayCommand::Resume,
+                                TrayAction::Cancel => TrayCommand::Cancel,
                                 TrayAction::Preferences => TrayCommand::Preferences,
                                 TrayAction::Quit => TrayCommand::Quit,
                             };
