@@ -23,10 +23,10 @@
 
 ## Tasks
 
-- [ ] T1 — Velocidad real en torrent y streams HLS/DASH (S1, S4) — `crates/segmenta-daemon/src/{manager,torrent,stream_media}.rs` — commit `fix(daemon): report real speed for torrents and streams`
-- [ ] T2 — Velocidad dedicada en la fila de la GUI (S1, S4) — `crates/segmenta-gui/src/{model,window}.rs`, `crates/segmenta-i18n/src/lib.rs`, tests GUI — commit `feat(gui): show the download speed in the list row`
-- [ ] T3 — `scheduled_at` por tarea: migración, RPC y arranque diferido (S3, S5) — `crates/segmenta-daemon/src/{store,manager,scheduler}.rs` — commit `feat(daemon): schedule one download for an exact time`
-- [ ] T4 — Diálogo **Programar** y estado visible en la fila (S3, S5, S7) — `crates/segmenta-gui/src/{add_dialog,window,model}.rs`, i18n, tests — commit `feat(gui): schedule a download from the interface`
+- [x] T1 — Velocidad real en torrent y streams HLS/DASH (S1, S4) — `crates/segmenta-daemon/src/{manager,torrent,stream_media}.rs` — `7485673`
+- [x] T2 — Velocidad dedicada en la fila de la GUI (S1, S4) — `crates/segmenta-gui/src/{model,window}.rs`, `crates/segmenta-i18n/src/lib.rs`, tests GUI — `c422c4a`
+- [x] T3 — `scheduled_at` por tarea: migración, RPC y arranque diferido (S3, S5) — `crates/segmenta-daemon/src/{store,manager,scheduler}.rs` — `543de27`, `92293df`, `92e080e`, `9755e1c`, `2e385fe`
+- [x] T4 — Diálogo **Programar** y estado visible en la fila (S3, S5, S7) — `crates/segmenta-gui/src/{add_dialog,window,model}.rs`, i18n, tests — `9755e1c`
 - [ ] T5 — Bandeja del sistema con progreso y acciones (S2, S6, S7) — `crates/segmenta-gui/src/tray.rs` (nuevo), `Cargo.toml`, `main.rs`, `app.rs`, `window.rs`, i18n — commit `feat(gui): add a system tray icon with live progress`
 - [ ] T6 — Documentación (OpenSpec 04/07, README, CHANGELOG, notas 0.3.0) — commit `docs: document 0.3.0`
 - [ ] T7 — Artefactos 0.3.0 y verificación en el host (sin publicar) — commit `chore(release): bump to 0.3.0`
@@ -59,3 +59,10 @@
 - L1 — Pedido del usuario (verbatim):
 
 > vamos a preparar la siguiente release, esta tendra las siguientes mejoras: en la interfaz UI de Segmenta, no se muestra la velocidad en que se esta descargando el archivo/video/torren/etc, esta informacion es necesaria mostrarla correctamente. Tenemos que desarrollar un icono en la bandeja de sistema de ubuntu que muestre el proceso en ejecucion, este icono mostrara al darle clic la informacion detallada y resumida de la descarga que este teniendo lugar en la aplicacion de Segmenta, es como un widget, adaptado a ubuntu y mostrando informacion de la descarga, con botones de abrir Segmnenta, Salir de la aplicacion y cuando esta la descarga en ejecucion botones de pausa o cancelacion, tendra ademas opciones ded clid derecho, mostrando opciones. Otra cosa que tenemos que desarrollar en la nueva release en un temporizador, quiero poder programar las descargas para una hora en especifico si es que lo quiero, algo asi como un programador de descargas. Investiga como implementar todas estas mejoras y al terminar la exploracion e investigacion, pidele al agente en Segmenta que las implemente, le pasas la directiva correcta y detallada al agente en Segmenta y lo orquestas hasta que termine
+
+### Velocidad y programador cerrados (2026-11-15)
+
+- T1: `ProgressPipeline` unifica tasa y ETA para torrent y streams; los ceros cableados desaparecieron. Tests: 2 de integración con dos muestras.
+- T2: etiqueta de velocidad dedicada en la fila, actualizada en el lugar por `sync_row`; `Msg::Speed` como nombre accesible.
+- T3/T4: migracion 6 aditiva (`scheduled_at`), gate en `start_pending_for_queue`, `resume_task` y el relanzamiento multimedia, `normalize_scheduled_at` (ISO-8601 con zona u `HH:MM` local con DST) normalizado a UTC RFC-3339, `--at` en CLI y dialogo **Programar** con calendario + hora/minuto.
+- Flake preexistente identificado y neutralizado: `keyring_is_detected_without_the_version_flag` fallaba 1 de cada 5 corridas por un race `exec`/`ETXTBSY`; el test reintenta la sonda (`9b0a569`). Gate posterior: 3 corridas seguidas de `cargo test --workspace` en 426 verdes.
