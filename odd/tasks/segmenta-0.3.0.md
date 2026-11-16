@@ -88,3 +88,14 @@ Verificado por D-Bus sobre el `StatusNotifierWatcher` real de la sesión GNOME d
 - Menú con descarga real (105 MB por HTTP): `2 % · 2.2 MB de 104.9 MB` y `2.5 MB/s · 42 s restante`, refrescando en vivo, con Abrir · Pausar · Cancelar · Preferencias · Salir.
 - **Tres defectos encontrados y corregidos** (`1e2cdff`, `add2bfc`, `d11135a`): los ids de DBusMenu se renumeraban en cada refresco y el clic caía en una tarea vieja; el handler resolvía la tarea contra el modelo de la ventana, que deja de refrescarse cuando la ventana está oculta en la bandeja; y las acciones seguían dependiendo del hilo GTK. Ahora el tray ejecuta pause/resume/cancel con su propio cliente sobre la tarea que está mostrando.
 - **Bloqueo del entorno, no del código**: la extensión `ubuntu-appindicators@ubuntu.com` falló en `_setupProxy` (`appIndicator.js:484`) y el `StatusNotifierWatcher` desapareció; además hay dos ids de extensión AppIndicator habilitados a la vez, uno de ellos (`appindicatorsupport@rgcjonas.gmail.com`) sin archivos instalados. Hasta resolver eso, el icono no puede aparecer aunque el código registre bien.
+
+### Publicación v0.3.0 (2026-11-16)
+
+- Notas y CHANGELOG actualizados con los tres defectos de la bandeja encontrados en la prueba en vivo
+  del host (ids de DBusMenu, resolución de la tarea con la ventana oculta, reintento del watcher), y
+  con el gate real de la versión final (440 workspace, 113 GUI, 176 Node).
+- README apunta a `v0.3.0` como última release; OpenSpec 04/07 sin cambios.
+- Artefactos finales: `.deb` sha256 `2c09f8f641964599d1a588490e6e79bcb550c0740c88ec1eaaabf673cde39004`,
+  extensión `f4d7fb68796202a7cb53bc0a7c76dc250b87164d33cca6b06364041f4fddb8dd`, firefox
+  `2cc55306233b9b5c3c1fc5d82374f528f9be27acce02c0d5d7984d9f502e83eb`; `check-package` 23/23.
+- Publicada con tag `v0.3.0` y GitHub Release con los cinco assets.

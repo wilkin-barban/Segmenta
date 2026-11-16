@@ -8,8 +8,6 @@ Velocidad real visible en la fila de descargas y en descargas de medios/torrents
 descargas por fecha y hora exactas, e icono en la bandeja de sistema adaptado a Ubuntu con ciclo de
 vida en segundo plano.
 
-> **Nota:** Esta versión no está publicada aún como release oficial en GitHub ni cuenta con tag en
-> el repositorio. El paquete `.deb` generado en este árbol es `segmenta_0.3.0-1_amd64.deb`.
 
 ## Qué problema resuelve
 
@@ -95,6 +93,27 @@ cerrar la ventana finaliza la aplicación de forma inmediata, manteniendo el com
 dejar procesos huérfanos. Los comandos enviados desde el hilo de la bandeja cruzan al hilo principal
 de GTK mediante un canal seguro que se vacía cada 250 ms.
 
+### Bandeja probada en vivo: tres defectos corregidos
+
+Probar el icono en un escritorio GNOME real destapó problemas que ninguna prueba sintética mostraba:
+
+- **El menú actuaba sobre la tarea equivocada.** Cada refresco reconstruía el menú y cada ítem
+  capturaba el `task_id` del momento en que se construyó, así que un clic podía pausar una descarga
+  anterior o no hacer nada. Las acciones ya no llevan `task_id`: resuelven la tarea activa en el
+  instante del clic, y los identificadores de DBusMenu quedaron estables entre refrescos (verificado
+  por D-Bus: ids `7…15` idénticos a dos segundos de distancia).
+- **La ventana oculta rompía Retomar y Cancelar.** El handler resolvía la tarea contra el modelo de
+  la ventana, que deja de refrescarse cuando está oculta en la bandeja. Ahora el tray ejecuta pausa,
+  reanudación y cancelación con su propio cliente IPC, sobre la tarea que el menú está mostrando.
+- **El icono no aparecía si el watcher llegaba tarde.** `StatusNotifierWatcher` pertenece al shell,
+  no a Segmenta: falta en una sesión sin la extensión AppIndicator, mientras esa extensión carga y
+  durante un instante tras reiniciar el shell. Antes se rendía en el primer intento y la aplicación
+  quedaba sin icono para siempre; ahora reintenta cada 5 segundos hasta lograrlo.
+
+Ciclo verificado en el host con una descarga HTTP real de 105 MB, operando el menú por D-Bus:
+pausar (`downloading` → `paused`), retomar (`paused` → `downloading`) y cancelar
+(`downloading` → `cancelled`), y el menú volviendo a `Ningún download activo` al quedar sin tareas.
+
 ### Estabilidad en el suite de pruebas
 
 Se corrigieron dos condiciones de carrera preexistentes en los tests:
@@ -143,8 +162,9 @@ segmenta media add https://www.youtube.com/watch?v=dQw4w9WgXcQ --mode video --he
 
 Resultados observados en el árbol de desarrollo:
 
-- `cargo test --workspace` → 436 tests verdes (repetido cuatro veces consecutivas).
-- `xvfb-run -a cargo test -p segmenta-gui` → 109 tests verdes.
+- `cargo test --workspace` → 440 tests verdes (seis corridas consecutivas tras eliminar las carreras
+  `ETXTBSY` del arnés).
+- `xvfb-run -a cargo test -p segmenta-gui` → 113 tests verdes.
 - `node extension/tests/run.mjs` → 176 tests verdes.
 - `cargo fmt --all -- --check` y `cargo clippy --workspace --all-targets -- -D warnings` limpios.
 - `segmenta-gui --smoke` OK (arranque, renderizado sintético y salida limpia bajo Xvfb).
@@ -152,7 +172,14 @@ Resultados observados en el árbol de desarrollo:
 
 ## Instalación desde el código
 
-Dado que la release 0.3.0 no ha sido publicada aún en GitHub, para probarla en el entorno local:
+Desde la release publicada:
+
+```bash
+sha256sum -c segmenta_0.3.0-SHA256SUMS
+sudo apt install ./segmenta_0.3.0-1_amd64.deb
+```
+
+O desde el código:
 
 ```bash
 cargo build --release --workspace

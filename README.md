@@ -99,16 +99,12 @@ sólo después de que el daemon demuestra que tiene los bytes.
 
 ### Opción recomendada: Release `.deb`
 
-> **Nota:** La versión 0.3.0 es la versión desarrollada en este árbol de trabajo y aún no ha sido
-> publicada oficialmente en GitHub. La última release publicada disponible para descarga directa es
-> **v0.2.4**. Para probar 0.3.0 en este entorno, consultá [Desde el código](#desde-el-código).
-
 Descargá el paquete y los checksums desde la
-[Release v0.2.4](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.4), luego:
+[Release v0.3.0](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.3.0), luego:
 
 ```bash
-sha256sum -c segmenta_0.2.4-SHA256SUMS
-sudo apt install ./segmenta_0.2.4-1_amd64.deb
+sha256sum -c segmenta_0.3.0-SHA256SUMS
+sudo apt install ./segmenta_0.3.0-1_amd64.deb
 systemctl --user daemon-reload
 systemctl --user enable --now segmenta.socket
 segmenta hello
@@ -260,8 +256,8 @@ en una sola vista; estos son los enlaces directos:
 
 | Versión | Publicación | Release | Notas |
 | --- | --- | --- | --- |
-| **0.3.0** (en este árbol) | Sin publicar | — | [Notas](packaging/release-notes-0.3.0.md) |
-| **0.2.4** (última) | 2026-11-15 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.4) | [Notas](packaging/release-notes-0.2.4.md) |
+| **0.3.0** (última) | 2026-11-16 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.3.0) | [Notas](packaging/release-notes-0.3.0.md) |
+| 0.2.4 | 2026-11-15 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.4) | [Notas](packaging/release-notes-0.2.4.md) |
 | 0.2.3 | 2026-11-15 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.3) | [Notas](packaging/release-notes-0.2.3.md) |
 | 0.2.1 | 2026-11-14 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.1) | [Notas](packaging/release-notes-0.2.1.md) |
 | 0.2.0 | 2026-11-13 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.0) | [Notas](packaging/release-notes-0.2.0.md) |
@@ -273,11 +269,11 @@ en una sola vista; estos son los enlaces directos:
 
 ## Estado y límites
 
-- **0.3.0 en este árbol (sin publicar)**: [Notas de versión](packaging/release-notes-0.3.0.md).
-  Incorpora velocidad dedicada en la fila y cálculo de tasa real en torrents/streams, descargas
-  programadas con `--at` y diálogo con calendario/hora, icono en la bandeja del sistema con menú
-  adaptado a Ubuntu GNOME y persistencia en segundo plano al cerrar la ventana.
-- **v0.2.4 publicada**: [Release y assets](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.4).
+- **v0.3.0 publicada**: [Release y assets](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.3.0).
+  Velocidad real visible en la fila y en torrents/streams, descargas programadas por fecha y hora,
+  icono en la bandeja del sistema con acciones de pausa, reanudación y cancelación, y cierre a
+  bandeja con el proceso vivo.
+- **v0.2.4**: [Release y assets](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.4).
   Alinea el ladder `qualities` a tiers nominales en el daemon y en la extensión, arregla la
   localización del menú contextual, agrega un fallback progresivo ante un 403 transitorio, permite
   reintentar tareas fallidas desde la interfaz y deja de abrir la ventana al añadir una descarga.

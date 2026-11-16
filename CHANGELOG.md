@@ -9,7 +9,7 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 
 Velocidad real visible en la fila de descargas y en torrents/streams, descargas programadas para una
 fecha y hora exactas, icono en la bandeja del sistema con menú adaptado a Ubuntu y ciclo de vida de
-cierre a bandeja. Sin tag ni Release publicada.
+cierre a bandeja. Publicada como `v0.3.0`.
 
 ### Added
 
@@ -44,7 +44,16 @@ cierre a bandeja. Sin tag ni Release publicada.
   cada 250 ms.
 
 ### Fixed
-
+- **Las acciones de la bandeja actúan sobre la descarga viva**: el menú se reconstruía en cada
+  refresco y cada ítem capturaba el `task_id` del momento de construcción, así que un clic podía
+  pausar una descarga anterior. Las acciones ya no llevan `task_id`: resuelven la tarea activa al
+  hacer clic, y los ids de DBusMenu quedan estables entre refrescos.
+- **Retomar y Cancelar funcionan con la ventana oculta**: el handler resolvía la tarea contra el
+  modelo de la ventana, que deja de refrescarse cuando está en la bandeja; ahora pausa, reanudación y
+  cancelación se ejecutan desde el hilo de la bandeja con su propio cliente IPC.
+- **El icono aparece cuando el watcher llega tarde**: `StatusNotifierWatcher` pertenece al shell y
+  puede faltar al arrancar; en vez de rendirse en el primer intento, el registro se reintenta cada
+  5 segundos hasta lograrlo.
 - **Velocidad en cero para torrents y streams**: `ProgressPipeline` en `crates/segmenta-daemon/src/manager.rs`
   deriva la tasa a partir de los bytes recibidos entre muestras sobre el intervalo transcurrido y
   calcula el ETA; torrents y transmisiones HLS/DASH, que antes publicaban `speed_bps: 0`, ahora
