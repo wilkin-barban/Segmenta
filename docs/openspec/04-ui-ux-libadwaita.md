@@ -82,6 +82,12 @@ Segmenta sigue las **GNOME Human Interface Guidelines (HIG)** sobre GTK4 + Libad
    `download.list {"filter":"all","limit":500,"offset":0}` por refresco; el filtro de la barra
    lateral y la búsqueda se aplican en cliente (`set_single_click_activate(false)`, la activación
    es explícita). Tope real: 500 tareas, sin paginación todavía.
+   * **Fila de descarga y etiqueta de velocidad dedicada:** cada fila muestra el nombre del archivo,
+     la barra de progreso, el subtítulo de estado y una etiqueta de velocidad dedicada a la derecha
+     (estilo atenuado `.dim-label`, con nombre accesible derivado de `Msg::Speed`). La etiqueta de
+     velocidad se actualiza en el lugar mediante `sync_row` sin reconstruir los widgets de la fila, y
+     se oculta automáticamente cuando la velocidad es cero. Para tareas programadas con fecha futura,
+     la fila sustituye la velocidad y el ETA por «Programada para [fecha/hora]».
 5. **Página de detalle** (`AdwNavigationPage` con `tag = "detail"`): nombre, ruta final, estado en
    píldora, barra de progreso con porcentaje, velocidad, ETA, tamaño, mensaje de error, widget de
    segmentos con etiqueta accesible y acciones **Pausar**, **Reanudar**, **Cancelar** (con
@@ -152,6 +158,18 @@ Para un ancho total del widget $W$ y un tamaño total de archivo $S$:
 * `download.cancel` y `download.delete` se envían con `delete_file: false` desde la UI: ningún
   botón borra el archivo del disco.
 
+### 4.4. Descargas programadas (diálogo y fila)
+* **Controles en el diálogo de alta (`add_dialog.rs`):** el diálogo de añadir descarga incorpora un
+  interruptor «Programar» (`AdwSwitchRow`). Al activarse, despliega un calendario interactivo
+  (`GtkCalendar`) y selectores numéricos de hora y minuto (`AdwSpinRow`).
+* **Normalización y envío:** al pulsar «Iniciar» con la programación activa, la fecha y hora
+  seleccionadas se validan y convierten a UTC RFC-3339, enviándose en el campo `scheduled_at` de
+  `download.add`.
+* **Representación en la lista:** una tarea programada para el futuro se registra en estado `pending`.
+  Su fila en la lista principal muestra el texto «Programada para [fecha y hora local formateada]» y
+  ofrece el botón de cancelar. Al llegar la hora prevista, el scheduler del daemon la inicia de forma
+  automática y la fila pasa a reflejar el progreso habitual, el ETA y la velocidad en vivo.
+
 ---
 
 ## 5. Integración con el Sistema Operativo Ubuntu
@@ -166,13 +184,54 @@ Para un ancho total del widget $W$ y un tamaño total de archivo $S$:
   i18n, no contrato.
   * **No hay botones de acción** en la notificación («Abrir archivo» / «Mostrar en carpeta» no
     existen); abrir la carpeta es una acción del detalle.
-* **Bandeja del sistema:** no implementada. GNOME no garantiza AppIndicator sin extensión, así que la
-  app no asume `libayatana-appindicator3` ni promete un icono de bandeja.
+* **Bandeja del sistema y persistencia:** implementada en 0.3.0 mediante StatusNotifierItem (`ksni`
+  0.3 en Rust puro, sin dependencias C). Ver §5.1.
 * **Portal `org.freedesktop.portal.Background`:** no se usa. La instalación como servicio de usuario
   (`systemd --user`) es la que sostiene el daemon; el `.desktop` sólo lanza la GUI.
 * **Modos de QA del binario** (`main.rs`): `--smoke` construye la ventana con una descarga sintética
   y sale al reflejarla, `--show-task ID` abre el detalle de una tarea y `--screenshots DIR` escribe
   las capturas claro/oscuro de 1440×900.
+
+### 5.1. Bandeja del sistema (StatusNotifierItem) y ciclo de vida en segundo plano
+
+Segmenta 0.3.0 integra un icono en la bandeja de sistema mediante la especificación
+StatusNotifierItem utilizando la crate `ksni` 0.3 (implementación pura en Rust sobre D-Bus, sin
+dependencias de librerías C adicionales como `libayatana-appindicator3` ni cambios en los paquetes
+del sistema).
+
+* **Entorno GNOME / Ubuntu:** en Ubuntu GNOME la extensión *Ubuntu AppIndicators* está activa por
+  defecto. Con esta extensión el clic izquierdo sobre el icono abre directamente el menú del
+  indicador; por lo tanto, el menú actúa como el propio widget interactivo.
+* **Información mostrada en el menú:**
+  * Cabecera informativa con el nombre del archivo de la descarga activa (o identificador de tarea
+    si no hay nombre disponible, o texto de reposo cuando no hay tareas en transferencia).
+  * Fila de progreso con porcentaje y volumen descargado/total (`25 % · 1.0 GB de 4.0 GB`). Si el
+    tamaño total es desconocido (por ejemplo, streams en vivo o torrents antes de recibir
+    metadatos), se muestra `—` con los bytes descargados en lugar de un porcentaje falseado en `0 %`.
+  * Fila de velocidad y tiempo estimado (`4.2 MB/s · 3 min rest.`).
+  * Acciones interactivas:
+    * **Abrir Segmenta:** restaura y enfoca la ventana principal.
+    * **Pausar / Reanudar:** acción dinámica según el estado de la tarea en curso (`Pausar` cuando
+      está en `downloading`; `Reanudar` cuando está en `paused`).
+    * **Cancelar:** cancela la tarea activa.
+    * **Preferencias:** abre el diálogo de preferencias de la aplicación.
+    * **Salir de la aplicación:** termina el proceso de forma definitiva.
+  * Todas las etiquetas del menú están localizadas en `es`, `en` y `pt_BR` a través de `segmenta-i18n`.
+* **Ciclo de vida y persistencia al cerrar (`close-to-tray`):**
+  * Cuando la bandeja se inicializa exitosamente, la aplicación adquiere un `app.hold()` que mantiene
+    vivo el loop de eventos de GTK. Al cerrar la ventana principal (`close-request`), la ventana
+    simplemente se oculta (`set_visible(false)`) y el proceso continúa ejecutándose en segundo plano,
+    permitiendo que las descargas sigan activas y que el usuario interactúe desde la bandeja.
+  * **Salir de la aplicación** desde el menú de la bandeja libera el hold y finaliza el proceso.
+  * **Fallback sin bandeja:** si al iniciar la aplicación no se detecta el servicio
+    `StatusNotifierWatcher` en el bus D-Bus o falla la inicialización de la bandeja,
+    `close_should_quit` evalúa a verdadero: cerrar la ventana finaliza la aplicación de inmediato,
+    preservando el comportamiento estándar cuando no hay soporte de bandeja.
+  * **Paso de mensajes entre hilos:** el servicio de bandeja corre en su propio hilo con un cliente
+    IPC dedicado (`Arc<dyn Client>`). Para no bloquear ni violentar el hilo principal de GTK, los
+    comandos de usuario (`Open`, `Pause`, `Resume`, `Cancel`, `Preferences`, `Quit`) se transmiten a
+    través de un canal `std::sync::mpsc` que el hilo de GTK procesa periódicamente cada 250 ms
+    mediante un timeout local.
 
 ---
 

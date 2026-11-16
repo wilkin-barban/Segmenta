@@ -5,6 +5,56 @@ Todos los cambios notables de Segmenta se documentan en este archivo.
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el proyecto usa
 [Versionado semántico](https://semver.org/lang/es/).
 
+## [0.3.0] - 2026-11-15
+
+Velocidad real visible en la fila de descargas y en torrents/streams, descargas programadas para una
+fecha y hora exactas, icono en la bandeja del sistema con menú adaptado a Ubuntu y ciclo de vida de
+cierre a bandeja. Sin tag ni Release publicada.
+
+### Added
+
+- **Velocidad dedicada en la fila**: etiqueta dedicada a la derecha en cada fila de descargas de la
+  interfaz (`Msg::Speed` como nombre accesible), actualizada en el lugar por `sync_row` sin
+  reconstruir los widgets de la fila; se oculta automáticamente cuando la velocidad es cero.
+- **Descargas programadas por tarea**: `scheduled_at` almacena fecha y hora para diferir el inicio
+  de descargas directas y multimedia (migración aditiva 6 sin reescritura de tabla). Formatos
+  admitidos: ISO-8601 con zona horaria o `HH:MM` local (hoy, o mañana si la hora ya pasó, resolviendo
+  huso horario y DST con `mktime`), normalizados a UTC RFC-3339 (`1004 ERR_INVALID_PARAMS` ante
+  formatos no reconocidos). Una tarea futura permanece en `pending` (`start_pending_for_queue`,
+  `download.resume` y el relanzamiento multimedia la preservan) y arranca en el tick de 30 s del
+  scheduler al cumplirse el momento. En la CLI mediante `--at` y en la GUI mediante el interruptor
+  «Programar» del diálogo de alta (calendario + selectores de hora y minuto) con la fila mostrando
+  «Programada para …». La ventana diaria recurrente por cola (`queue.schedule`) se mantiene intacta
+  y complementaria.
+- **Icono en la bandeja del sistema (System tray)**: integración pura en Rust con `ksni` 0.3
+  (StatusNotifierItem, sin dependencias C ni librerías de sistema adicionales, preservando CI y
+  dependencias del paquete `.deb`). En Ubuntu con la extensión *Ubuntu AppIndicators* activa, el
+  clic izquierdo abre el menú, que actúa como el widget de la bandeja: muestra nombre de archivo,
+  progreso con porcentaje y bytes descargados/totales (con `—` para tamaños indeterminados en lugar
+  de 0%), velocidad y ETA; y acciones «Abrir Segmenta», «Pausar» o «Reanudar» según el estado,
+  «Cancelar», «Preferencias» y «Salir de la aplicación» (localizadas en `es`, `en` y `pt_BR`).
+  Dispone de su propio cliente IPC en un hilo independiente, suscrito a eventos de tareas
+  (`task_progress`, `task_added`, `task_updated`) con refresco limitado a 1 s y sondeo de respaldo
+  cada 2 s.
+- **Ciclo de vida cerrar a la bandeja**: al estar la bandeja activa, cerrar la ventana principal
+  oculta la interfaz y mantiene el proceso vivo (`app.hold()`), preservando las descargas en curso y
+  el icono en la bandeja; «Salir de la aplicación» desde el menú de la bandeja termina el proceso.
+  Si no hay bandeja disponible (sin `StatusNotifierWatcher`), cerrar la ventana termina el proceso
+  como antes. Los comandos de la bandeja cruzan al hilo principal de GTK mediante un canal evaluado
+  cada 250 ms.
+
+### Fixed
+
+- **Velocidad en cero para torrents y streams**: `ProgressPipeline` en `crates/segmenta-daemon/src/manager.rs`
+  deriva la tasa a partir de los bytes recibidos entre muestras sobre el intervalo transcurrido y
+  calcula el ETA; torrents y transmisiones HLS/DASH, que antes publicaban `speed_bps: 0`, ahora
+  reportan su velocidad real.
+- **Condición de carrera en sonda de llavero**: `keyring_is_detected_without_the_version_flag`
+  reintenta la sonda ante errores transitorios `exec`/`ETXTBSY` en el binario temporal de prueba.
+- **Serialización en prueba de apertura de interfaz**:
+  `system_open_launches_the_gui_with_the_task_as_an_argument` serializa el acceso a la variable de
+  entorno global `SEGMENTA_GUI` con un mutex para evitar colisiones entre tests concurrentes.
+
 ## [0.2.4] - 2026-11-15
 
 El ladder de calidades usa los mismos tiers nominales en el daemon y en la extensión, la extensión

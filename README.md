@@ -86,18 +86,22 @@ sólo después de que el daemon demuestra que tiene los bytes.
 | Área | Qué incluye |
 | --- | --- |
 | Motor directo | HTTP/HTTPS segmentado, hot-split, reanudación, checksum SHA-256, límite global, reintentos con `Retry-After` y SSRF bloqueado |
-| Torrents | Motor `librqbit` embebido, magnet y `.torrent`, archivos múltiples, seeding desactivado por defecto |
-| Medios | YouTube (video, audio, playlists), HLS/DASH públicos con remux `ffmpeg`; DRM/AES/live fuera de alcance |
-| Colas | `max_active` real, ventanas horarias y acción al completar |
+| Torrents | Motor `librqbit` embebido, magnet y `.torrent`, archivos múltiples, velocidad real y seeding desactivado por defecto |
+| Medios | YouTube (video, audio, playlists), HLS/DASH públicos con remux `ffmpeg` y velocidad real; DRM/AES/live fuera de alcance |
+| Colas | `max_active` real, programación puntual de descargas (`scheduled_at`), ventanas horarias y acción al completar |
 | Seguridad | Secretos en Secret Service, sin credenciales en SQLite/logs, redirects cross-origin sin credenciales |
-| GUI | GTK4/Libadwaita, búsqueda, filtros, detalle por segmentos, temas y notificaciones |
-| CLI | `segmenta` con `--json`, códigos de salida estables y control completo sin GUI |
+| GUI | GTK4/Libadwaita, velocidad dedicada en fila, bandeja de sistema con progreso y acciones, búsqueda, filtros, detalle por segmentos, temas y notificaciones |
+| CLI | `segmenta` con `--json`, programación con `--at`, códigos de salida estables y control completo sin GUI |
 | Extensión | Chromium MV3 y Firefox, panel de YouTube, captura genérica, Native Messaging con allowlist |
 | Paquete | `.deb` para Ubuntu 26.04+, `yt-dlp` embebido con SHA-256, instalación limpia probada en CI |
 
 ## Instalación
 
 ### Opción recomendada: Release `.deb`
+
+> **Nota:** La versión 0.3.0 es la versión desarrollada en este árbol de trabajo y aún no ha sido
+> publicada oficialmente en GitHub. La última release publicada disponible para descarga directa es
+> **v0.2.4**. Para probar 0.3.0 en este entorno, consultá [Desde el código](#desde-el-código).
 
 Descargá el paquete y los checksums desde la
 [Release v0.2.4](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.4), luego:
@@ -126,8 +130,8 @@ sudo apt-get install build-essential pkg-config libgtk-4-dev libadwaita-1-dev \
 packaging/fetch-ytdlp.sh
 cargo build --release --workspace
 cargo deb -p segmenta-gui --no-build -o dist/
-packaging/check-package.sh dist/segmenta_0.2.4-1_amd64.deb 0.2.4
-sudo apt install ./dist/segmenta_0.2.4-1_amd64.deb
+packaging/check-package.sh dist/segmenta_0.3.0-1_amd64.deb 0.3.0
+sudo apt install ./dist/segmenta_0.3.0-1_amd64.deb
 systemctl --user daemon-reload
 systemctl --user enable --now segmenta.socket
 ```
@@ -141,18 +145,20 @@ socket, no sólo el servicio: el daemon usa socket activation.
 
 Abrí **Segmenta** desde el menú o ejecutá `segmenta-gui`.
 
-- `Ctrl+N`: añadir URL.
+- `Ctrl+N`: añadir URL (incluye interruptor **Programar** con calendario y hora para inicio diferido).
 - `Ctrl+F`: buscar.
 - `Ctrl+,`: Preferencias.
-- Menú de fila: pausar, reanudar, cancelar, eliminar y abrir carpeta.
+- Menú de fila: pausar, reanudar, cancelar, eliminar y abrir carpeta (con etiqueta dedicada de velocidad en vivo).
 - Menú principal: **Limpiar completadas** y **Selección múltiple** para borrar una o varias tareas
   con la casilla opcional **Eliminar también los archivos descargados**.
+- **Bandeja del sistema:** icono con progreso en vivo, menú de acciones (abrir, pausar/reanudar, cancelar, salir) y persistencia en segundo plano al cerrar la ventana.
 
 ### CLI
 
 ```bash
 # Descarga y control
 segmenta add https://example.com/ubuntu.iso
+segmenta add https://example.com/ubuntu.iso --at 23:30   # programar descarga por hora local o ISO-8601
 segmenta list
 segmenta status <task-id>
 segmenta pause <task-id>
@@ -254,6 +260,7 @@ en una sola vista; estos son los enlaces directos:
 
 | Versión | Publicación | Release | Notas |
 | --- | --- | --- | --- |
+| **0.3.0** (en este árbol) | Sin publicar | — | [Notas](packaging/release-notes-0.3.0.md) |
 | **0.2.4** (última) | 2026-11-15 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.4) | [Notas](packaging/release-notes-0.2.4.md) |
 | 0.2.3 | 2026-11-15 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.3) | [Notas](packaging/release-notes-0.2.3.md) |
 | 0.2.1 | 2026-11-14 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.1) | [Notas](packaging/release-notes-0.2.1.md) |
@@ -266,6 +273,10 @@ en una sola vista; estos son los enlaces directos:
 
 ## Estado y límites
 
+- **0.3.0 en este árbol (sin publicar)**: [Notas de versión](packaging/release-notes-0.3.0.md).
+  Incorpora velocidad dedicada en la fila y cálculo de tasa real en torrents/streams, descargas
+  programadas con `--at` y diálogo con calendario/hora, icono en la bandeja del sistema con menú
+  adaptado a Ubuntu GNOME y persistencia en segundo plano al cerrar la ventana.
 - **v0.2.4 publicada**: [Release y assets](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.4).
   Alinea el ladder `qualities` a tiers nominales en el daemon y en la extensión, arregla la
   localización del menú contextual, agrega un fallback progresivo ante un 403 transitorio, permite

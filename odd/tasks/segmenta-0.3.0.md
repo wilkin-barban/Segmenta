@@ -27,9 +27,9 @@
 - [x] T2 — Velocidad dedicada en la fila de la GUI (S1, S4) — `crates/segmenta-gui/src/{model,window}.rs`, `crates/segmenta-i18n/src/lib.rs`, tests GUI — `c422c4a`
 - [x] T3 — `scheduled_at` por tarea: migración, RPC y arranque diferido (S3, S5) — `crates/segmenta-daemon/src/{store,manager,scheduler}.rs` — `543de27`, `92293df`, `92e080e`, `9755e1c`, `2e385fe`
 - [x] T4 — Diálogo **Programar** y estado visible en la fila (S3, S5, S7) — `crates/segmenta-gui/src/{add_dialog,window,model}.rs`, i18n, tests — `9755e1c`
-- [ ] T5 — Bandeja del sistema con progreso y acciones (S2, S6, S7) — `crates/segmenta-gui/src/tray.rs` (nuevo), `Cargo.toml`, `main.rs`, `app.rs`, `window.rs`, i18n — commit `feat(gui): add a system tray icon with live progress`
-- [ ] T6 — Documentación (OpenSpec 04/07, README, CHANGELOG, notas 0.3.0) — commit `docs: document 0.3.0`
-- [ ] T7 — Artefactos 0.3.0 y verificación en el host (sin publicar) — commit `chore(release): bump to 0.3.0`
+- [x] T5 — Bandeja del sistema con progreso y acciones (S2, S6, S7) — `crates/segmenta-gui/src/tray.rs` (nuevo), `Cargo.toml`, `main.rs`, `app.rs`, `window.rs`, i18n — `d58c615`, `99c197c`, `1d23009`
+- [x] T6 — Documentación (OpenSpec 04/07, README, CHANGELOG, notas 0.3.0, QA live) — `CHANGELOG.md`, `README.md`, `docs/openspec/`, `packaging/release-notes-0.3.0.md`, `docs/qa/segmenta-0.3.0-live.md`
+- [ ] T7 — Artefactos 0.3.0 y verificación en el host (sin publicar) — pendiente: verificación final de empaquetado y prueba en sesión real de Ubuntu antes de publicación.
 
 ## Evidencia de la exploración (2026-11-15)
 
@@ -66,3 +66,8 @@
 - T2: etiqueta de velocidad dedicada en la fila, actualizada en el lugar por `sync_row`; `Msg::Speed` como nombre accesible.
 - T3/T4: migracion 6 aditiva (`scheduled_at`), gate en `start_pending_for_queue`, `resume_task` y el relanzamiento multimedia, `normalize_scheduled_at` (ISO-8601 con zona u `HH:MM` local con DST) normalizado a UTC RFC-3339, `--at` en CLI y dialogo **Programar** con calendario + hora/minuto.
 - Flake preexistente identificado y neutralizado: `keyring_is_detected_without_the_version_flag` fallaba 1 de cada 5 corridas por un race `exec`/`ETXTBSY`; el test reintenta la sonda (`9b0a569`). Gate posterior: 3 corridas seguidas de `cargo test --workspace` en 426 verdes.
+
+### Bandeja del sistema y documentación cerradas (2026-11-15)
+
+- T5: icono de bandeja StatusNotifierItem mediante `ksni` 0.3 (`d58c615`), ciclo de vida de cierre a segundo plano con `app.hold()` y fallback sin watcher (`99c197c`), y serialización del test `system.open` sobre `SEGMENTA_GUI` (`1d23009`).
+- T6: documentación completa de la versión 0.3.0 en `CHANGELOG.md`, notas de release en `packaging/release-notes-0.3.0.md`, contratos en `docs/openspec/04-ui-ux-libadwaita.md` y `docs/openspec/07-ipc-contract.md`, resumen en `README.md` y reporte de validación en `docs/qa/segmenta-0.3.0-live.md`.

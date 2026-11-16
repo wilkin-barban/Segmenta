@@ -573,6 +573,16 @@ cuarentena no existen todavía; su contrato está en 12.
   cuando recibe `system.resync_required`.
 * `system.open` es el único punto donde el daemon lanza otro proceso, y lo hace con argv
   fijo (`--show-task <id>`), sin shell.
+* **Vía de lectura de la bandeja de sistema (`tray.rs`):** el icono de la bandeja corre en un hilo
+  secundario con su propio cliente IPC independiente (`UnixClient::from_env()`). Drena eventos
+  mediante `poll_event()`, observando las notificaciones `task_progress`, `task_added` y
+  `task_updated` (además de eventos de conexión `Connected`/`Disconnected`) para marcar la necesidad
+  de actualización. El refresco de la bandeja se acota a un máximo de una vez por segundo invocando
+  `download.list {"filter": "all", "limit": 100}`, a partir del cual selecciona la tarea activa en
+  transferencia (o la primera pausada). Dispone de un sondeo periódico de respaldo cada 2 segundos.
+  Las acciones de usuario invocadas desde el menú (pausar, reanudar o cancelar) se canalizan hacia el
+  hilo principal de GTK, el cual ejecuta las llamadas RPC habituales (`download.pause`,
+  `download.resume`, `download.cancel`).
 
 ---
 
