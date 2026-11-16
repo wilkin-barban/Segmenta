@@ -186,14 +186,46 @@ pub fn build_window_for_client(app: &adw::Application) {
             crate::glib::ControlFlow::Continue
         });
 
-        let tray_client: Arc<dyn Client> = Arc::new(UnixClient::from_env());
-        if let Some(handle) = tray::spawn(tray_client, sender) {
-            let guard = app.hold();
-            APP_HOLD.with(|slot| *slot.borrow_mut() = Some(guard));
-            window.set_tray_active(true);
-            TRAY_HANDLE.with(|slot| *slot.borrow_mut() = Some(handle));
+        // The StatusNotifierWatcher belongs to the shell: it is absent on a headless
+        // session, while the AppIndicator extension is still loading, or after a shell
+        // restart. Giving up on the first attempt left Segmenta without an icon for the
+        // rest of its life, so a missing watcher is retried until it appears.
+        if start_tray(app, &window, sender.clone()) {
+            return;
         }
+        let retry_app = app.clone();
+        let retry_window = window.clone();
+        crate::glib::timeout_add_local(Duration::from_secs(5), move || {
+            if start_tray(&retry_app, &retry_window, sender.clone()) {
+                crate::glib::ControlFlow::Break
+            } else {
+                crate::glib::ControlFlow::Continue
+            }
+        });
     }
+}
+
+/// Publishes the tray item, twice-guarded against a second registration.
+///
+/// Returns whether the item is now registered. Never fails the caller: a session
+/// without a StatusNotifierWatcher keeps working exactly as before the tray existed.
+fn start_tray(
+    app: &adw::Application,
+    window: &SegmentaWindow,
+    sender: std::sync::mpsc::Sender<TrayCommand>,
+) -> bool {
+    if TRAY_HANDLE.with(|slot| slot.borrow().is_some()) {
+        return true;
+    }
+    let client: Arc<dyn Client> = Arc::new(UnixClient::from_env());
+    let Some(handle) = tray::spawn(client, sender) else {
+        return false;
+    };
+    let guard = app.hold();
+    APP_HOLD.with(|slot| *slot.borrow_mut() = Some(guard));
+    window.set_tray_active(true);
+    TRAY_HANDLE.with(|slot| *slot.borrow_mut() = Some(handle));
+    true
 }
 
 /// How many windows the application is keeping alive (regression guard for the
