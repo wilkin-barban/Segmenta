@@ -29,7 +29,7 @@
 - [x] T4 — Diálogo **Programar** y estado visible en la fila (S3, S5, S7) — `crates/segmenta-gui/src/{add_dialog,window,model}.rs`, i18n, tests — `9755e1c`
 - [x] T5 — Bandeja del sistema con progreso y acciones (S2, S6, S7) — `crates/segmenta-gui/src/tray.rs` (nuevo), `Cargo.toml`, `main.rs`, `app.rs`, `window.rs`, i18n — `d58c615`, `99c197c`, `1d23009`
 - [x] T6 — Documentación (OpenSpec 04/07, README, CHANGELOG, notas 0.3.0, QA live) — `CHANGELOG.md`, `README.md`, `docs/openspec/`, `packaging/release-notes-0.3.0.md`, `docs/qa/segmenta-0.3.0-live.md`
-- [ ] T7 — Artefactos 0.3.0 y verificación en el host (sin publicar) — pendiente: verificación final de empaquetado y prueba en sesión real de Ubuntu antes de publicación.
+- [x] T7 — Artefactos 0.3.0 y verificación en el host (sin publicar) — pendiente: verificación final de empaquetado y prueba en sesión real de Ubuntu antes de publicación.
 
 ## Evidencia de la exploración (2026-11-15)
 
@@ -71,3 +71,10 @@
 
 - T5: icono de bandeja StatusNotifierItem mediante `ksni` 0.3 (`d58c615`), ciclo de vida de cierre a segundo plano con `app.hold()` y fallback sin watcher (`99c197c`), y serialización del test `system.open` sobre `SEGMENTA_GUI` (`1d23009`).
 - T6: documentación completa de la versión 0.3.0 en `CHANGELOG.md`, notas de release en `packaging/release-notes-0.3.0.md`, contratos en `docs/openspec/04-ui-ux-libadwaita.md` y `docs/openspec/07-ipc-contract.md`, resumen en `README.md` y reporte de validación en `docs/qa/segmenta-0.3.0-live.md`.
+
+### Cierre (2026-11-16)
+
+- **Artefactos 0.3.0** (sin publicar): `.deb` sha256 `c593115468811539384902508d114033a92499b8d20ed5675cc1fc7894e91760`, extensión `f4d7fb68…b8dd`, firefox `2cc55306…83eb`; `check-package` 23/23.
+- **Instalado en el host** con `--reinstall` (apt no reemplaza con la misma versión): `0.3.0-1`, daemon `0.3.0 (protocolo v1)`, extensiones preparadas `chromium-0.3.0` y `firefox-0.3.0`, sha256 del `.deb` remoto idéntico.
+- **Bandeja**: `Recommends: gnome-shell-extension-appindicator`. Hallazgo en el host: la extensión de GNOME está *listada* como habilitada con el id `appindicatorsupport@rgcjonas.gmail.com`, cuyos archivos no están instalados, mientras la de Ubuntu (`ubuntu-appindicators@ubuntu.com`, provista por `gnome-shell-ubuntu-extensions`) existe pero no está habilitada; por eso no hay `StatusNotifierWatcher` y el icono no aparece todavía. El arranque sin watcher degrada bien (`SMOKE OK`, salida limpia).
+- **Gate determinista**: se neutralizó el race `ETXTBSY` de los tests que escriben un ejecutable falso y lo ejecutan (mutex por binario + reintento de la llamada). Seis corridas consecutivas de `cargo test --workspace` en 436 verdes; GUI 109; Node 176; fmt/clippy limpios.
