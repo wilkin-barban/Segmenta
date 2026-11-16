@@ -676,3 +676,20 @@ fn a_stale_status_answer_keeps_the_segments_of_a_fresher_event() {
         "the stale answer wiped the segments and the smoke gate would see 0"
     );
 }
+
+#[test]
+fn scheduled_pending_task_shows_scheduled_for_subtitle() {
+    let mut item = row("task-sched", "pending");
+    item.scheduled_at = Some("2026-11-16T21:30:00Z".to_string());
+    let line = item.progress_line();
+    assert!(
+        line.contains("2026-11-16 21:30"),
+        "expected formatted date and time in subtitle: {line}"
+    );
+    assert!(
+        line.contains("Scheduled for")
+            || line.contains("Programada para")
+            || line.contains("Programado para"),
+        "expected localized scheduled subtitle: {line}"
+    );
+}

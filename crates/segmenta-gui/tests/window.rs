@@ -1404,3 +1404,31 @@ fn an_out_of_sync_extension_row_warns_and_offers_reload() {
         );
     });
 }
+
+#[test]
+fn add_dialog_produces_request_with_scheduled_at_when_switch_on_and_without_when_off() {
+    run_gui("add_dialog_schedule", || {
+        let defaults = segmenta_gui::add_dialog::AddDefaults {
+            destination_dir: "/home/user/Downloads".to_string(),
+            connections: 8,
+            clip_monitor_enabled: false,
+        };
+        let form = segmenta_gui::add_dialog::build_form(&defaults);
+        form.url.set_text("https://example.com/test.bin");
+
+        // When schedule switch is off: no scheduled_at
+        assert!(!form.schedule.is_active());
+        let params_off = segmenta_gui::add_dialog::build_add_params(&form);
+        assert!(params_off.get("scheduled_at").is_none());
+        assert_eq!(params_off["start_immediately"], true);
+
+        // When schedule switch is on: scheduled_at is present
+        form.schedule.set_active(true);
+        assert!(form.schedule.is_active());
+        let params_on = segmenta_gui::add_dialog::build_add_params(&form);
+        assert!(params_on.get("scheduled_at").is_some());
+        assert_eq!(params_on["start_immediately"], false);
+        let scheduled_at = params_on["scheduled_at"].as_str().unwrap();
+        assert!(!scheduled_at.is_empty());
+    });
+}

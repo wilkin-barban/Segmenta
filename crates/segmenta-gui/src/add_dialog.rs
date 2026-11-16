@@ -38,24 +38,23 @@ impl Default for AddDefaults {
     }
 }
 
-struct Form {
-    dialog: adw::Dialog,
-    url: adw::EntryRow,
-    filename: adw::EntryRow,
-    destination: adw::ActionRow,
-    connections: adw::SpinRow,
-    start_now: adw::SwitchRow,
-    error: gtk::Label,
-    add_button: gtk::Button,
+pub struct Form {
+    pub dialog: adw::Dialog,
+    pub url: adw::EntryRow,
+    pub filename: adw::EntryRow,
+    pub destination: adw::ActionRow,
+    pub connections: adw::SpinRow,
+    pub start_now: adw::SwitchRow,
+    pub schedule: adw::SwitchRow,
+    pub calendar: gtk::Calendar,
+    pub schedule_hour: adw::SpinRow,
+    pub schedule_minute: adw::SpinRow,
+    pub error: gtk::Label,
+    pub add_button: gtk::Button,
 }
 
-/// Opens the dialog over `parent`.
-pub fn present(
-    parent: &adw::ApplicationWindow,
-    client: Arc<dyn Client>,
-    defaults: AddDefaults,
-    on_added: Rc<dyn Fn(String)>,
-) -> adw::Dialog {
+/// Builds the form widgets and layout.
+pub fn build_form(defaults: &AddDefaults) -> Form {
     let dialog = adw::Dialog::builder()
         .title(tr(locale(), Msg::AddDownloadTitle))
         .content_width(540)
@@ -89,7 +88,6 @@ pub fn present(
         .build();
     let folder_icon = gtk::Image::from_icon_name("folder-open-symbolic");
     destination.add_suffix(&folder_icon);
-    let directory = Rc::new(RefCell::new(defaults.destination_dir.clone()));
     destination.set_subtitle(&defaults.destination_dir);
 
     let connections = adw::SpinRow::with_range(1.0, 32.0, 1.0);
@@ -103,6 +101,39 @@ pub fn present(
         .active(true)
         .build();
 
+    let schedule = adw::SwitchRow::builder()
+        .title(tr(locale(), Msg::Schedule))
+        .subtitle(tr(locale(), Msg::ScheduleHint))
+        .active(false)
+        .build();
+
+    let calendar = gtk::Calendar::new();
+    calendar.set_visible(false);
+
+    let now = gtk::glib::DateTime::now_local().ok();
+    let current_hour = now.as_ref().map(|d| d.hour()).unwrap_or(12);
+    let current_min = now.as_ref().map(|d| d.minute()).unwrap_or(0);
+
+    let schedule_hour = adw::SpinRow::with_range(0.0, 23.0, 1.0);
+    schedule_hour.set_title(tr(locale(), Msg::Hour));
+    schedule_hour.set_value(f64::from(current_hour));
+    schedule_hour.set_visible(false);
+
+    let schedule_minute = adw::SpinRow::with_range(0.0, 59.0, 1.0);
+    schedule_minute.set_title(tr(locale(), Msg::Minute));
+    schedule_minute.set_value(f64::from(current_min));
+    schedule_minute.set_visible(false);
+
+    let cal_handle = calendar.clone();
+    let hour_handle = schedule_hour.clone();
+    let min_handle = schedule_minute.clone();
+    schedule.connect_active_notify(move |switch| {
+        let active = switch.is_active();
+        cal_handle.set_visible(active);
+        hour_handle.set_visible(active);
+        min_handle.set_visible(active);
+    });
+
     let error = gtk::Label::new(None);
     error.add_css_class("error");
     error.set_wrap(true);
@@ -114,6 +145,10 @@ pub fn present(
     group.add(&destination);
     group.add(&connections);
     group.add(&start_now);
+    group.add(&schedule);
+    group.add(&calendar);
+    group.add(&schedule_hour);
+    group.add(&schedule_minute);
     group.add(&error);
 
     let page = adw::PreferencesPage::new();
@@ -124,16 +159,82 @@ pub fn present(
     toolbar.set_content(Some(&page));
     dialog.set_child(Some(&toolbar));
 
-    let form = Rc::new(Form {
-        dialog: dialog.clone(),
+    let close_dialog = dialog.clone();
+    cancel_button.connect_clicked(move |_| {
+        close_dialog.close();
+    });
+
+    Form {
+        dialog,
         url,
         filename,
         destination,
         connections,
         start_now,
+        schedule,
+        calendar,
+        schedule_hour,
+        schedule_minute,
         error,
-        add_button: add_button.clone(),
+        add_button,
+    }
+}
+
+/// Builds the `download.add` request parameters from the form state.
+pub fn build_add_params(form: &Form) -> Value {
+    let url = form.url.text().trim().to_string();
+    let destination = form.destination.subtitle().unwrap_or_default();
+    let filename = form.filename.text().trim().to_string();
+    let filename = if filename.is_empty() {
+        filename_from_url(&url).unwrap_or_else(|| "descarga".to_string())
+    } else {
+        filename
+    };
+
+    let mut params = json!({
+        "url": url,
+        "connections": form.connections.value() as u32,
+        "start_immediately": form.start_now.is_active() && !form.schedule.is_active(),
+        "queue_name": "main",
+        "priority": 0,
+        "filename": filename,
     });
+    if !destination.trim().is_empty() {
+        params["destination_dir"] = Value::String(destination.to_string());
+    }
+
+    if form.schedule.is_active() {
+        let date = form.calendar.date();
+        let year = date.year();
+        let month = date.month();
+        let day = date.day_of_month();
+        let hour = form.schedule_hour.value() as i32;
+        let minute = form.schedule_minute.value() as i32;
+
+        let scheduled_str =
+            if let Ok(dt) = gtk::glib::DateTime::from_local(year, month, day, hour, minute, 0.0) {
+                if let Ok(iso) = dt.format_iso8601() {
+                    iso.to_string()
+                } else {
+                    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:00Z")
+                }
+            } else {
+                format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:00Z")
+            };
+        params["scheduled_at"] = Value::String(scheduled_str);
+    }
+    params
+}
+
+/// Opens the dialog over `parent`.
+pub fn present(
+    parent: &adw::ApplicationWindow,
+    client: Arc<dyn Client>,
+    defaults: AddDefaults,
+    on_added: Rc<dyn Fn(String)>,
+) -> adw::Dialog {
+    let form = Rc::new(build_form(&defaults));
+    let directory = Rc::new(RefCell::new(defaults.destination_dir.clone()));
 
     // Clipboard prefill: only when `clip_monitor_enabled` is on and the text already
     // looks like a download URL.
@@ -197,17 +298,10 @@ pub fn present(
         );
     });
 
-    let close_form = Rc::downgrade(&form);
-    cancel_button.connect_clicked(move |_| {
-        if let Some(form) = close_form.upgrade() {
-            form.dialog.close();
-        }
-    });
-
     let submit_form = Rc::clone(&form);
     let submit_client = Arc::clone(&client);
     let submit_added = Rc::clone(&on_added);
-    add_button.connect_clicked(move |_| {
+    form.add_button.connect_clicked(move |_| {
         submit(
             &submit_form,
             Arc::clone(&submit_client),
@@ -218,12 +312,17 @@ pub fn present(
     // Enter on the entries submits.
     let enter_form = Rc::clone(&form);
     let enter_client = Arc::clone(&client);
+    let enter_added = Rc::clone(&on_added);
     form.url.connect_entry_activated(move |_| {
-        submit(&enter_form, Arc::clone(&enter_client), Rc::clone(&on_added));
+        submit(
+            &enter_form,
+            Arc::clone(&enter_client),
+            Rc::clone(&enter_added),
+        );
     });
 
-    dialog.present(Some(parent));
-    dialog.clone()
+    form.dialog.present(Some(parent));
+    form.dialog.clone()
 }
 
 /// One semantic, documented once: with `clip_monitor_enabled` off the dialog never
@@ -272,24 +371,11 @@ fn submit(form: &Rc<Form>, client: Arc<dyn Client>, on_added: Rc<dyn Fn(String)>
         return;
     }
 
-    let mut params = json!({
-        "url": url,
-        "connections": form.connections.value() as u32,
-        "start_immediately": form.start_now.is_active(),
-        "queue_name": "main",
-        "priority": 0
-    });
-    let destination = form.destination.subtitle().unwrap_or_default();
-    if !destination.trim().is_empty() {
-        params["destination_dir"] = Value::String(destination.to_string());
-    }
-    let filename = form.filename.text().trim().to_string();
-    let filename = if filename.is_empty() {
-        filename_from_url(&url).unwrap_or_else(|| "descarga".to_string())
-    } else {
-        filename
-    };
-    params["filename"] = Value::String(filename.clone());
+    let params = build_add_params(form);
+    let filename = params["filename"]
+        .as_str()
+        .unwrap_or("descarga")
+        .to_string();
 
     form.error.set_visible(false);
     form.add_button.set_sensitive(false);

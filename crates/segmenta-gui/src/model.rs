@@ -207,6 +207,9 @@ pub struct DownloadItem {
     /// Playlist title when the task is a playlist.
     #[serde(default)]
     pub playlist_title: Option<String>,
+    /// Moment in UTC RFC-3339 when the task is scheduled to start.
+    #[serde(default)]
+    pub scheduled_at: Option<String>,
 }
 
 /// Answer of `download.clean_completed`.
@@ -447,9 +450,21 @@ impl DownloadItem {
         segmenta_i18n::tr(segmenta_i18n::current(), message).to_string()
     }
 
-    /// `80.0 MB/s · 25 s left · 2.0 GB of 4.0 GB` (labels localized).
+    /// `80.0 MB/s · 25 s left · 2.0 GB of 4.0 GB` (labels localized), or "Programada para <fecha hora>" when pending.
     pub fn progress_line(&self) -> String {
         let locale = segmenta_i18n::current();
+        if self.status == DownloadStatus::Pending {
+            if let Some(scheduled_at) = &self.scheduled_at {
+                let s = scheduled_at.trim();
+                let time_str = if s.len() >= 16 {
+                    format!("{} {}", &s[..10], &s[11..16])
+                } else {
+                    s.to_string()
+                };
+                return segmenta_i18n::tr(locale, segmenta_i18n::Msg::ScheduledFor)
+                    .replace("{time}", &time_str);
+            }
+        }
         let eta = match self.eta_seconds {
             Some(seconds) if seconds > 0 => format!(
                 "{} {}",

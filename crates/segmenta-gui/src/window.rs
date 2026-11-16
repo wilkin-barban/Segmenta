@@ -2480,7 +2480,9 @@ impl Inner {
                 ))]);
             widgets.meta.set_label(&meta_text);
 
-            if item.speed_bps > 0 {
+            let is_scheduled =
+                item.status == DownloadStatus::Pending && item.scheduled_at.is_some();
+            if item.speed_bps > 0 && !is_scheduled {
                 widgets
                     .speed
                     .set_label(&crate::model::format_speed(item.speed_bps));
@@ -2545,7 +2547,8 @@ impl Inner {
         speed.set_tooltip_text(Some(tr(locale(), Msg::Speed)));
         speed.update_property(&[gtk::accessible::Property::Label(tr(locale(), Msg::Speed))]);
 
-        if item.speed_bps > 0 {
+        let is_scheduled = item.status == DownloadStatus::Pending && item.scheduled_at.is_some();
+        if item.speed_bps > 0 && !is_scheduled {
             speed.set_label(&crate::model::format_speed(item.speed_bps));
             speed.set_visible(true);
         } else {
