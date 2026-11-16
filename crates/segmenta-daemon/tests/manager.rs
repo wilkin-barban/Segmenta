@@ -681,3 +681,108 @@ async fn settings_expose_capture_confirm_and_the_widened_extension_list() {
         json!(false)
     );
 }
+
+#[tokio::test]
+async fn torrent_task_progress_reports_real_speed_and_finished_reports_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+    let task_id = "torrent-speed-test";
+    let mut rec = record(task_id, DownloadStatus::Downloading);
+    rec.download_type = "torrent".to_string();
+    rec.total_bytes = Some(10_000_000);
+    h.store.insert_download(&rec).unwrap();
+
+    let mut events = h.bus.subscribe();
+    let mut pipeline = h.manager.torrent_progress_pipeline(task_id);
+
+    // Initial sample
+    pipeline.report(1_000_000, Some(10_000_000));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // Second sample over known interval
+    pipeline.report(4_000_000, Some(10_000_000));
+
+    let mut saw_speed = 0u64;
+    for _ in 0..10 {
+        if let Ok(Ok(event)) = tokio::time::timeout(Duration::from_millis(250), events.recv()).await
+        {
+            if event.event_type == "task_progress" && event.task_id.as_deref() == Some(task_id) {
+                if let Some(speed) = event.data["speed_bps"].as_u64() {
+                    if speed > 0 {
+                        saw_speed = speed;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        saw_speed > 0,
+        "torrent progress never reported a non-zero speed"
+    );
+
+    // Finish the task
+    pipeline.finish();
+    h.store
+        .set_status(task_id, DownloadStatus::Completed, None)
+        .unwrap();
+
+    let status = call(&h.manager, "torrent.status", json!({ "task_id": task_id }))
+        .await
+        .unwrap();
+    assert_eq!(status["status"], "completed");
+    assert_eq!(
+        status["speed_bps"], 0,
+        "finished torrent speed must be zero"
+    );
+}
+
+#[tokio::test]
+async fn stream_task_progress_reports_real_speed_and_finished_reports_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+    let task_id = "stream-speed-test";
+    let mut rec = record(task_id, DownloadStatus::Downloading);
+    rec.download_type = "hls".to_string();
+    rec.media_kind = Some("stream".to_string());
+    h.store.insert_download(&rec).unwrap();
+
+    let mut events = h.bus.subscribe();
+    let mut pipeline = h.manager.stream_progress_pipeline(task_id);
+
+    // Initial sample
+    pipeline.report(500_000, None);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // Second sample over known interval (> 250ms throttle)
+    pipeline.report(2_000_000, None);
+
+    let mut saw_speed = 0u64;
+    for _ in 0..10 {
+        if let Ok(Ok(event)) = tokio::time::timeout(Duration::from_millis(250), events.recv()).await
+        {
+            if event.event_type == "task_progress" && event.task_id.as_deref() == Some(task_id) {
+                if let Some(speed) = event.data["speed_bps"].as_u64() {
+                    if speed > 0 {
+                        saw_speed = speed;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        saw_speed > 0,
+        "stream progress never reported a non-zero speed"
+    );
+
+    // Finish the task
+    pipeline.finish();
+    h.store
+        .set_status(task_id, DownloadStatus::Completed, None)
+        .unwrap();
+
+    let status = call(&h.manager, "download.status", json!({ "task_id": task_id }))
+        .await
+        .unwrap();
+    assert_eq!(status["status"], "completed");
+    assert_eq!(status["speed_bps"], 0, "finished stream speed must be zero");
+}

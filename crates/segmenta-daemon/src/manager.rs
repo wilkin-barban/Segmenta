@@ -55,6 +55,110 @@ pub struct ProgressSnapshot {
     pub segments: Vec<SegmentRow>,
 }
 
+/// Tracks transfer progress for a running stream or torrent task, computing transfer speed and ETA.
+pub struct ProgressPipeline {
+    store: Arc<Store>,
+    bus: Arc<EventBus>,
+    progress: Arc<Mutex<HashMap<String, ProgressSnapshot>>>,
+    task_id: String,
+    last_tick: Option<std::time::Instant>,
+    last_bytes: u64,
+    min_interval: std::time::Duration,
+}
+
+impl ProgressPipeline {
+    pub fn new(
+        store: Arc<Store>,
+        bus: Arc<EventBus>,
+        progress: Arc<Mutex<HashMap<String, ProgressSnapshot>>>,
+        task_id: String,
+    ) -> Self {
+        Self {
+            store,
+            bus,
+            progress,
+            task_id,
+            last_tick: None,
+            last_bytes: 0,
+            min_interval: std::time::Duration::ZERO,
+        }
+    }
+
+    pub fn with_min_interval(mut self, min_interval: std::time::Duration) -> Self {
+        self.min_interval = min_interval;
+        self
+    }
+
+    pub fn last_bytes(&self) -> u64 {
+        self.last_bytes
+    }
+
+    pub fn report(&mut self, downloaded_bytes: u64, total_bytes: Option<u64>) {
+        let now = std::time::Instant::now();
+        if let Some(last_tick) = self.last_tick {
+            if self.min_interval > std::time::Duration::ZERO
+                && now.saturating_duration_since(last_tick) < self.min_interval
+            {
+                return;
+            }
+        }
+        let speed_bps = if let Some(last_tick) = self.last_tick {
+            let elapsed = now.saturating_duration_since(last_tick).as_secs_f64();
+            if elapsed > 0.0 {
+                (downloaded_bytes.saturating_sub(self.last_bytes) as f64 / elapsed) as u64
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        self.last_tick = Some(now);
+        self.last_bytes = downloaded_bytes;
+
+        let eta_seconds = match total_bytes {
+            Some(total) if speed_bps > 0 && total > downloaded_bytes => {
+                Some((total - downloaded_bytes).div_ceil(speed_bps))
+            }
+            _ => None,
+        };
+
+        let _ = self
+            .store
+            .update_progress(&self.task_id, downloaded_bytes, total_bytes);
+        self.progress
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .insert(
+                self.task_id.clone(),
+                ProgressSnapshot {
+                    downloaded_bytes,
+                    total_bytes,
+                    speed_bps,
+                    eta_seconds,
+                    segments: Vec::new(),
+                },
+            );
+        self.bus.publish(
+            "task_progress",
+            Some(&self.task_id),
+            json!({
+                "downloaded_bytes": downloaded_bytes,
+                "total_bytes": total_bytes,
+                "speed_bps": speed_bps,
+                "eta_seconds": eta_seconds,
+                "segments": [],
+            }),
+        );
+    }
+
+    pub fn finish(&mut self) {
+        self.progress
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .remove(&self.task_id);
+    }
+}
+
 struct RunningTask {
     cancel: Canceller,
     handle: tokio::task::JoinHandle<()>,
@@ -308,6 +412,27 @@ impl Manager {
             .lock()
             .unwrap_or_else(|err| err.into_inner())
             .len()
+    }
+
+    /// Progress pipeline for a stream download task.
+    pub fn stream_progress_pipeline(&self, task_id: &str) -> ProgressPipeline {
+        ProgressPipeline::new(
+            Arc::clone(&self.store),
+            Arc::clone(&self.bus),
+            Arc::clone(&self.progress),
+            task_id.to_string(),
+        )
+        .with_min_interval(std::time::Duration::from_millis(250))
+    }
+
+    /// Progress pipeline for a torrent download task.
+    pub fn torrent_progress_pipeline(&self, task_id: &str) -> ProgressPipeline {
+        ProgressPipeline::new(
+            Arc::clone(&self.store),
+            Arc::clone(&self.bus),
+            Arc::clone(&self.progress),
+            task_id.to_string(),
+        )
     }
 
     /// Build the public view of a record, enriched with live progress.
@@ -2597,8 +2722,13 @@ impl Manager {
         let kind = selection.kind;
         let wake = Arc::clone(&self.scheduler_wake);
         let handle = tokio::spawn(async move {
-            let mut last = std::time::Instant::now();
-            let mut last_bytes = 0u64;
+            let mut pipeline = ProgressPipeline::new(
+                Arc::clone(&store),
+                Arc::clone(&bus),
+                Arc::clone(&progress),
+                id.clone(),
+            )
+            .with_min_interval(std::time::Duration::from_millis(250));
             let result = crate::stream_media::download(
                 &client,
                 &ffmpeg,
@@ -2606,44 +2736,16 @@ impl Manager {
                 &path,
                 task_cancel,
                 |downloaded| {
-                    last_bytes = downloaded;
-                    if last.elapsed() < std::time::Duration::from_millis(250) {
-                        return;
-                    }
-                    last = std::time::Instant::now();
-                    let _ = store.update_progress(&id, downloaded, None);
-                    progress
-                        .lock()
-                        .unwrap_or_else(|err| err.into_inner())
-                        .insert(
-                            id.clone(),
-                            ProgressSnapshot {
-                                downloaded_bytes: downloaded,
-                                total_bytes: None,
-                                speed_bps: 0,
-                                eta_seconds: None,
-                                segments: Vec::new(),
-                            },
-                        );
-                    bus.publish(
-                        "task_progress",
-                        Some(&id),
-                        json!({
-                            "downloaded_bytes": downloaded,
-                            "total_bytes": null,
-                            "speed_bps": 0,
-                            "eta_seconds": null,
-                            "segments": [],
-                        }),
-                    );
+                    pipeline.report(downloaded, None);
                 },
             )
             .await;
+            pipeline.finish();
             match result {
                 Ok(()) => {
                     let size = std::fs::metadata(&path)
                         .map(|meta| meta.len())
-                        .unwrap_or(last_bytes);
+                        .unwrap_or(pipeline.last_bytes());
                     let _ = store.update_progress(&id, size, Some(size));
                     let _ = store.set_status(&id, DownloadStatus::Completed, None);
                     bus.publish(
@@ -2663,10 +2765,6 @@ impl Manager {
                         DownloadStatus::Failed,
                         Some((error.code, error.message.clone())),
                     );
-                    progress
-                        .lock()
-                        .unwrap_or_else(|err| err.into_inner())
-                        .remove(&id);
                     bus.publish(
                         "task_failed",
                         Some(&id),
@@ -2921,6 +3019,12 @@ impl Manager {
         let task_cancel = cancel.clone();
         let wake = Arc::clone(&self.scheduler_wake);
         let handle = tokio::spawn(async move {
+            let mut pipeline = ProgressPipeline::new(
+                Arc::clone(&store),
+                Arc::clone(&bus),
+                Arc::clone(&progress),
+                id.clone(),
+            );
             let result = async {
                 let session = crate::torrent::shared_session(&session_dir)
                     .await
@@ -2932,40 +3036,13 @@ impl Manager {
                     json!({ "status": "downloading" }),
                 );
                 crate::torrent::run_torrent(session, source, task_cancel, |line| {
-                    let _ = store.update_progress(&id, line.downloaded, Some(line.total));
-                    progress
-                        .lock()
-                        .unwrap_or_else(|err| err.into_inner())
-                        .insert(
-                            id.clone(),
-                            ProgressSnapshot {
-                                downloaded_bytes: line.downloaded,
-                                total_bytes: Some(line.total),
-                                speed_bps: 0,
-                                eta_seconds: None,
-                                segments: Vec::new(),
-                            },
-                        );
-                    bus.publish(
-                        "task_progress",
-                        Some(&id),
-                        json!({
-                            "downloaded_bytes": line.downloaded,
-                            "total_bytes": line.total,
-                            "speed_bps": 0,
-                            "eta_seconds": null,
-                            "segments": [],
-                        }),
-                    );
+                    pipeline.report(line.downloaded, Some(line.total));
                 })
                 .await
                 .map_err(|err| (1044, err))
             }
             .await;
-            progress
-                .lock()
-                .unwrap_or_else(|err| err.into_inner())
-                .remove(&id);
+            pipeline.finish();
             match result {
                 Ok(()) => {
                     let _ = store.set_status(&id, DownloadStatus::Completed, None);
