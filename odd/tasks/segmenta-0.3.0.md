@@ -78,3 +78,13 @@
 - **Instalado en el host** con `--reinstall` (apt no reemplaza con la misma versión): `0.3.0-1`, daemon `0.3.0 (protocolo v1)`, extensiones preparadas `chromium-0.3.0` y `firefox-0.3.0`, sha256 del `.deb` remoto idéntico.
 - **Bandeja**: `Recommends: gnome-shell-extension-appindicator`. Hallazgo en el host: la extensión de GNOME está *listada* como habilitada con el id `appindicatorsupport@rgcjonas.gmail.com`, cuyos archivos no están instalados, mientras la de Ubuntu (`ubuntu-appindicators@ubuntu.com`, provista por `gnome-shell-ubuntu-extensions`) existe pero no está habilitada; por eso no hay `StatusNotifierWatcher` y el icono no aparece todavía. El arranque sin watcher degrada bien (`SMOKE OK`, salida limpia).
 - **Gate determinista**: se neutralizó el race `ETXTBSY` de los tests que escriben un ejecutable falso y lo ejecutan (mutex por binario + reintento de la llamada). Seis corridas consecutivas de `cargo test --workspace` en 436 verdes; GUI 109; Node 176; fmt/clippy limpios.
+
+### Verificación de la bandeja en el host (2026-11-16)
+
+Verificado por D-Bus sobre el `StatusNotifierWatcher` real de la sesión GNOME del usuario:
+
+- Registro correcto: `id=io.github.wilkin.Segmenta`, `title=Segmenta`, `icon=io.github.wilkin.Segmenta`, `status=Active`, `category=ApplicationStatus`.
+- Menú inactivo: `Sin descargas activas` (informativo/deshabilitado) + Abrir · Preferencias · ─── · Salir.
+- Menú con descarga real (105 MB por HTTP): `2 % · 2.2 MB de 104.9 MB` y `2.5 MB/s · 42 s restante`, refrescando en vivo, con Abrir · Pausar · Cancelar · Preferencias · Salir.
+- **Tres defectos encontrados y corregidos** (`1e2cdff`, `add2bfc`, `d11135a`): los ids de DBusMenu se renumeraban en cada refresco y el clic caía en una tarea vieja; el handler resolvía la tarea contra el modelo de la ventana, que deja de refrescarse cuando la ventana está oculta en la bandeja; y las acciones seguían dependiendo del hilo GTK. Ahora el tray ejecuta pause/resume/cancel con su propio cliente sobre la tarea que está mostrando.
+- **Bloqueo del entorno, no del código**: la extensión `ubuntu-appindicators@ubuntu.com` falló en `_setupProxy` (`appIndicator.js:484`) y el `StatusNotifierWatcher` desapareció; además hay dos ids de extensión AppIndicator habilitados a la vez, uno de ellos (`appindicatorsupport@rgcjonas.gmail.com`) sin archivos instalados. Hasta resolver eso, el icono no puede aparecer aunque el código registre bien.
