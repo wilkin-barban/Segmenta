@@ -187,6 +187,7 @@ queue.list   queue.create   queue.remove   queue.schedule
     se reporta como `-32603 INTERNAL_ERROR` (no hay código dedicado).
   * `priority` (integer, opcional, default `0`): se **persiste**; hoy ningún componente
     ordena por prioridad (el scheduler que lo consumirá es 0.2, ver 12).
+  * `scheduled_at` (string, opcional): fecha y hora programada para iniciar la descarga. Formatos aceptados: ISO-8601 con zona horaria (ej. `2026-11-16T21:30:00Z`, `2026-11-16T21:30:00+02:00`) o `HH:MM` (hora local de hoy, o mañana si ya pasó la hora). Cualquier otro formato se rechaza con `1004 ERR_INVALID_PARAMS`. Se normaliza y almacena en UTC RFC-3339. Una tarea programada en el futuro permanece en estado `pending` y el planificador no la arranca hasta que llegue su hora.
 * **Respuesta:**
   * `task_id` (string, UUIDv4).
   * `status` (string): estado persistido al responder; normalmente `"pending"`, porque el
@@ -208,7 +209,7 @@ queue.list   queue.create   queue.remove   queue.schedule
 * Campos de cada vista: `task_id`, `url`, `final_path`, `filename`, `status`,
   `total_bytes`, `downloaded_bytes`, `speed_bps`, `eta_seconds`, `retry_count`,
   `supports_ranges`, `queue_name`, `created_at`, `completed_at`, `error_code`,
-  `error_message`, `media_kind`, `playlist_title`.
+  `error_message`, `media_kind`, `playlist_title`, `scheduled_at`.
 
 ### 3.4. `download.status`
 * **Parámetros:** `{"task_id": "..."}`; inexistente es `1001`.
@@ -227,10 +228,13 @@ queue.list   queue.create   queue.remove   queue.schedule
   otro estado responde `1011 TASK_NOT_PAUSABLE` sin tocar la fila. Cancela el worker,
   espera su checkpoint y responde `{"task_id": "...", "status": "<estado real>"}` (el
   motor deja `paused`).
-* **`download.resume`** — `{"task_id": "..."}`. Sólo acepta `paused` y `retrying`: en
-  `downloading` es `1002 TASK_ALREADY_ACTIVE`, en cualquier otro estado
-  `1003 TASK_NOT_RESUMABLE`. Relanza el motor con `max_connections` de los ajustes y
-  responde `{"task_id": "...", "status": "downloading"}`.
+* **`download.resume`** — `{"task_id": "..."}`. Acepta tareas en `paused`, `retrying` y
+  `pending`: en `downloading` es `1002 TASK_ALREADY_ACTIVE`, en cualquier otro estado
+  `1003 TASK_NOT_RESUMABLE`. Si la tarea está programada en el futuro y aún no vence
+  (`scheduled_at` no cumplido), `download.resume` la mantiene en `pending` en lugar de
+  arrancarla y responde `{"task_id": "...", "status": "pending"}`. En caso contrario,
+  reincorpora la tarea a la cola con las conexiones vigentes y responde
+  `{"task_id": "...", "status": "<estado>"}`.
 
 ### 3.6. `download.cancel` y `download.delete`
 * **`download.cancel`** — `{"task_id": "...", "delete_file": false}`. Cancela el worker si
@@ -262,8 +266,11 @@ queue.list   queue.create   queue.remove   queue.schedule
 Contrato detallado en §9. Resumen de parámetros:
 * `media.probe`: `{"url", "kind"?: "video"|"playlist"|"stream", "limit"?}`.
 * `media.add`: `{"url", "mode": "video"|"audio"|"playlist", "format_id"?, "height"?,
-  "playlist_limit"?}`. Responde `{"task_id", "status": "downloading", "kind",
-  "batch_id"}` en la vía YouTube (`batch_id` es `null` salvo playlist) y
+  "playlist_limit"?, "scheduled_at"?}`. `scheduled_at` acepta los mismos formatos que
+  `download.add` (ISO-8601 con zona horaria o `HH:MM`) y rechaza valores inválidos con
+  `1004 ERR_INVALID_PARAMS`. Si la fecha es futura, la tarea queda en `pending`. Responde
+  `{"task_id", "status": "downloading"|"pending", "kind", "batch_id"}` en la vía YouTube
+  (`batch_id` es `null` salvo playlist) y
   `{"task_id", "status": "downloading", "kind"}` en la vía de manifiestos HLS/DASH, donde
   `kind` es el del manifiesto (`hls`/`dash`).
 * `media.status`: `{"task_id"}` **o** `{"batch_id"}`; con ambos gana `task_id`; sin ninguno
