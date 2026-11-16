@@ -262,8 +262,44 @@ pub enum TrayCommand {
 /// StatusNotifierItem implementation for Segmenta.
 struct SegmentaTray {
     sender: std::sync::mpsc::Sender<TrayCommand>,
+    /// The tray speaks to the daemon itself: the paused/resumed/cancelled task is the
+    /// one this menu is showing, and the window's cached model is not a safe source
+    /// (it stops refreshing while the window is hidden in the tray).
+    client: Arc<dyn Client>,
     active_task: Option<DownloadItem>,
     active_count: usize,
+}
+
+impl SegmentaTray {
+    /// Runs a download action on the task this menu is rendering.
+    ///
+    /// Executed on the tray thread with the tray's own client so a hidden window, a
+    /// stale model or a dropped command channel cannot turn the click into a no-op.
+    fn run_action(&mut self, action: TrayAction) {
+        let Some(task) = self.active_task.as_ref() else {
+            return;
+        };
+        let Some(method) = action.method() else {
+            return;
+        };
+        let allowed = match action {
+            TrayAction::Pause => task.status.can_pause(),
+            TrayAction::Resume => task.status.can_resume(),
+            TrayAction::Cancel => task.status.can_cancel(),
+            TrayAction::Open | TrayAction::Preferences | TrayAction::Quit => false,
+        };
+        if !allowed {
+            return;
+        }
+        let params = if method == "download.cancel" {
+            serde_json::json!({ "task_id": task.task_id, "delete_file": false })
+        } else {
+            serde_json::json!({ "task_id": task.task_id })
+        };
+        if let Err(err) = self.client.request(method, params) {
+            eprintln!("segmenta-gui: tray {method} failed: {err}");
+        }
+    }
 }
 
 impl ksni::Tray for SegmentaTray {
@@ -309,7 +345,6 @@ impl ksni::Tray for SegmentaTray {
         use ksni::menu::*;
         let locale = segmenta_i18n::current();
         let model = TrayModel::build(self.active_task.as_ref(), self.active_count, locale);
-        let sender = self.sender.clone();
 
         model
             .items
@@ -338,20 +373,26 @@ impl ksni::Tray for SegmentaTray {
                 .into(),
                 TrayMenuItem::Separator => MenuItem::Separator,
                 TrayMenuItem::Action(action, label) => {
-                    let sender = sender.clone();
                     StandardItem {
                         label,
                         enabled: true,
-                        activate: Box::new(move |_| {
-                            let cmd = match action {
-                                TrayAction::Open => TrayCommand::Open,
-                                TrayAction::Pause => TrayCommand::Pause,
-                                TrayAction::Resume => TrayCommand::Resume,
-                                TrayAction::Cancel => TrayCommand::Cancel,
-                                TrayAction::Preferences => TrayCommand::Preferences,
-                                TrayAction::Quit => TrayCommand::Quit,
-                            };
-                            let _ = sender.send(cmd);
+                        activate: Box::new(move |tray: &mut SegmentaTray| {
+                            // Download actions act here and now; window actions cross to
+                            // the GTK thread because they need the window.
+                            match action {
+                                TrayAction::Pause | TrayAction::Resume | TrayAction::Cancel => {
+                                    tray.run_action(action)
+                                }
+                                TrayAction::Open => {
+                                    let _ = tray.sender.send(TrayCommand::Open);
+                                }
+                                TrayAction::Preferences => {
+                                    let _ = tray.sender.send(TrayCommand::Preferences);
+                                }
+                                TrayAction::Quit => {
+                                    let _ = tray.sender.send(TrayCommand::Quit);
+                                }
+                            }
                         }),
                         ..Default::default()
                     }
@@ -359,6 +400,21 @@ impl ksni::Tray for SegmentaTray {
                 }
             })
             .collect()
+    }
+}
+
+impl TrayAction {
+    /// RPC this action runs against the daemon, when it is a download action.
+    ///
+    /// The window actions return `None`: they need the GTK thread, so they travel as a
+    /// `TrayCommand` instead of being executed by the tray.
+    pub fn method(self) -> Option<&'static str> {
+        match self {
+            TrayAction::Pause => Some("download.pause"),
+            TrayAction::Resume => Some("download.resume"),
+            TrayAction::Cancel => Some("download.cancel"),
+            TrayAction::Open | TrayAction::Preferences | TrayAction::Quit => None,
+        }
     }
 }
 
@@ -384,6 +440,7 @@ pub fn spawn(
 
     let tray = SegmentaTray {
         sender,
+        client: Arc::clone(&client),
         active_task: None,
         active_count: 0,
     };

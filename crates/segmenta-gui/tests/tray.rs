@@ -453,3 +453,16 @@ fn transferring_task_wins_over_paused_older_one_for_label_and_target() {
     assert!(actions.contains(&TrayAction::Pause));
     assert!(!actions.contains(&TrayAction::Resume));
 }
+
+/// The tray acts on the task it is rendering, with its own client, so a hidden
+/// window or a stale window model cannot turn the click into a no-op (0.3.0).
+#[test]
+fn tray_actions_are_executed_by_the_tray_client() {
+    use segmenta_gui::tray::TrayAction;
+    assert_eq!(TrayAction::Pause.method(), Some("download.pause"));
+    assert_eq!(TrayAction::Resume.method(), Some("download.resume"));
+    assert_eq!(TrayAction::Cancel.method(), Some("download.cancel"));
+    assert_eq!(TrayAction::Open.method(), None);
+    assert_eq!(TrayAction::Preferences.method(), None);
+    assert_eq!(TrayAction::Quit.method(), None);
+}
