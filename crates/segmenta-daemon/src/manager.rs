@@ -2575,6 +2575,12 @@ impl Manager {
             ));
         }
         let limit = crate::media::clamp_limit(params.playlist_limit).map_err(Self::media_error)?;
+        // Validate the schedule before touching the backend: a bad parameter is the caller's
+        // error and must not depend on whether yt-dlp happens to be installed.
+        let scheduled_at = match params.scheduled_at.as_deref() {
+            Some(raw) => Some(self.normalize_scheduled_at(raw)?),
+            None => None,
+        };
         let host = url.host_str().unwrap_or_default().to_string();
         if !crate::media::is_youtube(&host) {
             // The manifest pipeline resolves the requested height instead of a format id.
@@ -2634,10 +2640,6 @@ impl Manager {
             Some(uuid::Uuid::new_v4().to_string())
         } else {
             None
-        };
-        let scheduled_at = match params.scheduled_at.as_deref() {
-            Some(raw) => Some(self.normalize_scheduled_at(raw)?),
-            None => None,
         };
         let is_due = match &scheduled_at {
             Some(target) => !self.is_future(target),
