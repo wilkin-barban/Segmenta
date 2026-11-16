@@ -465,6 +465,13 @@ impl SegmentaWindow {
         fractions
     }
 
+    /// Dedicated speed labels of the visible list rows, in paint order.
+    pub fn row_speed_labels(&self) -> Vec<String> {
+        let mut speeds = Vec::new();
+        collect_speed_labels(self.0.list_view.upcast_ref::<gtk::Widget>(), &mut speeds);
+        speeds
+    }
+
     /// Whether any visible list row is painting an unknown size as a pulse.
     pub fn row_progress_indeterminate(&self) -> bool {
         let mut bars = Vec::new();
@@ -1051,15 +1058,8 @@ impl Inner {
                 inner.fill_row(&child, &item);
             }
         });
-        factory.connect_unbind(|_, object| {
-            let Some(list_item) = object.downcast_ref::<gtk::ListItem>() else {
-                return;
-            };
-            if let Some(child) = list_item.child().and_downcast::<gtk::Box>() {
-                while let Some(orphan) = child.first_child() {
-                    child.remove(&orphan);
-                }
-            }
+        factory.connect_unbind(|_, _object| {
+            // Rows keep their widget hierarchy across re-binds so `fill_row` can update in place.
         });
 
         self.list_view.set_factory(Some(&factory));
@@ -2455,9 +2455,47 @@ impl Inner {
         let Some(row) = widget.downcast_ref::<gtk::Box>() else {
             return;
         };
+        let is_multi = self.multi_select.get();
+        let badge = item.media_badge();
+        let meta_text = if badge.is_empty() {
+            item.progress_line()
+        } else {
+            format!("{badge} · {}", item.progress_line())
+        };
+
+        if let Some(widgets) = extract_row_widgets(row, is_multi) {
+            if let Some(check) = &widgets.check {
+                check.set_active(self.selected.borrow().contains(&item.task_id));
+            }
+            widgets.title.set_label(&item.filename);
+            widgets.title.set_tooltip_text(Some(&item.filename));
+            widgets.status.set_label(item.status.label(locale()));
+            paint_progress(&widgets.bar, item);
+            widgets
+                .bar
+                .update_property(&[gtk::accessible::Property::Label(&format!(
+                    "Progreso de {}: {}",
+                    item.filename,
+                    progress_label_text(item)
+                ))]);
+            widgets.meta.set_label(&meta_text);
+
+            if item.speed_bps > 0 {
+                widgets
+                    .speed
+                    .set_label(&crate::model::format_speed(item.speed_bps));
+                widgets.speed.set_visible(true);
+            } else {
+                widgets.speed.set_label("");
+                widgets.speed.set_visible(false);
+            }
+            return;
+        }
+
         while let Some(child) = row.first_child() {
             row.remove(&child);
         }
+        row.set_orientation(gtk::Orientation::Horizontal);
         row.set_spacing(10);
         row.set_margin_top(10);
         row.set_margin_bottom(10);
@@ -2486,13 +2524,6 @@ impl Inner {
             progress_label_text(item)
         ))]);
 
-        // Media tasks carry a localized badge in front of the progress line.
-        let badge = item.media_badge();
-        let meta_text = if badge.is_empty() {
-            item.progress_line()
-        } else {
-            format!("{badge} · {}", item.progress_line())
-        };
         let meta = gtk::Label::new(Some(&meta_text));
         meta.set_xalign(0.0);
         meta.set_ellipsize(gtk::pango::EllipsizeMode::End);
@@ -2504,10 +2535,25 @@ impl Inner {
         body.append(&bar);
         body.append(&meta);
 
-        if self.multi_select.get() {
-            // Explicit, discoverable selection: a checkbox per row instead of a
-            // hidden ctrl-click, which no menu entry could ever explain.
-            row.set_orientation(gtk::Orientation::Horizontal);
+        let speed = gtk::Label::new(None);
+        speed.add_css_class("caption");
+        speed.add_css_class("dim-label");
+        speed.add_css_class("numeric");
+        speed.add_css_class("speed-label");
+        speed.set_valign(gtk::Align::Center);
+        speed.set_halign(gtk::Align::End);
+        speed.set_tooltip_text(Some(tr(locale(), Msg::Speed)));
+        speed.update_property(&[gtk::accessible::Property::Label(tr(locale(), Msg::Speed))]);
+
+        if item.speed_bps > 0 {
+            speed.set_label(&crate::model::format_speed(item.speed_bps));
+            speed.set_visible(true);
+        } else {
+            speed.set_label("");
+            speed.set_visible(false);
+        }
+
+        if is_multi {
             let check = gtk::CheckButton::new();
             check.set_active(self.selected.borrow().contains(&item.task_id));
             check.set_valign(gtk::Align::Center);
@@ -2525,10 +2571,10 @@ impl Inner {
                 }
             });
             row.append(&check);
-        } else {
-            row.set_orientation(gtk::Orientation::Vertical);
         }
+
         row.append(&body);
+        row.append(&speed);
     }
 
     fn set_multi_select(self: &Rc<Self>, enabled: bool) {
@@ -2828,6 +2874,56 @@ impl Inner {
     }
 }
 
+struct RowWidgets {
+    check: Option<gtk::CheckButton>,
+    title: gtk::Label,
+    status: gtk::Label,
+    bar: gtk::ProgressBar,
+    meta: gtk::Label,
+    speed: gtk::Label,
+}
+
+fn extract_row_widgets(row: &gtk::Box, multi_select: bool) -> Option<RowWidgets> {
+    if multi_select {
+        let check = row.first_child()?.downcast::<gtk::CheckButton>().ok()?;
+        let body = check.next_sibling()?.downcast::<gtk::Box>().ok()?;
+        let speed = body.next_sibling()?.downcast::<gtk::Label>().ok()?;
+        if !speed.has_css_class("speed-label") {
+            return None;
+        }
+        let title = body.first_child()?.downcast::<gtk::Label>().ok()?;
+        let status = title.next_sibling()?.downcast::<gtk::Label>().ok()?;
+        let bar = status.next_sibling()?.downcast::<gtk::ProgressBar>().ok()?;
+        let meta = bar.next_sibling()?.downcast::<gtk::Label>().ok()?;
+        Some(RowWidgets {
+            check: Some(check),
+            title,
+            status,
+            bar,
+            meta,
+            speed,
+        })
+    } else {
+        let body = row.first_child()?.downcast::<gtk::Box>().ok()?;
+        let speed = body.next_sibling()?.downcast::<gtk::Label>().ok()?;
+        if !speed.has_css_class("speed-label") {
+            return None;
+        }
+        let title = body.first_child()?.downcast::<gtk::Label>().ok()?;
+        let status = title.next_sibling()?.downcast::<gtk::Label>().ok()?;
+        let bar = status.next_sibling()?.downcast::<gtk::ProgressBar>().ok()?;
+        let meta = bar.next_sibling()?.downcast::<gtk::Label>().ok()?;
+        Some(RowWidgets {
+            check: None,
+            title,
+            status,
+            bar,
+            meta,
+            speed,
+        })
+    }
+}
+
 /// Queue name painted by one sidebar row: the first label of its box.
 fn queue_row_name(row: &gtk::ListBoxRow) -> Option<String> {
     row.child()
@@ -2940,6 +3036,25 @@ fn collect_progress_bars(widget: &gtk::Widget, fractions: &mut Vec<f64>) {
     while let Some(child) = next {
         next = child.next_sibling();
         collect_progress_bars(&child, fractions);
+    }
+}
+
+/// Dedicated speed labels under `widget`, in paint order.
+fn collect_speed_labels(widget: &gtk::Widget, speeds: &mut Vec<String>) {
+    if let Some(label) = widget.downcast_ref::<gtk::Label>() {
+        if label.has_css_class("speed-label") {
+            if label.is_visible() {
+                speeds.push(label.label().to_string());
+            } else {
+                speeds.push(String::new());
+            }
+            return;
+        }
+    }
+    let mut next = widget.first_child();
+    while let Some(child) = next {
+        next = child.next_sibling();
+        collect_speed_labels(&child, speeds);
     }
 }
 

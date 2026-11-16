@@ -319,6 +319,28 @@ fn task_progress_updates_bytes_speed_eta_and_segments() {
 }
 
 #[test]
+fn progress_update_with_positive_speed_reaches_row_model() {
+    let mut store = DownloadStore::default();
+    let initial = row("task-1", "downloading");
+    store.reload(vec![initial]);
+
+    let progress: ProgressUpdate = serde_json::from_value(json!({
+        "downloaded_bytes": 2_500_000_000u64,
+        "total_bytes": 4_000_000_000u64,
+        "speed_bps": 52_000_000u64,
+        "eta_seconds": 28u64,
+        "segments": []
+    }))
+    .expect("progress payload parses");
+
+    assert!(store.apply_progress("task-1", &progress));
+    let item = store.get("task-1").expect("item exists");
+    assert_eq!(item.speed_bps, 52_000_000);
+    assert_eq!(item.eta_seconds, Some(28));
+    assert_eq!(item.downloaded_bytes, 2_500_000_000);
+}
+
+#[test]
 fn state_change_and_removal_follow_events() {
     let mut store = DownloadStore::default();
     store.reload(vec![row("a", "downloading")]);

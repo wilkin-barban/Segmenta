@@ -423,6 +423,69 @@ fn task_progress_updates_the_row_model() {
     });
 }
 
+#[test]
+fn row_exposes_dedicated_speed_label_while_downloading_and_clears_on_completion() {
+    run_gui(
+        "row_exposes_dedicated_speed_label_while_downloading_and_clears_on_completion",
+        || {
+            let app = app("io.github.wilkin.Segmenta.TestSpeedLabel");
+            let fake =
+                DemoClient::with_downloads(vec![download_row("task-speed", "downloading", 4)]);
+            let window = window_with(&app, &fake);
+            assert!(pump_until(
+                || window.rows().len() == 1,
+                Duration::from_secs(5)
+            ));
+
+            fake.push_download_event(
+                1,
+                "task_progress",
+                "task-speed",
+                json!({
+                    "downloaded_bytes": 2_000_000_000u64,
+                    "total_bytes": 4_000_000_000u64,
+                    "speed_bps": 45_200_000u64,
+                    "eta_seconds": 44u64,
+                    "segments": []
+                }),
+            );
+
+            let expected_speed = segmenta_gui::model::format_speed(45_200_000);
+            assert!(
+                pump_until(
+                    || window.row_speed_labels().first().map(|s| s.as_str())
+                        == Some(&expected_speed),
+                    Duration::from_secs(5)
+                ),
+                "the row never exposed the formatted speed label; got {:?}",
+                window.row_speed_labels()
+            );
+
+            fake.push_download_event(
+                2,
+                "state_changed",
+                "task-speed",
+                json!({
+                    "old_state": "downloading",
+                    "new_state": "completed"
+                }),
+            );
+
+            assert!(
+                pump_until(
+                    || {
+                        let labels = window.row_speed_labels();
+                        labels.first().map(|s| s.is_empty()).unwrap_or(true)
+                    },
+                    Duration::from_secs(5)
+                ),
+                "speed label was not cleared on completion; got {:?}",
+                window.row_speed_labels()
+            );
+        },
+    );
+}
+
 /// A media/torrent task as the daemon reports it: no size known, no segment table.
 fn media_row(task_id: &str, media_kind: &str) -> Value {
     let mut row = download_row(task_id, "downloading", 1);
