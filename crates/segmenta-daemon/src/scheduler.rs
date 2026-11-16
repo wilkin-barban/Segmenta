@@ -33,6 +33,11 @@ pub const MINUTES_PER_DAY: u32 = 24 * 60;
 pub trait Clock: Send + Sync {
     /// Local wall-clock minute of the day, `0..MINUTES_PER_DAY`.
     fn minute_of_day(&self) -> u32;
+
+    /// Current timestamp in seconds since UNIX epoch.
+    fn now_unix(&self) -> i64 {
+        unsafe { libc::time(std::ptr::null_mut()) as i64 }
+    }
 }
 
 /// Production clock: local time as the user sees it.

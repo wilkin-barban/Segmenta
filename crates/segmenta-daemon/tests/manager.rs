@@ -50,6 +50,7 @@ fn record(id: &str, status: DownloadStatus) -> DownloadRecord {
         quarantine_path: None,
         postprocess_exit: None,
         postprocess_message: None,
+        scheduled_at: None,
     }
 }
 
@@ -785,4 +786,186 @@ async fn stream_task_progress_reports_real_speed_and_finished_reports_zero() {
         .unwrap();
     assert_eq!(status["status"], "completed");
     assert_eq!(status["speed_bps"], 0, "finished stream speed must be zero");
+}
+
+#[tokio::test]
+async fn invalid_scheduled_at_is_rejected_with_1004() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+
+    // download.add with invalid formats
+    for invalid in [
+        "not-a-date",
+        "25:00",
+        "2026-11-16",
+        "2026-11-16T21:30:00",
+        "2026-13-01T10:00:00Z",
+    ] {
+        let err = call(
+            &h.manager,
+            "download.add",
+            json!({
+                "url": "https://example.test/file.bin",
+                "scheduled_at": invalid,
+            }),
+        )
+        .await
+        .expect_err(&format!("scheduled_at `{invalid}` must be rejected"));
+        assert_eq!(err.0, 1004, "code for `{invalid}`: {err:?}");
+    }
+
+    // media.add with invalid format
+    let err = call(
+        &h.manager,
+        "media.add",
+        json!({
+            "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "mode": "video",
+            "scheduled_at": "bad-time",
+        }),
+    )
+    .await
+    .expect_err("media.add with bad scheduled_at must be rejected");
+    assert_eq!(err.0, 1004, "{err:?}");
+}
+
+#[tokio::test]
+async fn task_scheduled_in_future_is_not_started_by_queue() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+
+    let added = call(
+        &h.manager,
+        "download.add",
+        json!({
+            "url": "https://example.test/file.bin",
+            "scheduled_at": "2099-01-01T00:00:00Z",
+            "start_immediately": true,
+        }),
+    )
+    .await
+    .unwrap();
+    let task_id = added["task_id"].as_str().unwrap();
+
+    let status = call(&h.manager, "download.status", json!({ "task_id": task_id }))
+        .await
+        .unwrap();
+    assert_eq!(status["status"], "pending");
+    assert_eq!(status["scheduled_at"], "2099-01-01T00:00:00Z");
+
+    let started = h.manager.start_pending_for_queue("main").unwrap();
+    assert_eq!(started, 0, "future scheduled task must not start");
+
+    let status_after = call(&h.manager, "download.status", json!({ "task_id": task_id }))
+        .await
+        .unwrap();
+    assert_eq!(status_after["status"], "pending");
+}
+
+#[tokio::test]
+async fn after_deadline_passes_scheduled_task_starts() {
+    let server = RangeServer::start(ServerConfig {
+        body: vec![b'x'; 1024 * 64],
+        ..ServerConfig::default()
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+    let settings = Settings {
+        allow_local_downloads: true,
+        download_dir: dir.path().join("downloads").display().to_string(),
+        max_connections: 2,
+        ..Settings::default()
+    };
+    call(
+        &h.manager,
+        "settings.update",
+        serde_json::to_value(&settings).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let added = call(
+        &h.manager,
+        "download.add",
+        json!({
+            "url": server.url().to_string(),
+            "scheduled_at": "2000-01-01T00:00:00Z",
+            "start_immediately": false,
+        }),
+    )
+    .await
+    .unwrap();
+    let task_id = added["task_id"].as_str().unwrap().to_string();
+
+    let started = h.manager.start_pending_for_queue("main").unwrap();
+    assert_eq!(started, 1, "task with past deadline must start");
+
+    let status = call(&h.manager, "download.status", json!({ "task_id": task_id }))
+        .await
+        .unwrap();
+    assert_eq!(status["status"], "downloading");
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn resume_on_not_due_task_leaves_it_pending() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+
+    let added = call(
+        &h.manager,
+        "download.add",
+        json!({
+            "url": "https://example.test/file.bin",
+            "scheduled_at": "2099-01-01T00:00:00Z",
+        }),
+    )
+    .await
+    .unwrap();
+    let task_id = added["task_id"].as_str().unwrap();
+
+    let resumed = call(&h.manager, "download.resume", json!({ "task_id": task_id }))
+        .await
+        .unwrap();
+    assert_eq!(resumed["status"], "pending");
+
+    let status = call(&h.manager, "download.status", json!({ "task_id": task_id }))
+        .await
+        .unwrap();
+    assert_eq!(status["status"], "pending");
+}
+
+#[tokio::test]
+async fn scheduled_at_with_hh_mm_normalizes_to_utc_rfc3339() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+
+    let added = call(
+        &h.manager,
+        "download.add",
+        json!({
+            "url": "https://example.test/file.bin",
+            "scheduled_at": "23:59",
+        }),
+    )
+    .await
+    .unwrap();
+    let task_id = added["task_id"].as_str().unwrap();
+
+    let status = call(&h.manager, "download.status", json!({ "task_id": task_id }))
+        .await
+        .unwrap();
+    let scheduled_at = status["scheduled_at"]
+        .as_str()
+        .expect("normalized scheduled_at");
+    assert!(
+        scheduled_at.ends_with('Z'),
+        "must be UTC Z format: {scheduled_at}"
+    );
+    assert_eq!(
+        scheduled_at.len(),
+        20,
+        "RFC-3339 format YYYY-MM-DDTHH:MM:SSZ: {scheduled_at}"
+    );
 }

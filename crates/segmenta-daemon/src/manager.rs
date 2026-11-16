@@ -271,6 +271,26 @@ impl Manager {
             .minute_of_day()
     }
 
+    /// Current UNIX timestamp in seconds from the configured clock.
+    pub fn now_unix(&self) -> i64 {
+        self.clock
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .now_unix()
+    }
+
+    /// Whether an RFC-3339 target timestamp is in the future.
+    pub fn is_future(&self, target_rfc3339: &str) -> bool {
+        let now = unix_to_rfc3339(self.now_unix());
+        now.as_str() < target_rfc3339
+    }
+
+    /// Parse and normalize `scheduled_at` to UTC RFC-3339 text.
+    pub fn normalize_scheduled_at(&self, raw: &str) -> Result<String, RpcError> {
+        let clock = self.clock.lock().unwrap_or_else(|err| err.into_inner());
+        normalize_scheduled_at(raw, &**clock)
+    }
+
     /// Handle the queue scheduler waits on to be woken before the next tick.
     pub fn scheduler_wake(&self) -> Arc<Notify> {
         Arc::clone(&self.scheduler_wake)
@@ -380,7 +400,7 @@ impl Manager {
         }
         let pending = self
             .store
-            .pending_for_queue(queue, free)
+            .pending_for_queue(queue, 1000)
             .map_err(store_error)?;
         let connections = self.settings().max_connections;
         let mut started = 0;
@@ -389,6 +409,11 @@ impl Manager {
             // already spent; stopping at `free` keeps the limit true either way.
             if started >= free {
                 break;
+            }
+            if let Some(target) = &record.scheduled_at {
+                if self.is_future(target) {
+                    continue;
+                }
             }
             match self.start_task(&record.id, connections) {
                 Ok(()) => {
@@ -513,6 +538,7 @@ impl Manager {
             segments,
             media_kind: record.media_kind.clone(),
             playlist_title: record.playlist_title.clone(),
+            scheduled_at: record.scheduled_at.clone(),
         }
     }
 
@@ -599,6 +625,14 @@ impl Manager {
             }
             None => None,
         };
+        let scheduled_at = match params.scheduled_at.as_deref() {
+            Some(raw) => Some(self.normalize_scheduled_at(raw)?),
+            None => None,
+        };
+        let is_due = match &scheduled_at {
+            Some(target) => !self.is_future(target),
+            None => true,
+        };
         // A task is pending until the engine starts it: "start immediately" only
         // decides whether the daemon launches it now.
         let status = DownloadStatus::Pending;
@@ -633,6 +667,7 @@ impl Manager {
             quarantine_path: None,
             postprocess_exit: None,
             postprocess_message: None,
+            scheduled_at: scheduled_at.clone(),
         };
         // Write the secret first: if there is no keyring the caller gets 1031 and no
         // task is created, so the sensitive header is never silently dropped.
@@ -668,7 +703,7 @@ impl Manager {
                 "final_path": record.final_path,
             }),
         );
-        if params.start_immediately {
+        if params.start_immediately && is_due {
             // `download.add` uses the same gate and the same limit as the scheduler path.
             // When no slot fits, the task stays `pending` and the completion of a running
             // one (which wakes the scheduler) starts it, in queue priority order.
@@ -721,6 +756,34 @@ impl Manager {
             .get(task_id)
             .map_err(store_error)?
             .ok_or_else(|| RpcError::task_not_found(task_id))?;
+        if let Some(target) = &record.scheduled_at {
+            if self.is_future(target) {
+                return Ok(());
+            }
+        }
+        let media_kind = crate::media::MediaTaskKind::parse(&record.download_type).filter(|kind| {
+            matches!(
+                kind,
+                crate::media::MediaTaskKind::YoutubeVideo
+                    | crate::media::MediaTaskKind::YoutubeAudio
+                    | crate::media::MediaTaskKind::YoutubePlaylist
+            )
+        });
+        if let Some(kind) = media_kind {
+            let plan = self.media_plan_from_record(&record, kind)?;
+            let tool = crate::media::locate_tool("yt-dlp").map_err(Self::media_error)?;
+            let final_path = PathBuf::from(&record.final_path);
+            self.store
+                .set_status(task_id, DownloadStatus::Downloading, None)
+                .map_err(store_error)?;
+            self.start_media_task(task_id.to_string(), plan, tool, final_path)?;
+            self.bus.publish(
+                "task_updated",
+                Some(task_id),
+                json!({ "status": "downloading" }),
+            );
+            return Ok(());
+        }
         let settings = self.settings();
         // A resumed task may outlive its destination folder (removed by the user, or a
         // pending task that was never started); recreate it instead of failing ENOENT.
@@ -1049,7 +1112,7 @@ impl Manager {
             DownloadStatus::Downloading => {
                 return Err(RpcError::task_already_active(task_id));
             }
-            DownloadStatus::Paused | DownloadStatus::Retrying => {}
+            DownloadStatus::Paused | DownloadStatus::Retrying | DownloadStatus::Pending => {}
             // The GUI's retry/play button is `download.resume`, so a failed task must
             // be resumable: refusing it with 1003 left the user stuck with a download
             // that could never be retried from the interface.
@@ -1061,12 +1124,16 @@ impl Manager {
             }
         }
         tracing::info!(task_id = %task_id, "download.resume");
-        // Resume rejoins the queue and goes through the same gate as the scheduler, so a
-        // closed window or a full queue leaves the task pending for the next tick instead
-        // of bypassing the schedule.
-        self.store
-            .set_status(task_id, DownloadStatus::Pending, None)
-            .map_err(store_error)?;
+        if record.status != DownloadStatus::Pending {
+            self.store
+                .set_status(task_id, DownloadStatus::Pending, None)
+                .map_err(store_error)?;
+        }
+        if let Some(target) = &record.scheduled_at {
+            if self.is_future(target) {
+                return Ok(json!({ "task_id": task_id, "status": "pending" }));
+            }
+        }
         self.start_pending_for_queue(&record.queue_name)?;
         let status = self
             .store
@@ -2568,6 +2635,19 @@ impl Manager {
         } else {
             None
         };
+        let scheduled_at = match params.scheduled_at.as_deref() {
+            Some(raw) => Some(self.normalize_scheduled_at(raw)?),
+            None => None,
+        };
+        let is_due = match &scheduled_at {
+            Some(target) => !self.is_future(target),
+            None => true,
+        };
+        let status = if is_due {
+            DownloadStatus::Downloading
+        } else {
+            DownloadStatus::Pending
+        };
         let record = DownloadRecord {
             id: task_id.clone(),
             url: url.to_string(),
@@ -2576,7 +2656,7 @@ impl Manager {
             temp_path: None,
             total_bytes: None,
             downloaded_bytes: 0,
-            status: DownloadStatus::Downloading,
+            status,
             supports_ranges: false,
             etag: None,
             last_modified: None,
@@ -2605,6 +2685,7 @@ impl Manager {
             quarantine_path: None,
             postprocess_exit: None,
             postprocess_message: None,
+            scheduled_at: scheduled_at.clone(),
         };
         self.store.insert_download(&record).map_err(store_error)?;
         self.bus.publish(
@@ -2612,7 +2693,7 @@ impl Manager {
             Some(&task_id),
             json!({
                 "task_id": task_id,
-                "status": "downloading",
+                "status": status.as_str(),
                 "url": record.url,
                 "destination_dir": dir.to_string_lossy(),
                 "final_path": record.final_path,
@@ -2636,10 +2717,12 @@ impl Manager {
             playlist_limit: limit,
             height: params.height,
         };
-        self.start_media_task(task_id.clone(), plan, tool, final_path)?;
+        if is_due {
+            self.start_media_task(task_id.clone(), plan, tool, final_path)?;
+        }
         Ok(json!({
             "task_id": task_id,
-            "status": "downloading",
+            "status": status.as_str(),
             "kind": task_kind.as_str(),
             "batch_id": batch_id,
         }))
@@ -2697,6 +2780,7 @@ impl Manager {
             quarantine_path: None,
             postprocess_exit: None,
             postprocess_message: None,
+            scheduled_at: None,
         };
         self.store.insert_download(&record).map_err(store_error)?;
         self.bus.publish(
@@ -2974,6 +3058,7 @@ impl Manager {
             quarantine_path: None,
             postprocess_exit: None,
             postprocess_message: None,
+            scheduled_at: None,
         };
 
         self.store.insert_download(&record).map_err(store_error)?;
@@ -3561,4 +3646,223 @@ fn media_http_client() -> Result<reqwest::Client, RpcError> {
         .timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|err| RpcError::internal(err.to_string()))
+}
+
+fn is_leap_year(y: i64) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0)
+}
+
+fn days_in_month(y: i64, m: u32) -> u32 {
+    match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if is_leap_year(y) {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 0,
+    }
+}
+
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400) as u32;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + (doe as i64) - 719468
+}
+
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u32;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = (yoe as i64) + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
+}
+
+fn unix_to_rfc3339(ts: i64) -> String {
+    let days = ts.div_euclid(86400);
+    let rem = ts.rem_euclid(86400);
+    let hour = rem / 3600;
+    let min = (rem % 3600) / 60;
+    let sec = rem % 60;
+    let (y, m, d) = civil_from_days(days);
+    format!("{y:04}-{m:02}-{d:02}T{hour:02}:{min:02}:{sec:02}Z")
+}
+
+fn parse_iso8601_with_tz(s: &str) -> Result<String, String> {
+    if s.len() < 17 {
+        return Err("string too short for ISO-8601 with timezone".to_string());
+    }
+    let chars: Vec<char> = s.chars().collect();
+    if chars[4] != '-' || chars[7] != '-' {
+        return Err("expected YYYY-MM-DD date prefix".to_string());
+    }
+    let year: i64 = s[0..4].parse().map_err(|_| "invalid year".to_string())?;
+    let month: u32 = s[5..7].parse().map_err(|_| "invalid month".to_string())?;
+    let day: u32 = s[8..10].parse().map_err(|_| "invalid day".to_string())?;
+    if !(1..=12).contains(&month) {
+        return Err(format!("month {month} must be between 1 and 12"));
+    }
+    let max_days = days_in_month(year, month);
+    if !(1..=max_days).contains(&day) {
+        return Err(format!(
+            "day {day} invalid for month {month} (max {max_days})"
+        ));
+    }
+
+    let sep = chars[10];
+    if sep != 'T' && sep != 't' && sep != ' ' {
+        return Err("expected 'T' or space separator between date and time".to_string());
+    }
+
+    let rest = &s[11..];
+    let tz_idx = rest
+        .find(['Z', 'z', '+', '-'])
+        .ok_or_else(|| "missing timezone (expected 'Z' or +/- offset)".to_string())?;
+
+    let time_part = &rest[..tz_idx];
+    let tz_part = &rest[tz_idx..];
+
+    let time_subparts: Vec<&str> = time_part.split(':').collect();
+    if time_subparts.len() < 2 {
+        return Err("time must contain at least HH:MM".to_string());
+    }
+    let hour: u32 = time_subparts[0]
+        .parse()
+        .map_err(|_| "invalid hour".to_string())?;
+    if hour > 23 {
+        return Err("hour must be 00-23".to_string());
+    }
+    let minute: u32 = time_subparts[1]
+        .parse()
+        .map_err(|_| "invalid minute".to_string())?;
+    if minute > 59 {
+        return Err("minute must be 00-59".to_string());
+    }
+    let second: u32 = if time_subparts.len() >= 3 {
+        let sec_str = time_subparts[2].split('.').next().unwrap_or("0");
+        let sec: u32 = sec_str.parse().map_err(|_| "invalid second".to_string())?;
+        if sec > 60 {
+            return Err("second must be 00-60".to_string());
+        }
+        sec
+    } else {
+        0
+    };
+
+    let offset_seconds: i64 = if tz_part.starts_with('Z') || tz_part.starts_with('z') {
+        if tz_part.len() != 1 {
+            return Err("unexpected characters after 'Z'".to_string());
+        }
+        0
+    } else if tz_part.starts_with('+') || tz_part.starts_with('-') {
+        let sign = if tz_part.starts_with('+') { 1 } else { -1 };
+        let offset_str = &tz_part[1..];
+        let (tz_h, tz_m) = if let Some((h_str, m_str)) = offset_str.split_once(':') {
+            let h: u32 = h_str
+                .parse()
+                .map_err(|_| "invalid timezone hour".to_string())?;
+            let m: u32 = m_str
+                .parse()
+                .map_err(|_| "invalid timezone minute".to_string())?;
+            (h, m)
+        } else if offset_str.len() == 4 {
+            let h: u32 = offset_str[..2]
+                .parse()
+                .map_err(|_| "invalid timezone hour".to_string())?;
+            let m: u32 = offset_str[2..]
+                .parse()
+                .map_err(|_| "invalid timezone minute".to_string())?;
+            (h, m)
+        } else if offset_str.len() == 2 {
+            let h: u32 = offset_str
+                .parse()
+                .map_err(|_| "invalid timezone hour".to_string())?;
+            (h, 0)
+        } else {
+            return Err(
+                "invalid timezone offset format (expected +/-HH:MM or +/-HHMM)".to_string(),
+            );
+        };
+        if tz_h > 23 || tz_m > 59 {
+            return Err("timezone offset out of range".to_string());
+        }
+        (tz_h as i64 * 3600 + tz_m as i64 * 60) * sign
+    } else {
+        return Err("invalid timezone indicator".to_string());
+    };
+
+    let days = days_from_civil(year, month, day);
+    let local_seconds = days * 86400 + hour as i64 * 3600 + minute as i64 * 60 + second as i64;
+    let utc_seconds = local_seconds - offset_seconds;
+    Ok(unix_to_rfc3339(utc_seconds))
+}
+
+pub fn normalize_scheduled_at(raw: &str, clock: &dyn Clock) -> Result<String, RpcError> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return Err(RpcError::new(
+            1004,
+            "ERR_INVALID_PARAMS",
+            "scheduled_at cannot be empty; expected ISO-8601 with timezone (e.g. 2026-11-16T21:30:00Z) or HH:MM (e.g. 21:30)",
+        ));
+    }
+
+    if !s.contains('-')
+        && !s.contains('T')
+        && !s.contains(' ')
+        && !s.to_ascii_lowercase().contains('z')
+    {
+        if let Some((h_str, m_str)) = s.split_once(':') {
+            if let (Ok(h), Ok(m)) = (h_str.parse::<u32>(), m_str.parse::<u32>()) {
+                if h < 24 && m < 60 {
+                    let now = clock.now_unix();
+                    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+                    unsafe {
+                        libc::localtime_r(&now, &mut tm);
+                    }
+                    if h < tm.tm_hour as u32 || (h == tm.tm_hour as u32 && m <= tm.tm_min as u32) {
+                        tm.tm_mday += 1;
+                    }
+                    tm.tm_hour = h as i32;
+                    tm.tm_min = m as i32;
+                    tm.tm_sec = 0;
+                    tm.tm_isdst = -1;
+                    let target_unix = unsafe { libc::mktime(&mut tm) };
+                    if target_unix == -1 {
+                        return Err(RpcError::new(
+                            1004,
+                            "ERR_INVALID_PARAMS",
+                            "cannot convert local time to timestamp",
+                        ));
+                    }
+                    return Ok(unix_to_rfc3339(target_unix as i64));
+                }
+            }
+            return Err(RpcError::new(
+                1004,
+                "ERR_INVALID_PARAMS",
+                "invalid HH:MM; hour must be 00-23 and minute 00-59",
+            ));
+        }
+    }
+
+    parse_iso8601_with_tz(s).map_err(|msg| {
+        RpcError::new(
+            1004,
+            "ERR_INVALID_PARAMS",
+            format!("invalid scheduled_at: {msg}; expected ISO-8601 with timezone (e.g. 2026-11-16T21:30:00Z) or HH:MM (e.g. 21:30)"),
+        )
+    })
 }
