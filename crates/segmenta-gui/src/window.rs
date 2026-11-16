@@ -831,6 +831,19 @@ impl SegmentaWindow {
 
     /// Resolves the currently active task according to tray selection rules.
     pub fn active_task(&self) -> Option<DownloadItem> {
+        // The cached model only refreshes while the window is on screen, and the tray
+        // must keep working with the window hidden. Ask the daemon, which is the source
+        // of truth, and fall back to the cache if the call fails.
+        let fresh = self.0.client.request(
+            "download.list",
+            json!({ "filter": "all", "limit": LIST_LIMIT, "offset": 0 }),
+        );
+        if let Ok(value) = fresh {
+            if let Ok(items) = serde_json::from_value::<Vec<DownloadItem>>(value) {
+                let (task, _) = crate::tray::select_active_task(&items);
+                return task.cloned();
+            }
+        }
         let store = self.0.store.borrow();
         let (task, _) = crate::tray::select_active_task(store.items());
         task.cloned()
