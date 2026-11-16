@@ -24,6 +24,7 @@ libadwaita = { version = "0.9", features = ["v1_5"] }
 segmenta-i18n.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+ksni = { version = "0.3", features = ["blocking"] }
 
 [dev-dependencies]
 tempfile.workspace = true

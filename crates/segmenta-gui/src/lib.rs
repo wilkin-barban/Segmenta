@@ -7,6 +7,7 @@ pub mod model;
 pub mod prefs;
 pub mod screenshots;
 pub mod segment_view;
+pub mod tray;
 pub mod window;
 
 // Re-exported so the integration tests can drive the toolkit without

@@ -380,6 +380,9 @@ catalog! {
     CliHeaderUsage => { en: "header must be \"Name: value\"", es: "la cabecera debe ser \"Nombre: valor\"", pt: "o cabeçalho deve ser \"Nome: valor\"" },
     CliShortIdUnknown => { en: "no task starting with", es: "no hay tarea que empiece con", pt: "não há tarefa começando com" },
     CliShortIdAmbiguous => { en: "matches several tasks; use a longer prefix", es: "coincide con varias tareas; usá un prefijo más largo", pt: "corresponde a várias tarefas; use um prefixo maior" },
+    TrayOpenSegmenta => { en: "Open Segmenta", es: "Abrir Segmenta", pt: "Abrir Segmenta" },
+    TrayQuit => { en: "Quit application", es: "Salir de la aplicación", pt: "Sair do aplicativo" },
+    TrayIdle => { en: "No active downloads", es: "Sin descargas activas", pt: "Nenhum download ativo" },
 }
 
 /// Localized text for a stable JSON-RPC error code.
