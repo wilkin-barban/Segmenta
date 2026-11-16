@@ -6,10 +6,12 @@
 //! JSON-RPC 2.0.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use adw::prelude::*;
 
 use crate::client::{Client, UnixClient};
+use crate::tray::{self, TrayCommand, TrayHandle};
 use crate::window::{SegmentaWindow, APP_ID};
 use crate::{adw, gtk};
 
@@ -115,6 +117,10 @@ thread_local! {
     /// Rust side of every open window.
     static OPEN_WINDOWS: std::cell::RefCell<Vec<SegmentaWindow>> =
         const { std::cell::RefCell::new(Vec::new()) };
+    static TRAY_HANDLE: std::cell::RefCell<Option<TrayHandle>> =
+        const { std::cell::RefCell::new(None) };
+    static APP_HOLD: std::cell::RefCell<Option<gtk::gio::ApplicationHoldGuard>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// Creates the main window for the default (socket) client and keeps it alive.
@@ -136,6 +142,7 @@ pub fn build_window_for_client(app: &adw::Application) {
             .cloned()
     });
     if let Some(existing) = reused {
+        existing.window().set_visible(true);
         existing.window().present();
         return;
     }
@@ -144,7 +151,69 @@ pub fn build_window_for_client(app: &adw::Application) {
     if let Some(task_id) = take_pending_show_task() {
         focus_when_ready(window.clone(), task_id);
     }
-    OPEN_WINDOWS.with(|windows| windows.borrow_mut().push(window));
+    OPEN_WINDOWS.with(|windows| windows.borrow_mut().push(window.clone()));
+
+    // Start the system tray integration once the window exists (S2, S6).
+    let tray_started = TRAY_HANDLE.with(|tray| tray.borrow().is_some());
+    if !tray_started {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let window_handle = window.clone();
+        let app_handle = app.clone();
+
+        // The tray thread cannot touch GTK objects, so commands cross through a plain
+        // channel drained by the main loop. 250 ms is imperceptible for a click and
+        // avoids a 20 Hz wakeup for the whole life of the process.
+        crate::glib::timeout_add_local(Duration::from_millis(250), move || {
+            loop {
+                match receiver.try_recv() {
+                    Ok(cmd) => match cmd {
+                        TrayCommand::Open => {
+                            window_handle.window().set_visible(true);
+                            window_handle.window().present();
+                        }
+                        TrayCommand::FocusTask(task_id) => {
+                            window_handle.window().set_visible(true);
+                            window_handle.window().present();
+                            window_handle.focus_task(&task_id);
+                        }
+                        TrayCommand::Pause(task_id) => {
+                            window_handle.pause_task(&task_id);
+                        }
+                        TrayCommand::Resume(task_id) => {
+                            window_handle.resume_task(&task_id);
+                        }
+                        TrayCommand::Cancel(task_id) => {
+                            window_handle.cancel_task(&task_id);
+                        }
+                        TrayCommand::Preferences => {
+                            window_handle.window().set_visible(true);
+                            window_handle.window().present();
+                            window_handle.open_preferences();
+                        }
+                        TrayCommand::Quit => {
+                            window_handle.set_tray_active(false);
+                            APP_HOLD.with(|slot| *slot.borrow_mut() = None);
+                            app_handle.quit();
+                            return crate::glib::ControlFlow::Break;
+                        }
+                    },
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        return crate::glib::ControlFlow::Break;
+                    }
+                }
+            }
+            crate::glib::ControlFlow::Continue
+        });
+
+        let tray_client: Arc<dyn Client> = Arc::new(UnixClient::from_env());
+        if let Some(handle) = tray::spawn(tray_client, sender) {
+            let guard = app.hold();
+            APP_HOLD.with(|slot| *slot.borrow_mut() = Some(guard));
+            window.set_tray_active(true);
+            TRAY_HANDLE.with(|slot| *slot.borrow_mut() = Some(handle));
+        }
+    }
 }
 
 /// How many windows the application is keeping alive (regression guard for the

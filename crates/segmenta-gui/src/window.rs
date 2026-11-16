@@ -27,6 +27,19 @@ use crate::{add_dialog, adw, gtk, prefs};
 /// Application identifier of the desktop entry.
 pub const APP_ID: &str = "io.github.wilkin.Segmenta";
 
+/// Pure lifecycle policy (S6):
+///
+/// When the tray started successfully, closing the window hides it and keeps
+/// the process alive (together with `app.hold()`), so background transfers continue
+/// and the user can restore the window from the tray.
+/// "Salir de la aplicación" from the tray is the only action that quits.
+///
+/// When the tray is not active (e.g. no StatusNotifierWatcher running or tray failed to spawn),
+/// closing the window terminates the process as usual.
+pub fn close_should_quit(tray_active: bool) -> bool {
+    !tray_active
+}
+
 /// Interval of the UI tick that drains daemon events (OpenSpec 04).
 const TICK: Duration = Duration::from_millis(150);
 
@@ -125,6 +138,7 @@ struct Inner {
     click_intent: std::cell::Cell<bool>,
     connected: Cell<bool>,
     closed: Cell<bool>,
+    tray_active: Cell<bool>,
     daemon_version: RefCell<Option<String>>,
 }
 
@@ -307,6 +321,7 @@ impl SegmentaWindow {
             click_intent: std::cell::Cell::new(false),
             connected: Cell::new(false),
             closed: Cell::new(false),
+            tray_active: Cell::new(false),
             daemon_version: RefCell::new(None),
         });
 
@@ -777,6 +792,43 @@ impl SegmentaWindow {
             .collect()
     }
 
+    /// Sets whether the system tray is active for this application window.
+    pub fn set_tray_active(&self, active: bool) {
+        self.0.tray_active.set(active);
+    }
+
+    /// Whether the system tray is currently active.
+    pub fn is_tray_active(&self) -> bool {
+        self.0.tray_active.get()
+    }
+
+    /// Pauses a task from the tray or an external trigger.
+    pub fn pause_task(&self, task_id: &str) {
+        self.0.request(
+            "download.pause",
+            json!({ "task_id": task_id }),
+            Pending::Pause(task_id.to_string()),
+        );
+    }
+
+    /// Resumes a task from the tray or an external trigger.
+    pub fn resume_task(&self, task_id: &str) {
+        self.0.request(
+            "download.resume",
+            json!({ "task_id": task_id }),
+            Pending::Resume(task_id.to_string()),
+        );
+    }
+
+    /// Cancels a task from the tray or an external trigger.
+    pub fn cancel_task(&self, task_id: &str) {
+        self.0.request(
+            "download.cancel",
+            json!({ "task_id": task_id, "delete_file": false }),
+            Pending::Cancel(task_id.to_string()),
+        );
+    }
+
     /// Opens the preferences dialog.
     pub fn open_preferences(&self) {
         let settings = self.0.settings.borrow().clone();
@@ -936,8 +988,14 @@ impl Inner {
         self.window.set_content(Some(&self.toast_overlay));
 
         let close_handle = Rc::downgrade(self);
-        self.window.connect_close_request(move |_| {
+        self.window.connect_close_request(move |win| {
             if let Some(inner) = close_handle.upgrade() {
+                // When the tray is active, closing the window hides it and keeps
+                // the process alive (S6). Salir from the tray terminates the process.
+                if !close_should_quit(inner.tray_active.get()) {
+                    win.set_visible(false);
+                    return gtk::glib::Propagation::Stop;
+                }
                 inner.closed.set(true);
             }
             gtk::glib::Propagation::Proceed

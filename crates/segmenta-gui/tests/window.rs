@@ -1432,3 +1432,11 @@ fn add_dialog_produces_request_with_scheduled_at_when_switch_on_and_without_when
         assert!(!scheduled_at.is_empty());
     });
 }
+
+#[test]
+fn window_close_should_quit_policy_reflects_tray_presence() {
+    // When the tray is active, closing the window hides it and keeps the process running (S6).
+    assert!(!segmenta_gui::window::close_should_quit(true));
+    // When the tray is not active, closing the window terminates the application as usual.
+    assert!(segmenta_gui::window::close_should_quit(false));
+}
