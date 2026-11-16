@@ -33,6 +33,7 @@ fn view() -> DownloadView {
         error_code: None,
         error_message: None,
         quarantine_path: None,
+        scheduled_at: None,
         segments: vec![SegmentView {
             id: 1,
             start_offset: 0,
@@ -225,4 +226,36 @@ fn json_payloads_are_never_localized() {
     for word in ["ESTADO", "TAMAÑO", "archivo:", "Segmentos:", "añadida"] {
         assert!(!payload.contains(word), "JSON leaked `{word}`: {payload}");
     }
+}
+
+#[test]
+fn scheduled_not_due_download_shows_scheduled_state_instead_of_speed() {
+    let mut v = view();
+    v.status = "pending".to_string();
+    v.scheduled_at = Some("2026-11-16T21:30:00Z".to_string());
+    v.speed_bps = 0;
+
+    let es_table = render_table(Locale::Es, &[v.clone()]);
+    assert!(
+        es_table.contains("Programada 2026-11-16 21:30"),
+        "{es_table}"
+    );
+
+    let en_table = render_table(Locale::En, &[v.clone()]);
+    assert!(
+        en_table.contains("Scheduled 2026-11-16 21:30"),
+        "{en_table}"
+    );
+
+    let pt_table = render_table(Locale::PtBr, &[v.clone()]);
+    assert!(
+        pt_table.contains("Programado 2026-11-16 21:30"),
+        "{pt_table}"
+    );
+
+    let es_status = render_status(Locale::Es, &v);
+    assert!(
+        es_status.contains("Programada 2026-11-16 21:30"),
+        "{es_status}"
+    );
 }

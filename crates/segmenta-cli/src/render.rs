@@ -99,6 +99,18 @@ pub fn status_label(locale: Locale, status: &str) -> &'static str {
     segmenta_i18n::tr(locale, message)
 }
 
+/// Format a UTC RFC-3339 timestamp as "YYYY-MM-DD HH:MM".
+pub fn format_scheduled_date_time(scheduled_at: &str) -> String {
+    let s = scheduled_at.trim();
+    if s.len() >= 16 {
+        let date = &s[..10];
+        let time = &s[11..16];
+        format!("{date} {time}")
+    } else {
+        s.to_string()
+    }
+}
+
 /// Render the `list` table.
 pub fn render_table(locale: Locale, rows: &[DownloadView]) -> String {
     if rows.is_empty() {
@@ -122,13 +134,20 @@ pub fn render_table(locale: Locale, rows: &[DownloadView]) -> String {
             .total_bytes
             .map(format_bytes)
             .unwrap_or_else(|| format!("≥ {}", format_bytes(view.downloaded_bytes)));
+        let speed_str = if view.status == "pending" && view.scheduled_at.is_some() {
+            let scheduled_at = view.scheduled_at.as_deref().unwrap();
+            let time_str = format_scheduled_date_time(scheduled_at);
+            tr(locale, Msg::ScheduledState).replace("{time}", &time_str)
+        } else {
+            format_speed(view.speed_bps)
+        };
         out.push_str(&format!(
             "{:<8}  {:<11}  {:>6}  {:>10}  {:>10}  {:>8}  {}\n",
             short_id(&view.task_id),
             status_label(locale, &view.status),
             format_progress(view),
             size,
-            format_speed(view.speed_bps),
+            speed_str,
             format_eta(view.eta_seconds),
             truncate(&view.filename, 48),
         ));
@@ -165,10 +184,17 @@ pub fn render_status(locale: Locale, view: &DownloadView) -> String {
         format_bytes(view.downloaded_bytes),
         total
     ));
+    let speed_str = if view.status == "pending" && view.scheduled_at.is_some() {
+        let scheduled_at = view.scheduled_at.as_deref().unwrap();
+        let time_str = format_scheduled_date_time(scheduled_at);
+        tr(locale, Msg::ScheduledState).replace("{time}", &time_str)
+    } else {
+        format_speed(view.speed_bps)
+    };
     out.push_str(&format!(
         "{}{}   {}{}\n",
         label(locale, Msg::Speed),
-        format_speed(view.speed_bps),
+        speed_str,
         label(locale, Msg::Eta),
         format_eta(view.eta_seconds)
     ));
@@ -360,6 +386,7 @@ mod tests {
             error_code: None,
             error_message: None,
             quarantine_path: None,
+            scheduled_at: None,
             media_kind: None,
             playlist_title: None,
             segments: vec![SegmentView {

@@ -67,6 +67,9 @@ enum Command {
         /// Register the task without starting it.
         #[arg(long)]
         no_start: bool,
+        /// Schedule the download for a specific date and time.
+        #[arg(long = "at")]
+        at: Option<String>,
     },
     /// List downloads.
     List {
@@ -168,6 +171,9 @@ enum MediaAction {
         /// Playlist limit (1-500, default 100).
         #[arg(long)]
         limit: Option<u32>,
+        /// Schedule the download for a specific date and time.
+        #[arg(long = "at")]
+        at: Option<String>,
     },
 }
 
@@ -821,6 +827,7 @@ fn run(cli: Cli, locale: Locale) -> Result<String, ClientError> {
             queue,
             priority,
             no_start,
+            at,
         } => {
             let mut params = json!({
                 "url": url,
@@ -828,6 +835,9 @@ fn run(cli: Cli, locale: Locale) -> Result<String, ClientError> {
                 "priority": priority,
                 "start_immediately": !no_start,
             });
+            if let Some(at) = at {
+                params["scheduled_at"] = Value::String(at);
+            }
             if let Some(dir) = dir {
                 params["destination_dir"] = Value::String(dir);
             }
@@ -1070,17 +1080,19 @@ fn run(cli: Cli, locale: Locale) -> Result<String, ClientError> {
                 format_id,
                 height,
                 limit,
+                at,
             } => {
-                let result = client.call(
-                    "media.add",
-                    json!({
-                        "url": url,
-                        "mode": mode,
-                        "format_id": format_id,
-                        "height": height,
-                        "playlist_limit": limit,
-                    }),
-                )?;
+                let mut params = json!({
+                    "url": url,
+                    "mode": mode,
+                    "format_id": format_id,
+                    "height": height,
+                    "playlist_limit": limit,
+                });
+                if let Some(at) = at {
+                    params["scheduled_at"] = Value::String(at);
+                }
+                let result = client.call("media.add", params)?;
                 if json_out {
                     out.push_str(&format!("{result}\n"));
                 } else {
