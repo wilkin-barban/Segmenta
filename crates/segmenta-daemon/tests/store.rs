@@ -42,6 +42,7 @@ fn record(id: &str, status: DownloadStatus) -> DownloadRecord {
         quarantine_path: None,
         postprocess_exit: None,
         postprocess_message: None,
+        scheduled_at: None,
     }
 }
 
@@ -442,7 +443,7 @@ fn migration_from_v2_to_v3_preserves_data_and_creates_torrent_tables() {
     }
     let store = Store::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 5);
+    assert_eq!(SCHEMA_VERSION, 6);
 
     let rows = store.list(None, 10, 0).unwrap();
     assert_eq!(rows.len(), 1);
@@ -919,4 +920,56 @@ fn a_legacy_site_login_is_listed_but_never_used_for_injection() {
     );
     assert!(store.remove_site_login("https://files.example").unwrap());
     assert!(!store.remove_site_login("https://files.example").unwrap());
+}
+
+#[test]
+fn migration_from_v5_to_v6_adds_scheduled_at_column_and_preserves_rows() {
+    assert_eq!(SCHEMA_VERSION, 6);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("segmenta-v5.db");
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.pragma_update(None, "user_version", 5).unwrap();
+        conn.execute_batch(r#"
+            CREATE TABLE IF NOT EXISTS queues (name TEXT PRIMARY KEY, max_active INTEGER NOT NULL DEFAULT 1);
+            INSERT OR IGNORE INTO queues(name, max_active) VALUES ('main', 3);
+            CREATE TABLE downloads (
+                id TEXT PRIMARY KEY,
+                url TEXT NOT NULL,
+                final_url TEXT,
+                final_path TEXT NOT NULL,
+                temp_path TEXT,
+                total_bytes INTEGER,
+                downloaded_bytes INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL,
+                supports_ranges BOOLEAN NOT NULL DEFAULT 0,
+                etag TEXT,
+                last_modified TEXT,
+                content_type TEXT,
+                expected_checksum TEXT,
+                error_code INTEGER,
+                error_message TEXT,
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                priority INTEGER NOT NULL DEFAULT 0,
+                queue_name TEXT NOT NULL DEFAULT 'main',
+                download_type TEXT NOT NULL DEFAULT 'direct',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMP,
+                media_kind TEXT,
+                media_format TEXT,
+                playlist_title TEXT,
+                playlist_count INTEGER,
+                batch_id TEXT,
+                quarantine_path TEXT,
+                postprocess_exit INTEGER,
+                postprocess_message TEXT
+            );
+            INSERT INTO downloads(id, url, final_path, status) VALUES ('old-5', 'http://example.test', '/tmp/old.bin', 'pending');
+        "#).unwrap();
+    }
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.schema_version().unwrap(), 6);
+    let row = store.get("old-5").unwrap().expect("row exists");
+    assert_eq!(row.id, "old-5");
+    assert_eq!(row.scheduled_at, None);
 }

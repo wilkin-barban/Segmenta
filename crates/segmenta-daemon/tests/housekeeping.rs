@@ -88,6 +88,7 @@ fn record_at(id: &str, status: DownloadStatus, path: &Path) -> DownloadRecord {
         quarantine_path: None,
         postprocess_exit: None,
         postprocess_message: None,
+        scheduled_at: None,
     }
 }
 

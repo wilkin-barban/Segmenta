@@ -307,6 +307,9 @@ pub struct AddDownloadParams {
     /// Higher runs first.
     #[serde(default)]
     pub priority: i64,
+    /// Moment when the task is scheduled to start (ISO-8601 with tz or HH:MM).
+    #[serde(default)]
+    pub scheduled_at: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -392,6 +395,9 @@ pub struct DownloadView {
     /// Playlist title for playlist tasks.
     #[serde(default)]
     pub playlist_title: Option<String>,
+    /// Moment when the task is scheduled to start (UTC RFC-3339).
+    #[serde(default)]
+    pub scheduled_at: Option<String>,
 }
 
 /// Public view of one segment.
@@ -561,6 +567,9 @@ pub struct MediaAddParams {
     /// Playlist limit, 1-500 (default 100).
     #[serde(default)]
     pub playlist_limit: Option<u32>,
+    /// Moment when the task is scheduled to start (ISO-8601 with tz or HH:MM).
+    #[serde(default)]
+    pub scheduled_at: Option<String>,
 }
 
 /// Parameters of `media.status`.

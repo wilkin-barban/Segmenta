@@ -148,6 +148,7 @@ fn record(id: &str, queue: &str, url: &str, dir: &Path) -> DownloadRecord {
         quarantine_path: None,
         postprocess_exit: None,
         postprocess_message: None,
+        scheduled_at: None,
     }
 }
 

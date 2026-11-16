@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Current schema version, stored in `PRAGMA user_version`.
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
@@ -334,6 +334,8 @@ pub struct DownloadRecord {
     pub playlist_count: Option<u32>,
     /// Groups the entries of one playlist run.
     pub batch_id: Option<String>,
+    /// Moment in UTC RFC-3339 when the task is scheduled to start.
+    pub scheduled_at: Option<String>,
 }
 
 /// One row of `torrents`.
@@ -980,6 +982,9 @@ impl Store {
                 )?;
             }
         }
+        if current < 6 && !has_column(&tx, "downloads", "scheduled_at")? {
+            tx.execute_batch("ALTER TABLE downloads ADD COLUMN scheduled_at TEXT")?;
+        }
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         Ok(SCHEMA_VERSION)
@@ -1006,9 +1011,9 @@ impl Store {
                 status, supports_ranges, etag, last_modified, content_type, expected_checksum,
                 error_code, error_message, retry_count, priority, queue_name, download_type,
                 media_kind, media_format, playlist_title, playlist_count, batch_id,
-                quarantine_path, postprocess_exit, postprocess_message
+                quarantine_path, postprocess_exit, postprocess_message, scheduled_at
              ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19,
-                       ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)",
+                       ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28)",
             params![
                 record.id,
                 record.url,
@@ -1037,6 +1042,7 @@ impl Store {
                 record.quarantine_path,
                 record.postprocess_exit,
                 record.postprocess_message,
+                record.scheduled_at,
             ],
         )?;
         Ok(())
@@ -1285,7 +1291,7 @@ impl Store {
                     error_code, error_message, retry_count, priority, queue_name, download_type,
                     created_at, completed_at,
                     media_kind, media_format, playlist_title, playlist_count, batch_id,
-                    quarantine_path, postprocess_exit, postprocess_message
+                    quarantine_path, postprocess_exit, postprocess_message, scheduled_at
              FROM downloads WHERE id = ?1",
         )?;
         let row = statement.query_row(params![id], row_to_record).optional()?;
@@ -1311,7 +1317,7 @@ impl Store {
                             error_code, error_message, retry_count, priority, queue_name, download_type,
                             created_at, completed_at,
                             media_kind, media_format, playlist_title, playlist_count, batch_id,
-                    quarantine_path, postprocess_exit, postprocess_message
+                    quarantine_path, postprocess_exit, postprocess_message, scheduled_at
                      FROM downloads WHERE status = ?3 ORDER BY created_at DESC, rowid DESC LIMIT ?1 OFFSET ?2",
                 )?;
                 let mapped =
@@ -1327,7 +1333,7 @@ impl Store {
                             error_code, error_message, retry_count, priority, queue_name, download_type,
                             created_at, completed_at,
                             media_kind, media_format, playlist_title, playlist_count, batch_id,
-                    quarantine_path, postprocess_exit, postprocess_message
+                    quarantine_path, postprocess_exit, postprocess_message, scheduled_at
                      FROM downloads ORDER BY created_at DESC, rowid DESC LIMIT ?1 OFFSET ?2",
                 )?;
                 let mapped = statement.query_map(params![limit, offset], row_to_record)?;
@@ -1352,7 +1358,7 @@ impl Store {
                     error_code, error_message, retry_count, priority, queue_name, download_type,
                     created_at, completed_at,
                     media_kind, media_format, playlist_title, playlist_count, batch_id,
-                    quarantine_path, postprocess_exit, postprocess_message
+                    quarantine_path, postprocess_exit, postprocess_message, scheduled_at
              FROM downloads WHERE queue_name = ?1 AND status = 'pending'
              ORDER BY priority DESC, created_at ASC, rowid ASC LIMIT ?2",
         )?;
@@ -1903,6 +1909,7 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<DownloadRecord> {
         quarantine_path: row.get(26)?,
         postprocess_exit: row.get::<_, Option<i64>>(27)?.map(|value| value as i32),
         postprocess_message: row.get(28)?,
+        scheduled_at: row.get(29)?,
     })
 }
 

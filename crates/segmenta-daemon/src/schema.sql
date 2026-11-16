@@ -38,7 +38,9 @@ CREATE TABLE IF NOT EXISTS downloads (
     -- Resultado de la fase de cierre (hook y antivirus) y ruta de cuarentena (v4).
     postprocess_exit INTEGER,
     postprocess_message TEXT,
-    quarantine_path TEXT
+    quarantine_path TEXT,
+    -- Programación diferida para una fecha/hora exacta en UTC RFC-3339 (v6).
+    scheduled_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS download_headers (
