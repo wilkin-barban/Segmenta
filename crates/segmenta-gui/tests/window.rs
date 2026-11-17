@@ -1210,23 +1210,25 @@ fn browsers_page_paints_the_three_states_and_wires_the_three_actions() {
 
         // A sandboxed browser offers no action that could only fail.
         let snap = view("chromium");
-        assert!(snap.prepare.is_none(), "a snap browser offers prepare");
-        assert!(snap.open.is_none(), "a snap browser offers open");
-        assert!(snap.copy_path.is_none(), "a snap browser offers copy");
+        assert!(
+            snap.primary_button.is_none(),
+            "a snap browser offers primary button"
+        );
+        assert!(
+            snap.menu_button.is_none(),
+            "a snap browser offers menu button"
+        );
 
-        // The usable browser offers the three actions of the contract.
+        // The usable browser offers the three actions of the contract:
+        // prepare is primary; open and copy_path are in the menu.
         let chrome = view("chrome");
         chrome
-            .prepare
+            .primary_button
             .as_ref()
-            .expect("no prepare button")
+            .expect("no prepare primary button")
             .emit_clicked();
-        chrome.open.as_ref().expect("no open button").emit_clicked();
-        chrome
-            .copy_path
-            .as_ref()
-            .expect("no copy button")
-            .emit_clicked();
+        chrome.activate_menu_action("open");
+        chrome.activate_menu_action("copy-path");
         assert_eq!(
             *log.borrow(),
             vec![
@@ -1236,8 +1238,10 @@ fn browsers_page_paints_the_three_states_and_wires_the_three_actions() {
             ]
         );
 
-        // Firefox has no prepared folder yet: nothing to copy.
-        assert!(view("firefox").copy_path.is_none());
+        // Firefox has no prepared folder yet: copy_path is not in menu.
+        assert!(!view("firefox")
+            .menu_labels()
+            .contains(&"Copiar ruta".to_string()));
 
         // The numbered how-to names the real pages of both families.
         assert!(
@@ -1374,7 +1378,7 @@ fn an_out_of_sync_extension_row_warns_and_offers_reload() {
             subtitle.contains("Atención"),
             "the out-of-sync row is not a warning: {subtitle}"
         );
-        let reload = row.open.as_ref().expect("no reload button");
+        let reload = row.primary_button.as_ref().expect("no reload button");
         assert_eq!(
             reload.label().map(|text| text.to_string()).as_deref(),
             Some("Recargar"),
@@ -1383,7 +1387,7 @@ fn an_out_of_sync_extension_row_warns_and_offers_reload() {
         reload.emit_clicked();
         assert_eq!(*log.borrow(), vec![("open", "chrome".to_string())]);
 
-        // A matching version stays a plain open action.
+        // A matching version stays a plain prepare action as primary button.
         let matched = prefs::browsers_page(
             segmenta_i18n::Locale::Es,
             &browser_status(),
@@ -1400,8 +1404,13 @@ fn an_out_of_sync_extension_row_warns_and_offers_reload() {
             .find(|view| view.data.id == "chrome")
             .expect("chrome has no row");
         assert_eq!(
-            chrome.open.as_ref().unwrap().label().map(|t| t.to_string()),
-            Some("Abrir".to_string())
+            chrome
+                .primary_button
+                .as_ref()
+                .unwrap()
+                .label()
+                .map(|t| t.to_string()),
+            Some("Preparar".to_string())
         );
     });
 }
@@ -1431,6 +1440,128 @@ fn add_dialog_produces_request_with_scheduled_at_when_switch_on_and_without_when
         assert_eq!(params_on["start_immediately"], false);
         let scheduled_at = params_on["scheduled_at"].as_str().unwrap();
         assert!(!scheduled_at.is_empty());
+    });
+}
+
+#[test]
+fn browser_row_has_at_most_one_plain_button_and_one_menu_button_suffix() {
+    run_gui("browser_row_suffixes_count", || {
+        let log: Rc<RefCell<Vec<(&'static str, String)>>> = Rc::new(RefCell::new(Vec::new()));
+        let page = browser_page(&log);
+        for view in &page.rows {
+            let mut plain_buttons = 0;
+            let mut menu_buttons = 0;
+            let mut child = view.row.first_child();
+            while let Some(c) = child {
+                count_button_types(&c, &mut plain_buttons, &mut menu_buttons);
+                child = c.next_sibling();
+            }
+            assert!(
+                plain_buttons <= 1,
+                "browser `{}` has {} plain action buttons (must be <= 1)",
+                view.data.id,
+                plain_buttons
+            );
+            assert!(
+                menu_buttons <= 1,
+                "browser `{}` has {} menu buttons (must be <= 1)",
+                view.data.id,
+                menu_buttons
+            );
+        }
+
+        // For a browser with the extension prepared (chrome in browser_page):
+        let chrome = page
+            .rows
+            .iter()
+            .find(|v| v.data.id == "chrome")
+            .expect("chrome row");
+        assert_eq!(chrome.menu_labels(), vec!["Abrir", "Copiar ruta"]);
+    });
+}
+
+fn count_button_types(widget: &gtk::Widget, plain_buttons: &mut usize, menu_buttons: &mut usize) {
+    if widget.is::<gtk::MenuButton>() {
+        *menu_buttons += 1;
+        return;
+    } else if widget.is::<gtk::Button>() {
+        *plain_buttons += 1;
+    }
+    let mut child = widget.first_child();
+    while let Some(c) = child {
+        count_button_types(&c, plain_buttons, menu_buttons);
+        child = c.next_sibling();
+    }
+}
+
+#[test]
+fn add_dialog_schedule_progressive_picker_and_future_moment_guarantee() {
+    run_gui("add_dialog_schedule_progressive", || {
+        let defaults = segmenta_gui::add_dialog::AddDefaults {
+            destination_dir: "/home/user/Downloads".to_string(),
+            connections: 8,
+            clip_monitor_enabled: false,
+        };
+        let form = segmenta_gui::add_dialog::build_form(&defaults);
+        form.url.set_text("https://example.com/test.bin");
+
+        // 1. Schedule off -> start_immediately: true, no scheduled_at key
+        assert!(!form.schedule.is_active());
+        let params_off = segmenta_gui::add_dialog::build_add_params(&form);
+        assert_eq!(params_off["start_immediately"], true);
+        assert!(params_off.get("scheduled_at").is_none());
+
+        // 2. Schedule on: quick option "En 1 hora" -> scheduled_at between now+55min and now+65min
+        form.schedule.set_active(true);
+        assert!(form.schedule.is_active());
+        assert_eq!(form.schedule_when.selected(), 1);
+        let params_1h = segmenta_gui::add_dialog::build_add_params(&form);
+        assert_eq!(params_1h["start_immediately"], false);
+        let scheduled_at_str = params_1h["scheduled_at"].as_str().expect("scheduled_at");
+        let scheduled_dt = glib::DateTime::from_iso8601(scheduled_at_str, None).expect("iso8601");
+        let now_utc = glib::DateTime::now_utc().expect("now_utc");
+        let diff_secs = scheduled_dt.to_unix() - now_utc.to_unix();
+        assert!(
+            (55 * 60..=65 * 60).contains(&diff_secs),
+            "scheduled_at diff {diff_secs}s is not between 55min and 65min"
+        );
+
+        // 3. Selecting "Fecha y hora exacta…" reveals the calendar and hides it again
+        form.schedule_when.set_selected(5);
+        assert!(form.calendar.is_visible());
+        assert!(form.schedule_hour.is_visible());
+        assert!(form.schedule_minute.is_visible());
+
+        form.schedule_when.set_selected(1);
+        assert!(!form.calendar.is_visible());
+        assert!(!form.schedule_hour.is_visible());
+        assert!(!form.schedule_minute.is_visible());
+
+        // 4. Summary row text changes with selection
+        form.schedule_when.set_selected(0);
+        let text_0 = form.schedule_summary.title().to_string();
+        form.schedule_when.set_selected(1);
+        let text_1 = form.schedule_summary.title().to_string();
+        assert_ne!(
+            text_0, text_1,
+            "summary row did not change between 30min and 1h"
+        );
+
+        // 5. Exact mode with a past date picked in calendar -> built params still carry a future moment
+        form.schedule_when.set_selected(5);
+        let past_dt = glib::DateTime::from_local(2020, 1, 1, 10, 0, 0.0).expect("past_dt");
+        form.calendar.select_day(&past_dt);
+        form.schedule_hour.set_value(0.0);
+        form.schedule_minute.set_value(0.0);
+        let params_past = segmenta_gui::add_dialog::build_add_params(&form);
+        let scheduled_past_str = params_past["scheduled_at"].as_str().expect("scheduled_at");
+        let past_resolved =
+            glib::DateTime::from_iso8601(scheduled_past_str, None).expect("iso8601");
+        let now = glib::DateTime::now_utc().expect("now_utc");
+        assert!(
+            past_resolved.to_unix() > now.to_unix(),
+            "built params must carry a future moment even with past date selected"
+        );
     });
 }
 

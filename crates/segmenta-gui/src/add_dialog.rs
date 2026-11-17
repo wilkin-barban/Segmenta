@@ -44,11 +44,13 @@ pub struct Form {
     pub filename: adw::EntryRow,
     pub destination: adw::ActionRow,
     pub connections: adw::SpinRow,
-    pub start_now: adw::SwitchRow,
     pub schedule: adw::SwitchRow,
+    pub schedule_when: adw::ComboRow,
+    pub schedule_summary: adw::ActionRow,
     pub calendar: gtk::Calendar,
     pub schedule_hour: adw::SpinRow,
     pub schedule_minute: adw::SpinRow,
+    pub schedule_hint: gtk::Label,
     pub error: gtk::Label,
     pub add_button: gtk::Button,
 }
@@ -95,44 +97,158 @@ pub fn build_form(defaults: &AddDefaults) -> Form {
     connections.set_subtitle(tr(locale(), Msg::ConnectionsHint));
     connections.set_value(f64::from(defaults.connections.clamp(1, 32)));
 
-    let start_now = adw::SwitchRow::builder()
-        .title(tr(locale(), Msg::StartNow))
-        .subtitle(tr(locale(), Msg::StartNowHint))
-        .active(true)
-        .build();
-
     let schedule = adw::SwitchRow::builder()
         .title(tr(locale(), Msg::Schedule))
         .subtitle(tr(locale(), Msg::ScheduleHint))
         .active(false)
         .build();
 
+    let items = [
+        tr(locale(), Msg::ScheduleIn30Min),
+        tr(locale(), Msg::ScheduleIn1Hour),
+        tr(locale(), Msg::ScheduleIn2Hours),
+        tr(locale(), Msg::ScheduleTonight),
+        tr(locale(), Msg::ScheduleTomorrow),
+        tr(locale(), Msg::ScheduleExactDateTime),
+    ];
+    let string_list = gtk::StringList::new(&items);
+    let schedule_when = adw::ComboRow::builder()
+        .title(tr(locale(), Msg::ScheduleWhen))
+        .model(&string_list)
+        .selected(1)
+        .visible(false)
+        .build();
+
+    let schedule_summary = adw::ActionRow::builder().visible(false).build();
+
     let calendar = gtk::Calendar::new();
     calendar.set_visible(false);
 
-    let now = gtk::glib::DateTime::now_local().ok();
-    let current_hour = now.as_ref().map(|d| d.hour()).unwrap_or(12);
-    let current_min = now.as_ref().map(|d| d.minute()).unwrap_or(0);
+    let now = gtk::glib::DateTime::now_local().unwrap_or_else(|_| {
+        gtk::glib::DateTime::from_unix_local(0).expect("fallback local DateTime")
+    });
+    let default_exact = round_up_5_minutes(&now.add_hours(1).unwrap_or_else(|_| now.clone()));
+
+    calendar.select_day(&default_exact);
 
     let schedule_hour = adw::SpinRow::with_range(0.0, 23.0, 1.0);
     schedule_hour.set_title(tr(locale(), Msg::Hour));
-    schedule_hour.set_value(f64::from(current_hour));
+    schedule_hour.set_value(f64::from(default_exact.hour()));
     schedule_hour.set_visible(false);
 
     let schedule_minute = adw::SpinRow::with_range(0.0, 59.0, 1.0);
     schedule_minute.set_title(tr(locale(), Msg::Minute));
-    schedule_minute.set_value(f64::from(current_min));
+    schedule_minute.set_value(f64::from(default_exact.minute()));
     schedule_minute.set_visible(false);
 
-    let cal_handle = calendar.clone();
-    let hour_handle = schedule_hour.clone();
-    let min_handle = schedule_minute.clone();
-    schedule.connect_active_notify(move |switch| {
-        let active = switch.is_active();
-        cal_handle.set_visible(active);
-        hour_handle.set_visible(active);
-        min_handle.set_visible(active);
-    });
+    let schedule_hint = gtk::Label::builder()
+        .label(tr(locale(), Msg::ScheduleOnlyFutureAllowed))
+        .xalign(0.0)
+        .wrap(true)
+        .css_classes(["dim-label"])
+        .visible(false)
+        .build();
+
+    let updating = Rc::new(std::cell::Cell::new(false));
+
+    let f_sched = schedule.clone();
+    let f_when = schedule_when.clone();
+    let f_sum = schedule_summary.clone();
+    let f_cal = calendar.clone();
+    let f_hour = schedule_hour.clone();
+    let f_min = schedule_minute.clone();
+    let f_hint = schedule_hint.clone();
+    let upd = Rc::clone(&updating);
+
+    let sync = move || {
+        if upd.get() {
+            return;
+        }
+        upd.set(true);
+
+        let active = f_sched.is_active();
+        f_when.set_visible(active);
+        f_sum.set_visible(active);
+
+        if !active {
+            f_cal.set_visible(false);
+            f_hour.set_visible(false);
+            f_min.set_visible(false);
+            f_hint.set_visible(false);
+            upd.set(false);
+            return;
+        }
+
+        let is_exact = f_when.selected() == 5;
+        f_cal.set_visible(is_exact);
+        f_hour.set_visible(is_exact);
+        f_min.set_visible(is_exact);
+
+        let now = gtk::glib::DateTime::now_local().unwrap_or_else(|_| {
+            gtk::glib::DateTime::from_unix_local(0).expect("fallback local DateTime")
+        });
+        let mut show_hint = false;
+
+        if is_exact {
+            let cal_date = f_cal.date();
+            let cal_ymd = (cal_date.year(), cal_date.month(), cal_date.day_of_month());
+            let today_ymd = (now.year(), now.month(), now.day_of_month());
+
+            if cal_ymd < today_ymd {
+                f_cal.select_day(&now);
+                show_hint = true;
+            }
+
+            let updated_cal = f_cal.date();
+            let updated_ymd = (
+                updated_cal.year(),
+                updated_cal.month(),
+                updated_cal.day_of_month(),
+            );
+
+            if updated_ymd == today_ymd {
+                let h = f_hour.value() as i32;
+                let m = f_min.value() as i32;
+                let now_h = now.hour();
+                let now_m = now.minute();
+                if h < now_h || (h == now_h && m <= now_m) {
+                    let earliest =
+                        round_up_5_minutes(&now.add_minutes(5).unwrap_or_else(|_| now.clone()));
+                    f_hour.set_value(f64::from(earliest.hour()));
+                    f_min.set_value(f64::from(earliest.minute()));
+                    show_hint = true;
+                }
+            }
+        }
+
+        f_hint.set_visible(is_exact && show_hint);
+
+        let dt = resolve_moment(f_when.selected(), &f_cal, &f_hour, &f_min);
+        let summary = format_summary_line(locale(), &dt);
+        f_sum.set_title(&summary);
+
+        upd.set(false);
+    };
+
+    let sync_rc = Rc::new(sync);
+
+    let s = Rc::clone(&sync_rc);
+    schedule.connect_active_notify(move |_| s());
+
+    let s = Rc::clone(&sync_rc);
+    schedule_when.connect_selected_notify(move |_| s());
+
+    let s = Rc::clone(&sync_rc);
+    calendar.connect_day_selected(move |_| s());
+
+    let s = Rc::clone(&sync_rc);
+    schedule_hour.connect_value_notify(move |_| s());
+
+    let s = Rc::clone(&sync_rc);
+    schedule_minute.connect_value_notify(move |_| s());
+
+    // Initial sync of the summary text
+    sync_rc();
 
     let error = gtk::Label::new(None);
     error.add_css_class("error");
@@ -144,11 +260,13 @@ pub fn build_form(defaults: &AddDefaults) -> Form {
     group.add(&filename);
     group.add(&destination);
     group.add(&connections);
-    group.add(&start_now);
     group.add(&schedule);
+    group.add(&schedule_when);
+    group.add(&schedule_summary);
     group.add(&calendar);
     group.add(&schedule_hour);
     group.add(&schedule_minute);
+    group.add(&schedule_hint);
     group.add(&error);
 
     let page = adw::PreferencesPage::new();
@@ -170,14 +288,112 @@ pub fn build_form(defaults: &AddDefaults) -> Form {
         filename,
         destination,
         connections,
-        start_now,
         schedule,
+        schedule_when,
+        schedule_summary,
         calendar,
         schedule_hour,
         schedule_minute,
+        schedule_hint,
         error,
         add_button,
     }
+}
+
+fn round_up_5_minutes(dt: &gtk::glib::DateTime) -> gtk::glib::DateTime {
+    let unix = dt.to_unix();
+    let rem = unix.rem_euclid(300);
+    let rounded_unix = if rem == 0 { unix } else { unix + (300 - rem) };
+    gtk::glib::DateTime::from_unix_local(rounded_unix).unwrap_or_else(|_| dt.clone())
+}
+
+fn day_name(locale: segmenta_i18n::Locale, day_of_week: i32) -> &'static str {
+    let idx = (day_of_week.clamp(1, 7) - 1) as usize;
+    match locale {
+        segmenta_i18n::Locale::Es => ["lun", "mar", "mié", "jue", "vie", "sáb", "dom"][idx],
+        segmenta_i18n::Locale::PtBr => ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"][idx],
+        segmenta_i18n::Locale::En => ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][idx],
+    }
+}
+
+fn format_summary_line(locale: segmenta_i18n::Locale, dt: &gtk::glib::DateTime) -> String {
+    let day = day_name(locale, dt.day_of_week());
+    let date = format!("{:02}/{:02}", dt.day_of_month(), dt.month());
+    let time = format!("{:02}:{:02}", dt.hour(), dt.minute());
+    tr(locale, Msg::ScheduleSummary)
+        .replace("{day}", day)
+        .replace("{date}", &date)
+        .replace("{time}", &time)
+}
+
+fn resolve_moment(
+    selected_option: u32,
+    calendar: &gtk::Calendar,
+    hour_spin: &adw::SpinRow,
+    minute_spin: &adw::SpinRow,
+) -> gtk::glib::DateTime {
+    let now = gtk::glib::DateTime::now_local().unwrap_or_else(|_| {
+        gtk::glib::DateTime::from_unix_local(0).expect("fallback local DateTime")
+    });
+    match selected_option {
+        0 => now.add_minutes(30).unwrap_or(now),
+        1 => now.add_hours(1).unwrap_or(now),
+        2 => now.add_hours(2).unwrap_or(now),
+        3 => {
+            let base = if now.hour() < 22 {
+                now.clone()
+            } else {
+                now.add_days(1).unwrap_or_else(|_| now.clone())
+            };
+            gtk::glib::DateTime::from_local(
+                base.year(),
+                base.month(),
+                base.day_of_month(),
+                22,
+                0,
+                0.0,
+            )
+            .unwrap_or(now)
+        }
+        4 => {
+            let tomorrow = now.add_days(1).unwrap_or_else(|_| now.clone());
+            gtk::glib::DateTime::from_local(
+                tomorrow.year(),
+                tomorrow.month(),
+                tomorrow.day_of_month(),
+                8,
+                0,
+                0.0,
+            )
+            .unwrap_or(now)
+        }
+        _ => {
+            let cal_date = calendar.date();
+            let year = cal_date.year();
+            let month = cal_date.month();
+            let day = cal_date.day_of_month();
+            let hour = hour_spin.value() as i32;
+            let minute = minute_spin.value() as i32;
+
+            let picked = gtk::glib::DateTime::from_local(year, month, day, hour, minute, 0.0)
+                .unwrap_or_else(|_| now.clone());
+
+            if picked.to_unix() <= now.to_unix() {
+                round_up_5_minutes(&now.add_minutes(5).unwrap_or_else(|_| now.clone()))
+            } else {
+                picked
+            }
+        }
+    }
+}
+
+pub fn resolve_scheduled_moment(form: &Form) -> gtk::glib::DateTime {
+    resolve_moment(
+        form.schedule_when.selected(),
+        &form.calendar,
+        &form.schedule_hour,
+        &form.schedule_minute,
+    )
 }
 
 /// Builds the `download.add` request parameters from the form state.
@@ -191,10 +407,11 @@ pub fn build_add_params(form: &Form) -> Value {
         filename
     };
 
+    let start_immediately = !form.schedule.is_active();
     let mut params = json!({
         "url": url,
         "connections": form.connections.value() as u32,
-        "start_immediately": form.start_now.is_active() && !form.schedule.is_active(),
+        "start_immediately": start_immediately,
         "queue_name": "main",
         "priority": 0,
         "filename": filename,
@@ -204,23 +421,30 @@ pub fn build_add_params(form: &Form) -> Value {
     }
 
     if form.schedule.is_active() {
-        let date = form.calendar.date();
-        let year = date.year();
-        let month = date.month();
-        let day = date.day_of_month();
-        let hour = form.schedule_hour.value() as i32;
-        let minute = form.schedule_minute.value() as i32;
-
-        let scheduled_str =
-            if let Ok(dt) = gtk::glib::DateTime::from_local(year, month, day, hour, minute, 0.0) {
-                if let Ok(iso) = dt.format_iso8601() {
-                    iso.to_string()
-                } else {
-                    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:00Z")
-                }
+        let dt = resolve_scheduled_moment(form);
+        let scheduled_str = if let Ok(utc) = dt.to_utc() {
+            if let Ok(iso) = utc.format("%Y-%m-%dT%H:%M:%SZ") {
+                iso.to_string()
             } else {
-                format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:00Z")
-            };
+                format!(
+                    "{:04}-{:02}-{:02}T{:02}:{:02}:00Z",
+                    dt.year(),
+                    dt.month(),
+                    dt.day_of_month(),
+                    dt.hour(),
+                    dt.minute()
+                )
+            }
+        } else {
+            format!(
+                "{:04}-{:02}-{:02}T{:02}:{:02}:00Z",
+                dt.year(),
+                dt.month(),
+                dt.day_of_month(),
+                dt.hour(),
+                dt.minute()
+            )
+        };
         params["scheduled_at"] = Value::String(scheduled_str);
     }
     params

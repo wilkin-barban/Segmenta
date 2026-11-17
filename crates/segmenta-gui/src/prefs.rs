@@ -700,6 +700,8 @@ pub struct BrowserRow {
     pub status: String,
     /// Which of the three contract actions make sense for this row.
     pub actions: BrowserActions,
+    /// Ordered list of actions that apply to this row.
+    pub action_list: Vec<BrowserActionKind>,
     /// Folder `extension.prepare` left ready, when it exists.
     pub prepared_path: Option<String>,
     /// Version declared by the prepared manifest, when one is prepared.
@@ -708,6 +710,65 @@ pub struct BrowserRow {
     pub shipped_version: Option<String>,
     /// Whether the prepared copy is the shipped one (0.2.2).
     pub version_sync: VersionSync,
+}
+
+impl BrowserRow {
+    /// The single primary action to present in the row, if any.
+    pub fn primary_action(&self) -> Option<BrowserActionKind> {
+        self.action_list.first().copied()
+    }
+
+    /// The secondary actions that belong in the row's menu.
+    pub fn menu_actions(&self) -> &[BrowserActionKind] {
+        if self.action_list.is_empty() {
+            &[]
+        } else {
+            &self.action_list[1..]
+        }
+    }
+
+    /// Full list of actions that apply.
+    pub fn actions_list(&self) -> &[BrowserActionKind] {
+        &self.action_list
+    }
+}
+
+/// The kinds of actions that can be performed on a browser extension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrowserActionKind {
+    Prepare,
+    Open,
+    Reload,
+    CopyPath,
+}
+
+impl BrowserActionKind {
+    pub fn label(self, locale: Locale) -> &'static str {
+        match self {
+            BrowserActionKind::Prepare => tr(locale, Msg::ExtensionPrepareShort),
+            BrowserActionKind::Open => tr(locale, Msg::ExtensionOpenShort),
+            BrowserActionKind::Reload => tr(locale, Msg::ExtensionReloadShort),
+            BrowserActionKind::CopyPath => tr(locale, Msg::ExtensionCopyPath),
+        }
+    }
+
+    pub fn tooltip(self, locale: Locale) -> Option<&'static str> {
+        match self {
+            BrowserActionKind::Prepare => Some(tr(locale, Msg::ExtensionPrepare)),
+            BrowserActionKind::Open => Some(tr(locale, Msg::ExtensionOpen)),
+            BrowserActionKind::Reload => Some(tr(locale, Msg::ExtensionReload)),
+            BrowserActionKind::CopyPath => None,
+        }
+    }
+
+    pub fn action_name(self) -> &'static str {
+        match self {
+            BrowserActionKind::Prepare => "prepare",
+            BrowserActionKind::Open => "open",
+            BrowserActionKind::Reload => "reload",
+            BrowserActionKind::CopyPath => "copy-path",
+        }
+    }
 }
 
 /// The `state` of one browser, as `extension.status` defines it.
@@ -848,6 +909,21 @@ pub fn browser_rows(locale: Locale, status: &Value) -> Vec<BrowserRow> {
                         .replace("{shipped}", shipped_version.as_deref().unwrap_or("?")),
                 );
             }
+            let action_list = if !usable {
+                Vec::new()
+            } else if version_sync.is_warning() {
+                let mut list = vec![BrowserActionKind::Reload, BrowserActionKind::Prepare];
+                if prepared_path.is_some() {
+                    list.push(BrowserActionKind::CopyPath);
+                }
+                list
+            } else {
+                let mut list = vec![BrowserActionKind::Prepare, BrowserActionKind::Open];
+                if prepared_path.is_some() {
+                    list.push(BrowserActionKind::CopyPath);
+                }
+                list
+            };
             Some(BrowserRow {
                 id: browser
                     .get("id")
@@ -875,6 +951,7 @@ pub fn browser_rows(locale: Locale, status: &Value) -> Vec<BrowserRow> {
                     open: usable,
                     copy_path: usable && prepared_path.is_some(),
                 },
+                action_list,
                 prepared_path,
                 prepared_version,
                 shipped_version,
@@ -929,12 +1006,38 @@ pub struct BrowserRowView {
     pub data: BrowserRow,
     /// The row itself, so a repaint can remove it from the group.
     pub row: adw::ActionRow,
-    /// `Preparar extensión`, when the state allows it.
-    pub prepare: Option<gtk::Button>,
-    /// `Abrir página de extensiones`, when the state allows it.
-    pub open: Option<gtk::Button>,
-    /// `Copiar ruta`, only when a prepared folder exists.
-    pub copy_path: Option<gtk::Button>,
+    /// The primary action button, when the state allows an action.
+    pub primary_button: Option<gtk::Button>,
+    /// Suffix menu button containing secondary actions.
+    pub menu_button: Option<gtk::MenuButton>,
+    /// Menu model backing the menu button.
+    pub menu_model: Option<gtk::gio::Menu>,
+    /// Action group handling menu activations.
+    pub action_group: Option<gtk::gio::SimpleActionGroup>,
+}
+
+impl BrowserRowView {
+    /// Labels exposed by items in the menu, in presentation order.
+    pub fn menu_labels(&self) -> Vec<String> {
+        let mut labels = Vec::new();
+        if let Some(menu) = &self.menu_model {
+            for i in 0..menu.n_items() {
+                if let Some(val) = menu.item_attribute_value(i, "label", None) {
+                    if let Some(s) = val.str() {
+                        labels.push(s.to_string());
+                    }
+                }
+            }
+        }
+        labels
+    }
+
+    /// Triggers a menu action directly by name (e.g. "open", "copy-path", "prepare").
+    pub fn activate_menu_action(&self, name: &str) {
+        if let Some(group) = &self.action_group {
+            group.activate_action(name, None);
+        }
+    }
 }
 
 /// The whole Navegadores page.
@@ -976,8 +1079,7 @@ pub fn fill_browser_rows(
             .title(&data.name)
             .subtitle(&data.status)
             .build();
-        // Two or three suffixes on a squeezed row wrap the title one character per line;
-        // a minimum keeps the browser name readable.
+        // Suffix buttons leave room for the title and subtitle.
         row.set_size_request(320, -1);
         row.set_title_lines(1);
         row.set_subtitle_lines(0);
@@ -990,55 +1092,95 @@ pub fn fill_browser_rows(
             );
         }
 
-        let mut prepare = None;
-        if data.actions.prepare {
-            let button = gtk::Button::with_label(tr(locale, Msg::ExtensionPrepareShort));
-            button.set_tooltip_text(Some(tr(locale, Msg::ExtensionPrepare)));
-            let handler = Rc::clone(&handlers.prepare);
-            let family = data.family.clone();
-            button.connect_clicked(move |_| handler(&family));
-            row.add_suffix(&button);
-            prepare = Some(button);
+        if data.version_sync.is_warning() {
+            row.add_css_class("warning");
         }
 
-        let mut open = None;
-        if data.actions.open {
-            // An out-of-sync copy is reloaded from the browser's own page: that is
-            // the only reload a page cannot trigger for the user (0.2.2).
-            let (label, tooltip) = if data.version_sync.is_warning() {
-                (Msg::ExtensionReloadShort, Msg::ExtensionReload)
-            } else {
-                (Msg::ExtensionOpenShort, Msg::ExtensionOpen)
-            };
-            let button = gtk::Button::with_label(tr(locale, label));
-            button.set_tooltip_text(Some(tr(locale, tooltip)));
-            if data.version_sync.is_warning() {
-                button.add_css_class("suggested-action");
-                row.add_css_class("warning");
+        let primary_button = if let Some(primary) = data.primary_action() {
+            let button = gtk::Button::with_label(primary.label(locale));
+            if let Some(tooltip) = primary.tooltip(locale) {
+                button.set_tooltip_text(Some(tooltip));
             }
-            let handler = Rc::clone(&handlers.open);
-            let browser_id = data.id.clone();
-            button.connect_clicked(move |_| handler(&browser_id));
+            if primary == BrowserActionKind::Reload {
+                button.add_css_class("suggested-action");
+            }
+            match primary {
+                BrowserActionKind::Prepare => {
+                    let handler = Rc::clone(&handlers.prepare);
+                    let family = data.family.clone();
+                    button.connect_clicked(move |_| handler(&family));
+                }
+                BrowserActionKind::Open | BrowserActionKind::Reload => {
+                    let handler = Rc::clone(&handlers.open);
+                    let browser_id = data.id.clone();
+                    button.connect_clicked(move |_| handler(&browser_id));
+                }
+                BrowserActionKind::CopyPath => {
+                    if let Some(path) = data.prepared_path.clone() {
+                        let handler = Rc::clone(&handlers.copy_path);
+                        button.connect_clicked(move |_| handler(&path));
+                    }
+                }
+            }
             row.add_suffix(&button);
-            open = Some(button);
-        }
+            Some(button)
+        } else {
+            None
+        };
 
-        let mut copy_path = None;
-        if let (true, Some(path)) = (data.actions.copy_path, data.prepared_path.clone()) {
-            let button = gtk::Button::with_label(tr(locale, Msg::ExtensionCopyPath));
-            let handler = Rc::clone(&handlers.copy_path);
-            button.connect_clicked(move |_| handler(&path));
-            row.add_suffix(&button);
-            copy_path = Some(button);
-        }
+        let menu_actions = data.menu_actions();
+        let (menu_button, menu_model, action_group) = if !menu_actions.is_empty() {
+            let menu = gtk::gio::Menu::new();
+            let action_group = gtk::gio::SimpleActionGroup::new();
+
+            for &action_kind in menu_actions {
+                let action_name = action_kind.action_name();
+                menu.append(
+                    Some(action_kind.label(locale)),
+                    Some(&format!("row.{action_name}")),
+                );
+                let action = gtk::gio::SimpleAction::new(action_name, None);
+                match action_kind {
+                    BrowserActionKind::Prepare => {
+                        let handler = Rc::clone(&handlers.prepare);
+                        let family = data.family.clone();
+                        action.connect_activate(move |_, _| handler(&family));
+                    }
+                    BrowserActionKind::Open | BrowserActionKind::Reload => {
+                        let handler = Rc::clone(&handlers.open);
+                        let browser_id = data.id.clone();
+                        action.connect_activate(move |_, _| handler(&browser_id));
+                    }
+                    BrowserActionKind::CopyPath => {
+                        if let Some(path) = data.prepared_path.clone() {
+                            let handler = Rc::clone(&handlers.copy_path);
+                            action.connect_activate(move |_, _| handler(&path));
+                        }
+                    }
+                }
+                action_group.add_action(&action);
+            }
+
+            let mb = gtk::MenuButton::new();
+            mb.set_icon_name("view-more-symbolic");
+            mb.set_tooltip_text(Some(tr(locale, Msg::BrowserMoreActions)));
+            mb.insert_action_group("row", Some(&action_group));
+            row.insert_action_group("row", Some(&action_group));
+            mb.set_menu_model(Some(&menu));
+            row.add_suffix(&mb);
+            (Some(mb), Some(menu), Some(action_group))
+        } else {
+            (None, None, None)
+        };
 
         group.add(&row);
         views.push(BrowserRowView {
             data,
             row,
-            prepare,
-            open,
-            copy_path,
+            primary_button,
+            menu_button,
+            menu_model,
+            action_group,
         });
     }
     views

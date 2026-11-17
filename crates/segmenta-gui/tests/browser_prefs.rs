@@ -7,7 +7,7 @@
 
 use serde_json::{json, Value};
 
-use segmenta_gui::prefs::{browser_rows, load_steps, BrowserState, VersionSync};
+use segmenta_gui::prefs::{browser_rows, load_steps, BrowserActionKind, BrowserState, VersionSync};
 use segmenta_i18n::Locale;
 
 const PREPARED: &str = "/home/user/.local/share/segmenta/extensions/chromium-0.2.0";
@@ -356,4 +356,43 @@ fn a_daemon_without_the_comparison_is_never_a_false_warning() {
         assert_eq!(row.version_sync, VersionSync::Unknown, "{}", row.id);
         assert!(!row.version_sync.is_warning(), "{}", row.id);
     }
+}
+
+#[test]
+fn pure_action_list_for_prepared_browser_in_sync_and_out_of_sync() {
+    let matched = row(Locale::Es, "chrome");
+    assert_eq!(
+        matched.action_list,
+        vec![
+            BrowserActionKind::Prepare,
+            BrowserActionKind::Open,
+            BrowserActionKind::CopyPath,
+        ]
+    );
+    assert_eq!(matched.primary_action(), Some(BrowserActionKind::Prepare));
+    assert_eq!(
+        matched.menu_actions(),
+        &[BrowserActionKind::Open, BrowserActionKind::CopyPath]
+    );
+
+    let mut payload = status();
+    payload["browsers"][1]["prepared_version"] = json!("0.2.1");
+    payload["browsers"][1]["shipped_version"] = json!("0.2.2");
+    payload["browsers"][1]["version_sync"] = json!("mismatch");
+    let rows = browser_rows(Locale::Es, &payload);
+    let stale = rows.into_iter().find(|r| r.id == "chrome").unwrap();
+
+    assert_eq!(stale.primary_action(), Some(BrowserActionKind::Reload));
+    assert_eq!(
+        stale.menu_actions(),
+        &[BrowserActionKind::Prepare, BrowserActionKind::CopyPath]
+    );
+    assert_eq!(
+        stale.action_list,
+        vec![
+            BrowserActionKind::Reload,
+            BrowserActionKind::Prepare,
+            BrowserActionKind::CopyPath,
+        ]
+    );
 }
