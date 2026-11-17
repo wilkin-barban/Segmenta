@@ -99,3 +99,28 @@ Verificado por D-Bus sobre el `StatusNotifierWatcher` real de la sesión GNOME d
   extensión `f4d7fb68796202a7cb53bc0a7c76dc250b87164d33cca6b06364041f4fddb8dd`, firefox
   `2cc55306233b9b5c3c1fc5d82374f528f9be27acce02c0d5d7984d9f502e83eb`; `check-package` 23/23.
 - Publicada con tag `v0.3.0` y GitHub Release con los cinco assets.
+
+### Segunda pasada de remediación (2026-11-16, `bb86b28`)
+
+Reportado por el usuario tras probar el `.deb` anterior:
+
+- **R3 — Detección de la extensión**: sólo miraba `<perfil>/Extensions/<id>/`, que Chromium crea para
+  instalaciones empaquetadas; el flujo documentado carga la extensión **desempaquetada** (una entrada en
+  `Preferences` con `location: 4`). Ahora `extension_evidence()` lee `Preferences` y `Secure
+  Preferences`, devuelve `origin` y `loaded_version`, y `extension_version_report_with()` usa la versión
+  cargada como referencia del `version_sync`. Firefox por `extensions.json`. Verificado en el host:
+  `chrome → extension-installed, origen=unpacked, cargada=0.3.0, sync=match`.
+- **R4 — Programar sin pasado**: el calendario permitía elegir un día anterior y la corrección ocurría
+  sólo en el payload, así que la UI mostraba el día inválido. Se eliminó el calendario: ahora es un
+  `adw::SpinRow` **En días** (0–60) más hora y minutos; con 0 días y una hora pasada, los propios
+  widgets se corrigen. Test `the_schedule_picker_cannot_express_the_past`.
+- **R5 — Página de Navegadores**: subtítulo ≤8 palabras por navegador, un botón = próximo paso, el
+  instructivo en un `adw::ExpanderRow` de 3 líneas; fuera los dos párrafos de avisos y el grupo de
+  alternativa local (queda una línea con la ruta).
+- **Gate**: `cargo test --workspace` **446 ×2**, `postprocess` 14 ×3, GUI **117**, Node 176, fmt/clippy
+  limpios. `.deb` `0.3.0-1` sha256 `63bf7d16350b93192838207a1c5238764bf786b4440b7e4b855c54f8f765480c`,
+  instalado con `--reinstall` en el host.
+- **ETXTBSY en hooks**: `a_non_zero_exit_is_recorded_without_failing_the_task` falló una vez con
+  `Spawn { Text file busy }`; el `rename` del helper no alcanzaba (mismo inode, descriptor heredado por
+  un `fork` concurrente). Se agregó `FAKE_EXEC` (mutex por binario) y `run_retrying_spawn`, que reintenta
+  sólo ante `Text file busy`.

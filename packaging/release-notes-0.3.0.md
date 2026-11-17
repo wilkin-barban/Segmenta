@@ -93,6 +93,24 @@ cerrar la ventana finaliza la aplicación de forma inmediata, manteniendo el com
 dejar procesos huérfanos. Los comandos enviados desde el hilo de la bandeja cruzan al hilo principal
 de GTK mediante un canal seguro que se vacía cada 250 ms.
 
+### La extensión cargada ahora se reconoce
+
+Segmenta daba por hecho que una extensión instalada deja `<perfil>/Extensions/<id>/`, un directorio
+que Chromium crea solo para las instalaciones empaquetadas o de tienda. El flujo documentado carga la
+extensión **desempaquetada**, así que la aplicación decía «no instalada» con la extensión cargada y
+funcionando.
+
+Ahora el daemon lee el registro del propio perfil —`Preferences` y, si hace falta,
+`Secure Preferences`— y trata la entrada `extensions.settings.<id>` como instalada cuando existe y no
+está deshabilitada. Además reporta cómo está cargada (`unpacked`, `store` o `profile`) y la **versión
+que el navegador está ejecutando**, que pasa a ser la referencia de la comparación de versiones: es lo
+que el usuario tiene abierto, no lo que se descomprimió. Firefox se detecta por su `extensions.json`;
+un complemento temporal de `about:debugging` no se persiste y el texto ya no afirma lo contrario.
+
+La página de Navegadores quedó, además, más corta: una frase de menos de ocho palabras por navegador
+(«Cargada (0.3.0)», «Falta cargar la extensión»), un único botón que es el próximo paso, y el
+instructivo en un solo desplegable de tres líneas.
+
 ### Bandeja probada en vivo: tres defectos corregidos
 
 Probar el icono en un escritorio GNOME real destapó problemas que ninguna prueba sintética mostraba:
@@ -123,17 +141,21 @@ pausar (`downloading` → `paused`), retomar (`paused` → `downloading`) y canc
 - **El diálogo de descarga** tenía dos interruptores que se contradecían: *Comenzar ahora* y
   *Programar*. Se eliminó el primero, porque sin programación la descarga ya empieza de inmediato.
   *Programar* despliega un único selector *Cuándo* con opciones rápidas —30 minutos, 1 hora,
-  2 horas, esta noche, mañana a las 08:00— y solo *Fecha y hora exacta…* abre el calendario y la
-  hora. Una fila de resumen dice cuándo se va a descargar, y una fecha u hora pasada se corrige al
+  2 horas, esta noche, mañana a las 08:00— y solo *Fecha y hora exacta…* abre el selector **En días**
+  con la hora y los minutos: el pasado no es expresable y el resumen dice el instante resultante. Una fila de resumen dice cuándo se va a descargar, y una fecha u hora pasada se corrige al
   instante válido más cercano en lugar de enviarse al daemon.
 
 ### Estabilidad en el suite de pruebas
 
-Se corrigieron dos condiciones de carrera preexistentes en los tests:
+Se corrigieron tres condiciones de carrera preexistentes en los tests, todas por escribir un
+ejecutable falso y ejecutarlo mientras otro test del mismo binario hace `fork` (ETXTBSY):
 - `keyring_is_detected_without_the_version_flag`: absorbía un race transitorio `exec`/`ETXTBSY` sobre
   el binario de prueba de `secret-tool`; ahora reintenta la sonda.
 - `system_open_launches_the_gui_with_the_task_as_an_argument`: serializa el acceso a la variable de
-  entorno global `SEGMENTA_GUI` mediante un mutex para garantizar aislamiento entre pruebas concurrentes.
+  entorno global `SEGMENTA_GUI` mediante un mutex, y espera al hijo desprendido con margen.
+- `a_non_zero_exit_is_recorded_without_failing_the_task` (hooks): comparte el mutex de los tests que
+  escriben y ejecutan un script y reintenta el spawn sólo ante `Text file busy`, así un `fork`
+  concurrente no convierte un `exit 3` esperado en un fallo de arranque.
 
 ## Cómo se usa
 
@@ -154,8 +176,9 @@ segmenta media add https://www.youtube.com/watch?v=dQw4w9WgXcQ --mode video --he
 
 1. Al abrir el diálogo de añadir descarga (`Ctrl+N` o botón **+ Añadir URL**), activar el
    interruptor **Programar**.
-2. Seleccionar la fecha deseada en el calendario integrado y ajustar los selectores de hora y
-   minuto.
+2. Elegir **En días** (0 = hoy, hasta 60) y la hora exacta en los selectores. No hay calendario, así
+   que una fecha pasada no se puede ni escribir: si elegís hoy con una hora que ya pasó, los propios
+   selectores se corrigen al instante válido más cercano y el resumen lo muestra.
 3. Pulsar **Iniciar** (o `Enter`): la tarea se creará en estado pendiente y la fila mostrará el
    texto «Programada para [fecha/hora]» junto con el botón de cancelar. Al llegar la hora señalada,
    la descarga comenzará automáticamente.

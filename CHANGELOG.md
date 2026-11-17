@@ -50,6 +50,18 @@ cierre a bandeja. Publicada como `v0.3.0`.
   programar), *Programar* despliega un selector *Cuándo* con opciones rápidas y el calendario solo
   con *Fecha y hora exacta…*, un resumen indica el momento elegido y ninguna fecha pasada llega al
   daemon: se corrige al instante válido más cercano.
+- **La extensión cargada se reconoce**: el daemon sólo miraba `<perfil>/Extensions/<id>/`, que
+  Chromium crea únicamente para instalaciones empaquetadas, así que una extensión cargada como
+  desempaquetada se reportaba como «no instalada». Ahora lee `Preferences` (y `Secure Preferences`),
+  informa el origen (`unpacked`/`store`/`profile`) y la versión que el navegador está ejecutando, que
+  pasa a ser la referencia de `version_sync`. Firefox se detecta por `extensions.json`.
+- **Programar no acepta el pasado**: el calendario permitía elegir un día anterior y la corrección
+  ocurría en silencio dentro del payload. Se reemplazó por un selector **En días** (0–60) más hora y
+  minutos, de modo que el pasado no es expresable; con el día de hoy y una hora ya pasada, los
+  propios selectores se corrigen y el resumen muestra el instante que se enviará.
+- **Navegadores más simple**: subtítulo de menos de ocho palabras por navegador («Cargada (0.3.0)»,
+  «Falta cargar la extensión»), un único botón que es el próximo paso y el instructivo en un solo
+  desplegable de tres líneas; se retiraron los dos párrafos de avisos y el grupo de alternativa local.
 ### Fixed
 - **Las acciones de la bandeja actúan sobre la descarga viva**: el menú se reconstruía en cada
   refresco y cada ítem capturaba el `task_id` del momento de construcción, así que un clic podía
@@ -67,6 +79,10 @@ cierre a bandeja. Publicada como `v0.3.0`.
   reportan su velocidad real.
 - **Condición de carrera en sonda de llavero**: `keyring_is_detected_without_the_version_flag`
   reintenta la sonda ante errores transitorios `exec`/`ETXTBSY` en el binario temporal de prueba.
+- **Carrera `ETXTBSY` en la prueba de hooks**:
+  `a_non_zero_exit_is_recorded_without_failing_the_task` comparte el mutex de los tests que escriben y
+  ejecutan un script y reintenta el spawn sólo ante `Text file busy`, para que un `fork` concurrente
+  no convierta un `exit 3` esperado en un fallo de arranque.
 - **Serialización en prueba de apertura de interfaz**:
   `system_open_launches_the_gui_with_the_task_as_an_argument` serializa el acceso a la variable de
   entorno global `SEGMENTA_GUI` con un mutex para evitar colisiones entre tests concurrentes.
