@@ -124,3 +124,21 @@ Reportado por el usuario tras probar el `.deb` anterior:
   `Spawn { Text file busy }`; el `rename` del helper no alcanzaba (mismo inode, descriptor heredado por
   un `fork` concurrente). Se agregó `FAKE_EXEC` (mutex por binario) y `run_retrying_spawn`, que reintenta
   sólo ante `Text file busy`.
+
+### Publicación real de v0.3.0 (2026-11-16)
+
+- **Corrección de registro**: `v0.3.0` **no existía** como tag ni release; la última publicada era
+  `v0.2.4`, y el README/ODD estaban adelantados a la realidad. Esta es la primera publicación de
+  0.3.0, sin mover ni reutilizar tags previos.
+- **CI como condición dura**: el run `43995619905` (`bb86b28`) quedó **cancelado** por la regla
+  `concurrency: cancel-in-progress` del workflow al pushear documentación; `gates` ya había pasado.
+  La evidencia que autorizó la publicación es el run **`43996352963`** sobre `ed0d4cc`, el commit
+  taggeado: `gates`, `package` y `clean-install` en **success**.
+- Tag anotado `v0.3.0` → `ed0d4cc9144d3d0d63c903ba9152b9db7ae71a4c` (= `origin/main`).
+- Release: https://github.com/wilkin-barban/Segmenta/releases/tag/v0.3.0 (no draft, no prerelease)
+  con 5 assets.
+- **Asset descargado verificado**: `sha256sum -c segmenta_0.3.0-SHA256SUMS` y `.deb.sha256` → los
+  tres `OK`; `.deb` `63bf7d16350b93192838207a1c5238764bf786b4440b7e4b855c54f8f765480c`.
+- **Host Ubuntu**: instalado el `.deb` bajado del release con `--reinstall` → `0.3.0-1`, daemon
+  `0.3.0 (protocolo v1)`, `extension.status` con
+  `chrome → extension-installed, origen=unpacked, cargada=0.3.0, sync=match`.

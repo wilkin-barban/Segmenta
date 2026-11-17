@@ -9,7 +9,7 @@ El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y e
 
 Velocidad real visible en la fila de descargas y en torrents/streams, descargas programadas para una
 fecha y hora exactas, icono en la bandeja del sistema con menú adaptado a Ubuntu y ciclo de vida de
-cierre a bandeja. Publicada como `v0.3.0`.
+cierre a bandeja. Publicada como `v0.3.0` el 2026-11-16.
 
 ### Added
 
