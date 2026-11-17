@@ -57,8 +57,8 @@ virtual y validación de empaquetado:
 
 ## Gates verificados en el workspace
 
-- `cargo test --workspace` → 436 tests verdes (ejecutado y verificado en cuatro corridas consecutivas).
-- `xvfb-run -a cargo test -p segmenta-gui` → 109 tests verdes.
+- `cargo test --workspace` → 443 tests verdes (dos corridas sobre el árbol final).
+- `xvfb-run -a cargo test -p segmenta-gui` → 116 tests verdes.
 - `node extension/tests/run.mjs` → 176 tests verdes.
 - `cargo fmt --all -- --check` → limpio (código formateado según las reglas del proyecto).
 - `cargo clippy --workspace --all-targets -- -D warnings` → limpio (cero advertencias).

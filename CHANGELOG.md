@@ -43,6 +43,13 @@ cierre a bandeja. Publicada como `v0.3.0`.
   como antes. Los comandos de la bandeja cruzan al hilo principal de GTK mediante un canal evaluado
   cada 250 ms.
 
+- **Preferencias → Navegadores sin filas aplastadas**: un botón primario por fila (*Preparar*, o
+  *Recargar* cuando hay desincronización) y el resto de las acciones en un menú de tres puntos, en
+  lugar de tres botones de texto que dejaban el subtítulo envuelto una letra por línea.
+- **Diálogo de descarga coherente**: se eliminó el interruptor *Comenzar ahora* (redundante con no
+  programar), *Programar* despliega un selector *Cuándo* con opciones rápidas y el calendario solo
+  con *Fecha y hora exacta…*, un resumen indica el momento elegido y ninguna fecha pasada llega al
+  daemon: se corrige al instante válido más cercano.
 ### Fixed
 - **Las acciones de la bandeja actúan sobre la descarga viva**: el menú se reconstruía en cada
   refresco y cada ítem capturaba el `task_id` del momento de construcción, así que un clic podía

@@ -114,6 +114,19 @@ Ciclo verificado en el host con una descarga HTTP real de 105 MB, operando el me
 pausar (`downloading` → `paused`), retomar (`paused` → `downloading`) y cancelar
 (`downloading` → `cancelled`), y el menú volviendo a `Ningún download activo` al quedar sin tareas.
 
+### Dos pantallas que estorbaban, corregidas
+
+- **Preferencias → Navegadores** apilaba tres botones de texto como sufijos de cada fila, y en el
+  ancho real del diálogo el subtítulo terminaba envuelto una letra por línea. La fila ahora muestra
+  un único botón primario —*Preparar*, o *Recargar* cuando la copia preparada no es la enviada— y
+  mueve el resto a un menú de tres puntos. La versión queda como etiqueta atenuada.
+- **El diálogo de descarga** tenía dos interruptores que se contradecían: *Comenzar ahora* y
+  *Programar*. Se eliminó el primero, porque sin programación la descarga ya empieza de inmediato.
+  *Programar* despliega un único selector *Cuándo* con opciones rápidas —30 minutos, 1 hora,
+  2 horas, esta noche, mañana a las 08:00— y solo *Fecha y hora exacta…* abre el calendario y la
+  hora. Una fila de resumen dice cuándo se va a descargar, y una fecha u hora pasada se corrige al
+  instante válido más cercano en lugar de enviarse al daemon.
+
 ### Estabilidad en el suite de pruebas
 
 Se corrigieron dos condiciones de carrera preexistentes en los tests:
@@ -162,9 +175,9 @@ segmenta media add https://www.youtube.com/watch?v=dQw4w9WgXcQ --mode video --he
 
 Resultados observados en el árbol de desarrollo:
 
-- `cargo test --workspace` → 440 tests verdes (seis corridas consecutivas tras eliminar las carreras
+- `cargo test --workspace` → 443 tests verdes (repetido dos veces sobre el árbol final).
   `ETXTBSY` del arnés).
-- `xvfb-run -a cargo test -p segmenta-gui` → 113 tests verdes.
+- `xvfb-run -a cargo test -p segmenta-gui` → 116 tests verdes.
 - `node extension/tests/run.mjs` → 176 tests verdes.
 - `cargo fmt --all -- --check` y `cargo clippy --workspace --all-targets -- -D warnings` limpios.
 - `segmenta-gui --smoke` OK (arranque, renderizado sintético y salida limpia bajo Xvfb).
