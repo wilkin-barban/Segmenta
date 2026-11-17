@@ -856,14 +856,23 @@ pub struct BrowserActions {
 }
 
 /// The sentence one browser state shows.
-fn browser_status_text(locale: Locale, state: BrowserState, unsupported: Option<&str>) -> String {
+fn browser_status_text(
+    locale: Locale,
+    state: BrowserState,
+    unsupported: Option<&str>,
+    loaded_version: Option<&str>,
+) -> String {
     match state {
         BrowserState::Unsupported => tr(locale, Msg::BrowserStatusUnsupported)
             .replace("{reason}", unsupported.unwrap_or("snap/flatpak")),
         BrowserState::NotInstalled => tr(locale, Msg::BrowserStatusNotInstalled).to_string(),
         BrowserState::NativeMissing => tr(locale, Msg::BrowserStatusNoManifest).to_string(),
         BrowserState::NativeReady => tr(locale, Msg::BrowserStatusManifestOnly).to_string(),
-        BrowserState::ExtensionInstalled => tr(locale, Msg::BrowserStatusInstalled).to_string(),
+        // The row says the version the browser is running, when the profile reports one.
+        BrowserState::ExtensionInstalled => match loaded_version {
+            Some(version) => tr(locale, Msg::BrowserStatusInstalled).replace("{version}", version),
+            None => tr(locale, Msg::BrowserStatusInstalledUnknownVersion).to_string(),
+        },
     }
 }
 
@@ -898,7 +907,12 @@ pub fn browser_rows(locale: Locale, status: &Value) -> Vec<BrowserRow> {
                 .and_then(Value::as_str)
                 .map(str::to_string);
             let version_sync = VersionSync::from_status(browser);
-            let mut status = browser_status_text(locale, state, unsupported);
+            let loaded_version = browser
+                .get("loaded_version")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let mut status =
+                browser_status_text(locale, state, unsupported, loaded_version.as_deref());
             // A loaded extension older than the package is the defect that made
             // Chrome keep a stale context menu: say it in the same row (0.2.2).
             if version_sync.is_warning() {
@@ -964,24 +978,14 @@ pub fn browser_rows(locale: Locale, status: &Value) -> Vec<BrowserRow> {
 /// Numbered how-to for loading an unpacked (Chromium) or temporary (Firefox)
 /// extension. Empty for a family the page knows nothing about.
 pub fn load_steps(locale: Locale, family: &str) -> Vec<String> {
-    let steps: &[Msg] = match family {
-        "chromium" => &[
-            Msg::BrowserStepPrepare,
-            Msg::BrowserStepChromiumPage,
-            Msg::BrowserStepChromiumLoad,
-            Msg::BrowserStepChromiumVerify,
-        ],
-        "firefox" => &[
-            Msg::BrowserStepPrepare,
-            Msg::BrowserStepFirefoxPage,
-            Msg::BrowserStepFirefoxLoad,
-        ],
-        _ => &[],
-    };
-    steps
-        .iter()
-        .map(|step| tr(locale, *step).to_string())
-        .collect()
+    // One list for both families: the difference is only which page you open, and that
+    // is what the row's own button does.
+    let _ = family;
+    vec![
+        tr(locale, Msg::BrowserStepPrepare).to_string(),
+        tr(locale, Msg::BrowserStepOpen).to_string(),
+        tr(locale, Msg::BrowserStepLoad).to_string(),
+    ]
 }
 
 /// Callbacks the Browsers page needs.
@@ -1214,47 +1218,28 @@ pub fn browsers_page(locale: Locale, status: &Value, handlers: BrowserHandlers) 
     let rows = fill_browser_rows(&group, locale, status, &handlers);
     page.add(&group);
 
-    // The how-to is the manual: two families, numbered steps, no store needed.
-    let how_to = adw::PreferencesGroup::builder()
+    // One expander with the shortest possible instructions, instead of a manual the user
+    // has to read before doing anything. The row's button is already the next step.
+    let how_to = adw::PreferencesGroup::new();
+    let expander = adw::ExpanderRow::builder()
         .title(tr(locale, Msg::BrowserHowTo))
         .build();
     let mut steps = Vec::new();
-    for (family, header) in [
-        ("chromium", Msg::BrowserHowToChromium),
-        ("firefox", Msg::BrowserHowToFirefox),
-    ] {
-        let head = adw::ActionRow::builder().title(tr(locale, header)).build();
-        head.add_css_class("heading");
-        how_to.add(&head);
-        steps.push(head);
-        for step in load_steps(locale, family) {
-            let row = adw::ActionRow::builder().title(step).build();
-            how_to.add(&row);
-            steps.push(row);
-        }
+    for step in load_steps(locale, "chromium") {
+        let row = adw::ActionRow::builder().title(step).build();
+        row.set_subtitle_lines(0);
+        expander.add_row(&row);
+        steps.push(row);
     }
+    how_to.add(&expander);
     page.add(&how_to);
 
-    let hints = vec![
-        hint_label(locale, Msg::BrowserInstallNotAnInstallation),
-        hint_label(locale, Msg::BrowserNoStore),
-    ];
     let notes = adw::PreferencesGroup::new();
+    let hints = vec![hint_label(locale, Msg::ExtensionArchivesHint)];
     for hint in &hints {
         notes.add(hint);
     }
     page.add(&notes);
-
-    let local_group = adw::PreferencesGroup::builder()
-        .title(tr(locale, Msg::ExtensionLocalTitle))
-        .build();
-    local_group.add(
-        &adw::ActionRow::builder()
-            .title(tr(locale, Msg::ExtensionLocalHint))
-            .subtitle("/usr/share/segmenta/extensions")
-            .build(),
-    );
-    page.add(&local_group);
 
     BrowsersPage {
         page,

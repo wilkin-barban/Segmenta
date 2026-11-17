@@ -1204,7 +1204,7 @@ fn browsers_page_paints_the_three_states_and_wires_the_three_actions() {
         assert_ne!(manifest_only, installed, "manifest-only and installed row");
         assert_ne!(unsupported, installed, "snap and installed row");
         assert!(
-            manifest_only.contains("NO está instalada"),
+            manifest_only.contains("Falta cargar la extensión"),
             "a browser without the extension is not stated as such: {manifest_only}"
         );
 
@@ -1243,33 +1243,22 @@ fn browsers_page_paints_the_three_states_and_wires_the_three_actions() {
             .menu_labels()
             .contains(&"Copiar ruta".to_string()));
 
-        // The numbered how-to names the real pages of both families.
+        // The how-to is one short list: no per-family manual any more.
+        assert_eq!(page.steps.len(), 3, "the how-to must stay three steps");
         assert!(
             page.steps
                 .iter()
-                .any(|step| step.title().contains("chrome://extensions")),
-            "the Chromium page is never named"
-        );
-        assert!(
-            page.steps
-                .iter()
-                .any(|step| step.title().contains("about:debugging")),
-            "the Firefox page is never named"
+                .any(|step| step.title().contains("página de extensiones")),
+            "the extensions page is never named"
         );
 
-        // Both limits are on the page: a manifest is not an install, and there is
-        // no store and no signature.
+        // One dim line points at the archives instead of two warning paragraphs.
+        assert_eq!(page.hints.len(), 1, "one note, not a wall of warnings");
         assert!(
-            page.hints
-                .iter()
-                .any(|hint| hint.label().contains("no es una instalación")),
-            "the page does not say a manifest is not an installation"
-        );
-        assert!(
-            page.hints
-                .iter()
-                .any(|hint| hint.label().contains("Sin tienda y sin firma")),
-            "the page does not say there is no store and no signature"
+            page.hints[0]
+                .label()
+                .contains("/usr/share/segmenta/extensions"),
+            "the note does not point at the archives"
         );
     });
 }
@@ -1528,12 +1517,12 @@ fn add_dialog_schedule_progressive_picker_and_future_moment_guarantee() {
 
         // 3. Selecting "Fecha y hora exacta…" reveals the calendar and hides it again
         form.schedule_when.set_selected(5);
-        assert!(form.calendar.is_visible());
+        assert!(form.days_ahead.is_visible());
         assert!(form.schedule_hour.is_visible());
         assert!(form.schedule_minute.is_visible());
 
         form.schedule_when.set_selected(1);
-        assert!(!form.calendar.is_visible());
+        assert!(!form.days_ahead.is_visible());
         assert!(!form.schedule_hour.is_visible());
         assert!(!form.schedule_minute.is_visible());
 
@@ -1547,10 +1536,10 @@ fn add_dialog_schedule_progressive_picker_and_future_moment_guarantee() {
             "summary row did not change between 30min and 1h"
         );
 
-        // 5. Exact mode with a past date picked in calendar -> built params still carry a future moment
+        // 5. Exact mode with today and a time already past -> the dialog snaps it forward,
+        // and there is no control that can express an earlier day any more.
         form.schedule_when.set_selected(5);
-        let past_dt = glib::DateTime::from_local(2020, 1, 1, 10, 0, 0.0).expect("past_dt");
-        form.calendar.select_day(&past_dt);
+        form.days_ahead.set_value(0.0);
         form.schedule_hour.set_value(0.0);
         form.schedule_minute.set_value(0.0);
         let params_past = segmenta_gui::add_dialog::build_add_params(&form);
@@ -1561,6 +1550,46 @@ fn add_dialog_schedule_progressive_picker_and_future_moment_guarantee() {
         assert!(
             past_resolved.to_unix() > now.to_unix(),
             "built params must carry a future moment even with past date selected"
+        );
+    });
+}
+
+/// The dialog must not offer any way to schedule the past: with an offset in days the
+/// earliest moment is today, and a past time today is snapped forward in the widgets
+/// themselves, so what the summary says is what gets sent.
+#[test]
+fn the_schedule_picker_cannot_express_the_past() {
+    run_gui("schedule_picker_rejects_past", || {
+        let form = segmenta_gui::add_dialog::build_form(&segmenta_gui::add_dialog::AddDefaults {
+            destination_dir: "/tmp".to_string(),
+            connections: 8,
+            clip_monitor_enabled: false,
+        });
+        form.schedule.set_active(true);
+        form.schedule_when.set_selected(5);
+        assert_eq!(form.days_ahead.value(), 0.0, "default offset is today");
+        assert!(
+            form.days_ahead.value() >= 0.0,
+            "the offset is never negative, so the day can never be earlier than today"
+        );
+
+        // A time already gone today is clamped in the widgets, not only in the payload.
+        form.schedule_hour.set_value(0.0);
+        form.schedule_minute.set_value(0.0);
+        let hour_after = form.schedule_hour.value() as u32;
+        let minute_after = form.schedule_minute.value() as u32;
+        let now = glib::DateTime::now_local().expect("now_local");
+        assert!(
+            (hour_after as i32, minute_after as i32) >= (now.hour(), now.minute()),
+            "the widgets still show a past time: {hour_after}:{minute_after}"
+        );
+
+        let params = segmenta_gui::add_dialog::build_add_params(&form);
+        let scheduled = params["scheduled_at"].as_str().expect("scheduled_at");
+        let moment = glib::DateTime::from_iso8601(scheduled, None).expect("iso8601");
+        assert!(
+            moment.to_unix() > glib::DateTime::now_utc().expect("now").to_unix(),
+            "the payload carries a past moment: {scheduled}"
         );
     });
 }

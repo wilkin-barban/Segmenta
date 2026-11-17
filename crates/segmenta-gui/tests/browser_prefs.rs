@@ -131,12 +131,12 @@ fn a_manifest_without_the_extension_is_stated_as_not_installed() {
     let manifest_only = row(Locale::En, "chrome");
     let text = manifest_only.status.to_lowercase();
     assert!(
-        text.contains("manifest"),
-        "the row does not say the manifest is there: {text}"
+        text.contains("extension"),
+        "the row does not point at the extension: {text}"
     );
     assert!(
-        text.contains("not installed"),
-        "a browser without the extension is not stated as not installed: {text}"
+        text.contains("needs the extension loaded"),
+        "a browser without the extension is not stated as such: {text}"
     );
 }
 
@@ -146,8 +146,8 @@ fn an_unsupported_package_says_which_package_and_why() {
     let text = unsupported.status.to_lowercase();
     assert!(text.contains("snap"), "the reason is missing: {text}");
     assert!(
-        text.contains("native host"),
-        "the row does not explain what cannot run: {text}"
+        text.contains("not supported"),
+        "the row does not state the limit: {text}"
     );
 }
 
@@ -222,44 +222,28 @@ fn a_missing_manifest_points_at_the_install_step() {
         text.contains("manifest"),
         "the missing manifest is not named: {text}"
     );
-    assert!(
-        text.contains("not installed"),
-        "the missing extension is not named: {text}"
-    );
 }
 
 #[test]
 fn load_steps_are_numbered_and_family_specific() {
     let chromium = load_steps(Locale::En, "chromium");
-    assert_eq!(chromium.len(), 4, "chromium steps: {chromium:?}");
+    assert_eq!(chromium.len(), 3, "chromium steps: {chromium:?}");
     assert!(chromium[0].starts_with("1."), "not numbered: {chromium:?}");
+    assert!(
+        chromium.iter().any(|step| step.contains("extensions page")),
+        "the extensions page is never named: {chromium:?}"
+    );
     assert!(
         chromium
             .iter()
-            .any(|step| step.contains("chrome://extensions")),
-        "the Chromium page is never named: {chromium:?}"
-    );
-    assert!(
-        chromium.iter().any(|step| step.contains("Load unpacked")),
-        "loading unpacked is never named: {chromium:?}"
+            .any(|step| step.to_lowercase().contains("load the folder")),
+        "loading the folder is never named: {chromium:?}"
     );
 
+    // One list serves both families: the difference is which page the row button opens.
     let firefox = load_steps(Locale::En, "firefox");
     assert_eq!(firefox.len(), 3, "firefox steps: {firefox:?}");
-    assert!(
-        firefox.iter().any(|step| step.contains("about:debugging")),
-        "the Firefox page is never named: {firefox:?}"
-    );
-    assert!(
-        firefox
-            .iter()
-            .any(|step| step.to_lowercase().contains("temporary")),
-        "a temporary load is not stated: {firefox:?}"
-    );
-    assert!(
-        firefox.iter().any(|step| step.contains("closes")),
-        "losing the add-on on restart is not stated: {firefox:?}"
-    );
+    assert_eq!(chromium, firefox, "one list serves both families");
 
     // Every catalog is filled and the numbers are contiguous from 1.
     for locale in [Locale::En, Locale::Es, Locale::PtBr] {
@@ -274,8 +258,8 @@ fn load_steps_are_numbered_and_family_specific() {
             }
         }
     }
-    // An unknown family has no steps instead of a guessed how-to.
-    assert!(load_steps(Locale::En, "other").is_empty());
+    // An unknown browser still gets the generic list: the how-to is the same.
+    assert_eq!(load_steps(Locale::En, "other").len(), 3);
 }
 
 /// 0.2.2: the loaded extension is the prepared copy, so the row must say when it

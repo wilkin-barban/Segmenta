@@ -47,7 +47,7 @@ pub struct Form {
     pub schedule: adw::SwitchRow,
     pub schedule_when: adw::ComboRow,
     pub schedule_summary: adw::ActionRow,
-    pub calendar: gtk::Calendar,
+    pub days_ahead: adw::SpinRow,
     pub schedule_hour: adw::SpinRow,
     pub schedule_minute: adw::SpinRow,
     pub schedule_hint: gtk::Label,
@@ -121,15 +121,17 @@ pub fn build_form(defaults: &AddDefaults) -> Form {
 
     let schedule_summary = adw::ActionRow::builder().visible(false).build();
 
-    let calendar = gtk::Calendar::new();
-    calendar.set_visible(false);
-
     let now = gtk::glib::DateTime::now_local().unwrap_or_else(|_| {
         gtk::glib::DateTime::from_unix_local(0).expect("fallback local DateTime")
     });
     let default_exact = round_up_5_minutes(&now.add_hours(1).unwrap_or_else(|_| now.clone()));
 
-    calendar.select_day(&default_exact);
+    // An offset in days plus a time cannot express the past, which a calendar always can:
+    // picking an earlier day used to be corrected silently behind the user's back.
+    let days_ahead = adw::SpinRow::with_range(0.0, 60.0, 1.0);
+    days_ahead.set_title(tr(locale(), Msg::ScheduleInDays));
+    days_ahead.set_value(0.0);
+    days_ahead.set_visible(false);
 
     let schedule_hour = adw::SpinRow::with_range(0.0, 23.0, 1.0);
     schedule_hour.set_title(tr(locale(), Msg::Hour));
@@ -154,7 +156,7 @@ pub fn build_form(defaults: &AddDefaults) -> Form {
     let f_sched = schedule.clone();
     let f_when = schedule_when.clone();
     let f_sum = schedule_summary.clone();
-    let f_cal = calendar.clone();
+    let f_cal = days_ahead.clone();
     let f_hour = schedule_hour.clone();
     let f_min = schedule_minute.clone();
     let f_hint = schedule_hint.clone();
@@ -187,41 +189,17 @@ pub fn build_form(defaults: &AddDefaults) -> Form {
         let now = gtk::glib::DateTime::now_local().unwrap_or_else(|_| {
             gtk::glib::DateTime::from_unix_local(0).expect("fallback local DateTime")
         });
-        let mut show_hint = false;
-
-        if is_exact {
-            let cal_date = f_cal.date();
-            let cal_ymd = (cal_date.year(), cal_date.month(), cal_date.day_of_month());
-            let today_ymd = (now.year(), now.month(), now.day_of_month());
-
-            if cal_ymd < today_ymd {
-                f_cal.select_day(&now);
-                show_hint = true;
-            }
-
-            let updated_cal = f_cal.date();
-            let updated_ymd = (
-                updated_cal.year(),
-                updated_cal.month(),
-                updated_cal.day_of_month(),
-            );
-
-            if updated_ymd == today_ymd {
-                let h = f_hour.value() as i32;
-                let m = f_min.value() as i32;
-                let now_h = now.hour();
-                let now_m = now.minute();
-                if h < now_h || (h == now_h && m <= now_m) {
-                    let earliest =
-                        round_up_5_minutes(&now.add_minutes(5).unwrap_or_else(|_| now.clone()));
-                    f_hour.set_value(f64::from(earliest.hour()));
-                    f_min.set_value(f64::from(earliest.minute()));
-                    show_hint = true;
-                }
+        // An offset cannot express the past; when it is zero the time is clamped to the
+        // earliest valid instant so the summary never lies about what will be sent.
+        if is_exact && (f_cal.value() as i32) == 0 {
+            let earliest = round_up_5_minutes(&now.add_minutes(5).unwrap_or_else(|_| now.clone()));
+            let (want_h, want_m) = (f_hour.value() as i32, f_min.value() as i32);
+            if (want_h, want_m) < (earliest.hour(), earliest.minute()) {
+                f_hour.set_value(f64::from(earliest.hour()));
+                f_min.set_value(f64::from(earliest.minute()));
             }
         }
-
-        f_hint.set_visible(is_exact && show_hint);
+        f_hint.set_visible(false);
 
         let dt = resolve_moment(f_when.selected(), &f_cal, &f_hour, &f_min);
         let summary = format_summary_line(locale(), &dt);
@@ -239,7 +217,7 @@ pub fn build_form(defaults: &AddDefaults) -> Form {
     schedule_when.connect_selected_notify(move |_| s());
 
     let s = Rc::clone(&sync_rc);
-    calendar.connect_day_selected(move |_| s());
+    days_ahead.connect_value_notify(move |_| s());
 
     let s = Rc::clone(&sync_rc);
     schedule_hour.connect_value_notify(move |_| s());
@@ -263,7 +241,7 @@ pub fn build_form(defaults: &AddDefaults) -> Form {
     group.add(&schedule);
     group.add(&schedule_when);
     group.add(&schedule_summary);
-    group.add(&calendar);
+    group.add(&days_ahead);
     group.add(&schedule_hour);
     group.add(&schedule_minute);
     group.add(&schedule_hint);
@@ -291,7 +269,7 @@ pub fn build_form(defaults: &AddDefaults) -> Form {
         schedule,
         schedule_when,
         schedule_summary,
-        calendar,
+        days_ahead,
         schedule_hour,
         schedule_minute,
         schedule_hint,
@@ -328,7 +306,7 @@ fn format_summary_line(locale: segmenta_i18n::Locale, dt: &gtk::glib::DateTime) 
 
 fn resolve_moment(
     selected_option: u32,
-    calendar: &gtk::Calendar,
+    days_ahead: &adw::SpinRow,
     hour_spin: &adw::SpinRow,
     minute_spin: &adw::SpinRow,
 ) -> gtk::glib::DateTime {
@@ -368,18 +346,23 @@ fn resolve_moment(
             .unwrap_or(now)
         }
         _ => {
-            let cal_date = calendar.date();
-            let year = cal_date.year();
-            let month = cal_date.month();
-            let day = cal_date.day_of_month();
+            // Offset in days from today plus a time: the result is future by construction.
+            let day = days_ahead.value().max(0.0) as i32;
+            let base = now.add_days(day).unwrap_or_else(|_| now.clone());
             let hour = hour_spin.value() as i32;
             let minute = minute_spin.value() as i32;
-
-            let picked = gtk::glib::DateTime::from_local(year, month, day, hour, minute, 0.0)
-                .unwrap_or_else(|_| now.clone());
-
-            if picked.to_unix() <= now.to_unix() {
-                round_up_5_minutes(&now.add_minutes(5).unwrap_or_else(|_| now.clone()))
+            let picked = gtk::glib::DateTime::from_local(
+                base.year(),
+                base.month(),
+                base.day_of_month(),
+                hour,
+                minute,
+                0.0,
+            )
+            .unwrap_or_else(|_| now.clone());
+            let earliest = round_up_5_minutes(&now.add_minutes(5).unwrap_or_else(|_| now.clone()));
+            if picked.to_unix() < earliest.to_unix() {
+                earliest
             } else {
                 picked
             }
@@ -390,7 +373,7 @@ fn resolve_moment(
 pub fn resolve_scheduled_moment(form: &Form) -> gtk::glib::DateTime {
     resolve_moment(
         form.schedule_when.selected(),
-        &form.calendar,
+        &form.days_ahead,
         &form.schedule_hour,
         &form.schedule_minute,
     )

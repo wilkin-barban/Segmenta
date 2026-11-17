@@ -30,6 +30,34 @@ fn recording_hook(dir: &Path) -> PathBuf {
     )
 }
 
+/// Serializes the tests that write an executable script and run it.
+///
+/// Renaming the script into place does not help: the inode is the same, and a `fork` of a
+/// concurrent test can inherit the write descriptor, so `execve` fails with ETXTBSY until
+/// that child exits. Every test that spawns a fresh script takes this lock.
+static FAKE_EXEC: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Runs a hook, retrying the spawn while the kernel answers ETXTBSY.
+///
+/// The lock above prevents the writer from racing us, but a descriptor inherited by an
+/// unrelated fork can still be alive for a few milliseconds.
+fn run_retrying_spawn(command: &[String], target: &HookTarget, options: &HookOptions) -> HookRun {
+    let mut last = run(command, target, options);
+    for _ in 0..5 {
+        let retryable = matches!(
+            &last,
+            HookRun::Ran(outcome)
+                if matches!(&outcome.exit, HookExit::Spawn { error, .. } if error.contains("Text file busy"))
+        );
+        if !retryable {
+            return last;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+        last = run(command, target, options);
+    }
+    last
+}
+
 fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
     let path = dir.join(name);
     // Written under a private name and renamed into place: a `fork` of a concurrent test
@@ -240,6 +268,7 @@ fn captured_output_is_bounded() {
 
 #[test]
 fn a_non_zero_exit_is_recorded_without_failing_the_task() {
+    let _serial = FAKE_EXEC.lock().unwrap_or_else(|err| err.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let hook = script(
         dir.path(),
@@ -249,7 +278,11 @@ fn a_non_zero_exit_is_recorded_without_failing_the_task() {
     let target = target_file(dir.path(), "file.bin");
     let options = HookOptions::default();
 
-    let outcome = outcome_of(run(&[hook.display().to_string()], &target, &options));
+    let outcome = outcome_of(run_retrying_spawn(
+        &[hook.display().to_string()],
+        &target,
+        &options,
+    ));
 
     assert_eq!(outcome.exit, HookExit::Code(3));
     assert_eq!(outcome.exit.code(), Some(3));

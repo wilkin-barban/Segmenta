@@ -208,48 +208,144 @@ fn profile_roots(browser_id: &str, home: &Path, config_home: &Path) -> Vec<PathB
     }
 }
 
-/// Whether the browser profile shows the extension, read-only.
+/// What a browser profile says about the Segmenta extension, read-only.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExtensionEvidence {
+    /// The profile lists the extension and it is not disabled.
+    pub installed: bool,
+    /// How the profile holds it: `unpacked`, `store`, `profile` or `directory`.
+    pub origin: Option<&'static str>,
+    /// Version the browser is actually running, when the profile records it.
+    pub loaded_version: Option<String>,
+}
+
+/// Reads the profile's own record of the extension.
 ///
-/// Chromium keeps an unpacked extension under `Default/Extensions/<id>`; Firefox
-/// records it under `<profile>/extensions/`. Nothing here writes to a profile.
-pub fn extension_installed(browser_id: &str, home: &Path, config_home: &Path) -> bool {
+/// Chromium keeps an unpacked extension in `<profile>/Preferences` under
+/// `extensions.settings.<id>` (with `location: 4` for "loaded unpacked") and does **not**
+/// create `Extensions/<id>/`, which only exists for packed or store installs. Checking
+/// that directory alone therefore reported "not installed" for the documented flow.
+/// Firefox records persistent add-ons in `<profile>/extensions.json`; a temporary add-on
+/// from `about:debugging` is never persisted, so it cannot be detected here.
+pub fn extension_evidence(browser_id: &str, home: &Path, config_home: &Path) -> ExtensionEvidence {
     if browser_id == "firefox" {
         for root in profile_roots(browser_id, home, config_home) {
             let Ok(entries) = std::fs::read_dir(&root) else {
                 continue;
             };
             for entry in entries.flatten() {
-                let extensions = entry.path().join("extensions");
-                let Ok(files) = std::fs::read_dir(&extensions) else {
-                    continue;
-                };
-                if files.flatten().any(|file| {
-                    file.file_name()
-                        .to_string_lossy()
-                        .starts_with(FIREFOX_EXTENSION_ID)
-                }) {
-                    return true;
+                let profile = entry.path();
+                if let Some(evidence) = firefox_profile_evidence(&profile) {
+                    return evidence;
+                }
+                if let Ok(files) = std::fs::read_dir(profile.join("extensions")) {
+                    if files.flatten().any(|file| {
+                        file.file_name()
+                            .to_string_lossy()
+                            .starts_with(FIREFOX_EXTENSION_ID)
+                    }) {
+                        return ExtensionEvidence {
+                            installed: true,
+                            origin: Some("profile"),
+                            loaded_version: None,
+                        };
+                    }
                 }
             }
         }
-        return false;
+        return ExtensionEvidence::default();
     }
+
     for root in profile_roots(browser_id, home, config_home) {
         let Ok(entries) = std::fs::read_dir(&root) else {
             continue;
         };
         for entry in entries.flatten() {
-            if entry
-                .path()
+            let profile = entry.path();
+            if let Some(evidence) = chromium_profile_evidence(&profile) {
+                return evidence;
+            }
+            if profile
                 .join("Extensions")
                 .join(CHROMIUM_EXTENSION_ID)
                 .is_dir()
             {
-                return true;
+                return ExtensionEvidence {
+                    installed: true,
+                    origin: Some("directory"),
+                    loaded_version: None,
+                };
             }
         }
     }
-    false
+    ExtensionEvidence::default()
+}
+
+/// Whether the browser profile shows the extension, read-only.
+pub fn extension_installed(browser_id: &str, home: &Path, config_home: &Path) -> bool {
+    extension_evidence(browser_id, home, config_home).installed
+}
+
+/// Chromium's record of the extension inside one profile, when present.
+fn chromium_profile_evidence(profile: &Path) -> Option<ExtensionEvidence> {
+    // `Preferences` is the live copy; Chrome moves some entries to `Secure Preferences`.
+    for name in ["Preferences", "Secure Preferences"] {
+        let Ok(body) = std::fs::read_to_string(profile.join(name)) else {
+            continue;
+        };
+        // An unreadable or corrupt profile is "not detected", never a panic.
+        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&body) else {
+            continue;
+        };
+        let Some(entry) = parsed
+            .get("extensions")
+            .and_then(|extensions| extensions.get("settings"))
+            .and_then(|settings| settings.get(CHROMIUM_EXTENSION_ID))
+        else {
+            continue;
+        };
+        let disabled = entry
+            .get("disable_reasons")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|reasons| !reasons.is_empty())
+            || entry.get("state").and_then(serde_json::Value::as_i64) == Some(0)
+            || entry.get("state").and_then(serde_json::Value::as_str) == Some("disabled");
+        let origin = match entry.get("location").and_then(serde_json::Value::as_i64) {
+            Some(4) => Some("unpacked"),
+            Some(1) => Some("store"),
+            _ => Some("profile"),
+        };
+        let loaded_version = entry
+            .get("service_worker_registration_info")
+            .and_then(|info| info.get("version"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
+        return Some(ExtensionEvidence {
+            installed: !disabled,
+            origin,
+            loaded_version,
+        });
+    }
+    None
+}
+
+/// Firefox's record of the extension inside one profile, when present.
+fn firefox_profile_evidence(profile: &Path) -> Option<ExtensionEvidence> {
+    let body = std::fs::read_to_string(profile.join("extensions.json")).ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&body).ok()?;
+    let addons = parsed.get("addons")?.as_array()?;
+    let addon = addons.iter().find(|addon| {
+        addon.get("id").and_then(serde_json::Value::as_str) == Some(FIREFOX_EXTENSION_ID)
+    })?;
+    let active = addon.get("active").and_then(serde_json::Value::as_bool) != Some(false);
+    Some(ExtensionEvidence {
+        installed: active,
+        origin: Some("profile"),
+        loaded_version: addon
+            .get("version")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string),
+    })
 }
 
 /// Per-user manifest path for a browser, following XDG.
@@ -500,7 +596,22 @@ pub fn extension_version_report(
     prepared_dir: Option<&Path>,
     archive: Option<&Path>,
 ) -> ExtensionVersionReport {
-    let prepared = prepared_dir.and_then(|dir| manifest_version(&dir.join("manifest.json")));
+    extension_version_report_with(prepared_dir, archive, None)
+}
+
+/// Compare the version the browser is actually running with the shipped one.
+///
+/// The loaded version wins when the profile reports it: that is what the user has open,
+/// while the prepared manifest only says what was unzipped. Without it, the prepared
+/// manifest is the best evidence available.
+pub fn extension_version_report_with(
+    prepared_dir: Option<&Path>,
+    archive: Option<&Path>,
+    loaded_version: Option<&str>,
+) -> ExtensionVersionReport {
+    let prepared = loaded_version
+        .map(str::to_string)
+        .or_else(|| prepared_dir.and_then(|dir| manifest_version(&dir.join("manifest.json"))));
     let shipped = archive
         .and_then(archive_manifest_version)
         .unwrap_or_else(|| package_version().to_string());
@@ -523,11 +634,13 @@ pub fn browser_status_json(
     config_home: &Path,
 ) -> serde_json::Value {
     // The loaded extension is the prepared copy: compare it with what this package ships.
-    let versions = extension_version_report(
+    let evidence = extension_evidence(browser.id, home, config_home);
+    let versions = extension_version_report_with(
         browser.prepared_path.as_deref(),
         browser.archive_path.as_deref(),
+        evidence.loaded_version.as_deref(),
     );
-    let installed = extension_installed(browser.id, home, config_home);
+    let installed = evidence.installed;
     let state = if browser.unsupported.is_some() {
         "unsupported"
     } else if browser.command.is_none() {
@@ -556,6 +669,8 @@ pub fn browser_status_json(
         "archive_path": browser.archive_path.as_ref().map(|p| p.to_string_lossy().into_owned()),
         "prepared_version": versions.prepared,
         "shipped_version": versions.shipped,
+        "loaded_version": evidence.loaded_version,
+        "extension_origin": evidence.origin,
         "version_sync": versions.sync.as_str(),
         "state": state,
     })
@@ -842,6 +957,60 @@ mod tests {
         )
         .unwrap();
         let report = extension_version_report(Some(&prepared), None);
+        assert_eq!(report.sync, VersionSync::Match);
+    }
+
+    /// Chrome records an unpacked extension in the profile's Preferences, not in
+    /// `Extensions/<id>`; the old check reported "not installed" for the documented
+    /// load-unpacked flow (0.3.0).
+    #[test]
+    fn an_unpacked_extension_is_detected_from_the_profile_preferences() {
+        let dir = fake_dir();
+        let home = dir.path().join("home");
+        let config_home = home.join(".config");
+        let profile = config_home.join("google-chrome/Default");
+        std::fs::create_dir_all(&profile).unwrap();
+        let preferences = format!(
+            r#"{{"extensions":{{"settings":{{"{CHROMIUM_EXTENSION_ID}":{{
+                "location":4,
+                "path":"/home/user/.local/share/segmenta/extensions/chromium-0.3.0",
+                "disable_reasons":[],
+                "service_worker_registration_info":{{"version":"0.3.0"}}}}}}}}}}"#
+        );
+        std::fs::write(profile.join("Preferences"), preferences).unwrap();
+
+        let evidence = extension_evidence("chrome", &home, &config_home);
+        assert!(
+            evidence.installed,
+            "an unpacked extension must count as installed"
+        );
+        assert_eq!(evidence.origin, Some("unpacked"));
+        assert_eq!(evidence.loaded_version.as_deref(), Some("0.3.0"));
+        assert!(extension_installed("chrome", &home, &config_home));
+
+        // A disabled entry is present but not usable.
+        std::fs::write(
+            profile.join("Preferences"),
+            format!(r#"{{"extensions":{{"settings":{{"{CHROMIUM_EXTENSION_ID}":{{"disable_reasons":[1]}}}}}}}}"#),
+        )
+        .unwrap();
+        assert!(!extension_installed("chrome", &home, &config_home));
+
+        // A corrupt profile is "not detected", never a panic.
+        std::fs::write(profile.join("Preferences"), "{not json").unwrap();
+        assert!(!extension_installed("chrome", &home, &config_home));
+    }
+
+    /// The profile's own version is what the user has loaded, so it wins the comparison.
+    #[test]
+    fn the_loaded_version_wins_over_the_prepared_manifest() {
+        let dir = fake_dir();
+        let archive = dir.path().join("segmenta-chromium.zip");
+        create_test_zip(&archive, "{\"version\": \"0.3.0\"}", true);
+        let report = extension_version_report_with(None, Some(&archive), Some("0.2.4"));
+        assert_eq!(report.prepared.as_deref(), Some("0.2.4"));
+        assert_eq!(report.sync, VersionSync::Mismatch);
+        let report = extension_version_report_with(None, Some(&archive), Some("0.3.0"));
         assert_eq!(report.sync, VersionSync::Match);
     }
 
