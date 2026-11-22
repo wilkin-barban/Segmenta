@@ -16,7 +16,9 @@ HLS/DASH públicos; conserva el estado en SQLite y reanuda exactamente donde que
 
 [Instalación](#instalación) · [Uso](#uso) · [Capturas](#capturas) · [Releases](#releases) · [Documentación](#documentación)
 
-![Ventana principal de Segmenta con descargas en curso](docs/qa/screenshots/main-window.png)
+<p align="center">
+  <img src="docs/qa/screenshots/segmenta-demo.gif" width="850" alt="Demostración de Segmenta en ejecución">
+</p>
 
 ## Qué problema resuelve
 
@@ -54,9 +56,11 @@ Segmenta separa la descarga del navegador y de la interfaz:
 
 ## Capturas
 
-### Lista y progreso
+### Ventana principal y progreso en curso
 
-![Lista de descargas con barra de progreso](docs/qa/screenshots/download-progress.png)
+| Ventana principal con descargas completadas | Descarga activa con velocidad y progreso |
+|:---:|:---:|
+| ![Ventana principal](docs/qa/screenshots/main-window.png) | ![Progreso](docs/qa/screenshots/download-progress.png) |
 
 La barra avanza con `task_progress`; cuando el tamaño aún es desconocido (HLS/DASH o torrent antes
 de metadata) se muestra un pulso con los bytes reales, no una barra clavada en 0.
