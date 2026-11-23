@@ -107,6 +107,10 @@
     "message": "No se encontró el host nativo de Segmenta. ¿Está instalado segmenta-host?",
     "description": "Error cuando el host nativo no está disponible."
   },
+  "errorDaemonUnavailable": {
+    "message": "El servicio de Segmenta no está disponible. Comprueba que esté en ejecución.",
+    "description": "Daemon unavailable error."
+  },
   "errorDrmProtected": {
     "message": "Este contenido usa protección DRM y no es compatible.",
     "description": "Error de DRM."

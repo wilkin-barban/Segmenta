@@ -5,7 +5,8 @@
 // firstChild, textContent, setAttribute, addEventListener, querySelectorAll,
 // attachShadow) is implemented.
 import assert from 'node:assert/strict';
-import { loadShared } from './helpers.mjs';
+import vm from 'node:vm';
+import { loadShared, readExt, readJson } from './helpers.mjs';
 
 const TASK_ID = '123e4567-e89b-12d3-a456-426614174000';
 
@@ -179,7 +180,74 @@ function radios(root) {
   return findAll(root, (node) => node.tagName === 'INPUT' && node.type === 'radio');
 }
 
+// Exercise the public click -> browser message -> native reply -> visible panel path.
+async function visibleHostError(target, locale, code) {
+  const document = createDocument();
+  const catalog = readJson(target, '_locales', locale, 'messages.json');
+  const href = 'https://www.youtube.com/watch?v=dQw4w9WgXcQ';
+  const id = 'abcdefghijklmnopabcdefghijklmnop';
+  let listener;
+  const calls = [];
+  const chrome = {
+    runtime: {
+      id,
+      onMessage: { addListener(fn) { listener = fn; } },
+      sendMessage(message, callback) {
+        listener(message, { id, url: href }, callback);
+      },
+      sendNativeMessage(host, request, callback) {
+        calls.push(request.method);
+        if (code === 'host-unavailable') {
+          chrome.runtime.lastError = { message: 'native host not found' };
+          callback(undefined);
+          return;
+        }
+        callback({ jsonrpc: '2.0', id: request.id, error: {
+          code,
+          message: 'cannot reach the Segmenta daemon at /isolated/daemon.sock: not found. Run `systemctl --user start segmenta-daemon.service` and retry',
+          data: { code: code === 1029 ? 'ERR_DAEMON_UNAVAILABLE' : 'OTHER_ERROR' },
+        } });
+      },
+    },
+    i18n: { getMessage(key) { return catalog[key]?.message || ''; } },
+  };
+  const context = vm.createContext({
+    chrome, document, location: new URL(href), URL, TextEncoder,
+    setTimeout, clearTimeout, addEventListener() {}, MessageChannel: undefined,
+  });
+  for (const file of ['shared/browser-api.js', 'shared/protocol.js', 'shared/validate.js',
+    'shared/panel.js', 'background.js', 'content.js']) {
+    vm.runInContext(readExt(target, ...file.split('/')), context, { filename: file });
+  }
+  byClass(document.body, 'segmenta-launch').dispatch('click');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, ['media.probe']);
+  const error = byClass(document.body, 'segmenta-error');
+  assert.equal(error.hidden, false);
+  return error.textContent;
+}
+
 export default function suite({ test }) {
+  test('existing host error and unknown error remain translated in the visible panel', async () => {
+    for (const target of ['chromium', 'firefox']) {
+      assert.equal(await visibleHostError(target, 'en', 1040), 'This content uses DRM protection and is not supported.');
+      assert.equal(await visibleHostError(target, 'en', 9999), 'An unexpected error happened.');
+      assert.equal(await visibleHostError(target, 'en', 'host-unavailable'), 'The Segmenta native host was not found. Is segmenta-host installed?');
+    }
+  });
+
+  test('daemon unavailable host reply is translated in the visible panel', async () => {
+    const expected = {
+      en: 'The Segmenta daemon is unavailable. Check that it is running.',
+      es: 'El servicio de Segmenta no está disponible. Comprueba que esté en ejecución.',
+      pt_BR: 'O serviço do Segmenta não está disponível. Verifique se ele está em execução.',
+    };
+    for (const target of ['chromium', 'firefox']) {
+      for (const locale of Object.keys(expected)) {
+        assert.equal(await visibleHostError(target, locale, 1029), expected[locale], `${target}/${locale}`);
+      }
+    }
+  });
   test('the panel renders only the grouped ladder and preselects 720p', async () => {
     await loadShared('SegmentaProtocol', 'protocol.js');
     const PANEL = await loadShared('SegmentaPanel', 'panel.js');

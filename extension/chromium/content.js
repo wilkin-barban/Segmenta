@@ -31,6 +31,7 @@
     ERR_HOST_PROTOCOL: 'errorGeneric',
     ERR_HOST_TIMEOUT: 'errorTimeout',
     ERR_HOST_UNAVAILABLE: 'errorHostUnavailable',
+    ERR_DAEMON_UNAVAILABLE: 'errorDaemonUnavailable',
     ERR_HOST_ERROR: 'errorGeneric',
     ERR_UNKNOWN: 'errorUnknown',
   };
