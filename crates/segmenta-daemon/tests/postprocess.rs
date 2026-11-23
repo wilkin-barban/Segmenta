@@ -112,6 +112,7 @@ fn no_hook_configured_skips_the_phase() {
 
 #[test]
 fn placeholders_are_substituted_exactly() {
+    let _serial = FAKE_EXEC.lock().unwrap_or_else(|err| err.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let args_file = dir.path().join("args.txt");
     let hook = recording_hook(dir.path());
@@ -124,7 +125,7 @@ fn placeholders_are_substituted_exactly() {
         &["--input=%file%", "%folder%", "%name%", "%name%.part"],
     );
 
-    let outcome = outcome_of(run(&argv, &target, &HookOptions::default()));
+    let outcome = outcome_of(run_retrying_spawn(&argv, &target, &HookOptions::default()));
 
     assert_eq!(outcome.exit, HookExit::Code(0), "{}", outcome.message);
     assert_eq!(
@@ -160,13 +161,14 @@ fn unknown_placeholders_stay_literal() {
 
 #[test]
 fn a_path_with_spaces_stays_one_argument() {
+    let _serial = FAKE_EXEC.lock().unwrap_or_else(|err| err.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let args_file = dir.path().join("args.txt");
     let hook = recording_hook(dir.path());
     let target = target_file(dir.path(), "con espacios y  dobles.bin");
     let argv = command(&hook, &args_file, &["%file%"]);
 
-    let outcome = outcome_of(run(&argv, &target, &HookOptions::default()));
+    let outcome = outcome_of(run_retrying_spawn(&argv, &target, &HookOptions::default()));
 
     assert_eq!(outcome.exit, HookExit::Code(0), "{}", outcome.message);
     assert_eq!(
@@ -177,6 +179,7 @@ fn a_path_with_spaces_stays_one_argument() {
 
 #[test]
 fn a_file_name_with_shell_syntax_is_never_interpreted() {
+    let _serial = FAKE_EXEC.lock().unwrap_or_else(|err| err.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let args_file = dir.path().join("args.txt");
     let hook = recording_hook(dir.path());
@@ -185,7 +188,7 @@ fn a_file_name_with_shell_syntax_is_never_interpreted() {
     let target = target_file(dir.path(), "a$(touch pwned)`touch pwned2`;touch pwned3.bin");
     let argv = command(&hook, &args_file, &["%file%", "%name%"]);
 
-    let outcome = outcome_of(run(&argv, &target, &HookOptions::default()));
+    let outcome = outcome_of(run_retrying_spawn(&argv, &target, &HookOptions::default()));
 
     assert_eq!(outcome.exit, HookExit::Code(0), "{}", outcome.message);
     assert_eq!(
@@ -205,6 +208,7 @@ fn a_file_name_with_shell_syntax_is_never_interpreted() {
 
 #[test]
 fn a_hanging_hook_is_killed_by_the_timeout() {
+    let _serial = FAKE_EXEC.lock().unwrap_or_else(|err| err.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let hook = script(dir.path(), "hang.sh", "sleep 30");
     let target = target_file(dir.path(), "file.bin");
@@ -214,7 +218,7 @@ fn a_hanging_hook_is_killed_by_the_timeout() {
     };
 
     let started = Instant::now();
-    let outcome = outcome_of(run(&[hook.display().to_string()], &target, &options));
+    let outcome = outcome_of(run_retrying_spawn(&[hook.display().to_string()], &target, &options));
     let elapsed = started.elapsed();
 
     assert_eq!(outcome.exit, HookExit::Timeout);
@@ -237,6 +241,7 @@ fn a_hanging_hook_is_killed_by_the_timeout() {
 
 #[test]
 fn captured_output_is_bounded() {
+    let _serial = FAKE_EXEC.lock().unwrap_or_else(|err| err.into_inner());
     let dir = tempfile::tempdir().unwrap();
     // ~20 KiB on each stream, well above the capture limit.
     let hook = script(
@@ -246,7 +251,7 @@ fn captured_output_is_bounded() {
     );
     let target = target_file(dir.path(), "file.bin");
 
-    let outcome = outcome_of(run(
+    let outcome = outcome_of(run_retrying_spawn(
         &[hook.display().to_string()],
         &target,
         &HookOptions::default(),
