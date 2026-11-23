@@ -11,11 +11,12 @@ use serde_json::{json, Value};
 use tokio::sync::{mpsc, watch, Notify};
 
 use segmenta_core::engine::{
-    run as run_engine, Canceller, DownloadSpec, EngineConfig, EngineEvent, ResumeState,
+    run_with_bucket as run_engine, Canceller, DownloadSpec, EngineConfig, EngineEvent, ResumeState,
     SegmentStateRecord, TaskOutcome,
 };
 use segmenta_core::filename::{resolve_unique_path, sanitize_filename, suggest_filename};
 use segmenta_core::probe::HttpConfig;
+use segmenta_core::ratelimit::TokenBucket;
 use segmenta_core::{planner, CoreError};
 
 use crate::events::EventBus;
@@ -196,6 +197,9 @@ pub struct Manager {
     secrets: Arc<dyn SecretStore>,
     bus: Arc<EventBus>,
     settings: Mutex<Settings>,
+    http_bucket: Arc<TokenBucket>,
+    #[cfg(test)]
+    after_settings_persist: Option<Arc<dyn Fn() + Send + Sync>>,
     progress: Arc<Mutex<HashMap<String, ProgressSnapshot>>>,
     running: Arc<Mutex<HashMap<String, RunningTask>>>,
     /// Serialises the slot decision of [`Manager::start_pending_for_queue`]: two callers
@@ -218,11 +222,15 @@ impl Manager {
         shutdown: watch::Sender<bool>,
     ) -> Manager {
         let settings = store.settings().unwrap_or_default();
+        let http_bucket = Arc::new(TokenBucket::new(settings.global_speed_limit_bps));
         Manager {
             store,
             secrets,
             bus,
             settings: Mutex::new(settings),
+            http_bucket,
+            #[cfg(test)]
+            after_settings_persist: None,
             progress: Arc::new(Mutex::new(HashMap::new())),
             running: Arc::new(Mutex::new(HashMap::new())),
             start_lock: Mutex::new(()),
@@ -857,6 +865,7 @@ impl Manager {
         let cancel_for_task = cancel.clone();
         let wake = Arc::clone(&self.scheduler_wake);
         let queue = record.queue_name.clone();
+        let bucket = Arc::clone(&self.http_bucket);
 
         // Claim the slot while holding the same lock that owns the in-flight set: the
         // spawned task removes itself before releasing the lock, so a task that ends
@@ -878,7 +887,7 @@ impl Manager {
             .set_status(task_id, DownloadStatus::Downloading, None)
             .map_err(store_error)?;
         let join = tokio::spawn(async move {
-            let engine = tokio::spawn(run_engine(cfg, spec, event_tx, cancel_for_task));
+            let engine = tokio::spawn(run_engine(cfg, spec, event_tx, cancel_for_task, bucket));
             while let Some(event) = event_rx.recv().await {
                 handle_event(&store, &bus, &progress, &id, event);
             }
@@ -1543,6 +1552,9 @@ impl Manager {
         let Some(Value::Object(patch)) = params else {
             return Err(RpcError::invalid_params("params must be an object"));
         };
+        // Serialize persistence with both runtime views so concurrent patches cannot
+        // publish snapshots in a different order from their commits.
+        let mut current = self.settings.lock().unwrap_or_else(|err| err.into_inner());
         let updated = match self.store.update_settings(&patch) {
             Ok(settings) => settings,
             Err(StoreError::Invalid(message)) => {
@@ -1550,7 +1562,12 @@ impl Manager {
             }
             Err(err) => return Err(store_error(err)),
         };
-        *self.settings.lock().unwrap_or_else(|err| err.into_inner()) = updated.clone();
+        #[cfg(test)]
+        if let Some(hook) = &self.after_settings_persist {
+            hook();
+        }
+        self.http_bucket.set_rate(updated.global_speed_limit_bps);
+        *current = updated.clone();
         serde_json::to_value(updated).map_err(|err| RpcError::internal(err.to_string()))
     }
 
@@ -3867,4 +3884,115 @@ pub fn normalize_scheduled_at(raw: &str, clock: &dyn Clock) -> Result<String, Rp
             format!("invalid scheduled_at: {msg}; expected ISO-8601 with timezone (e.g. 2026-11-16T21:30:00Z) or HH:MM (e.g. 21:30)"),
         )
     })
+}
+
+#[cfg(test)]
+mod settings_race_tests {
+    use super::*;
+    use segmenta_core::testserver::{RangeServer, ServerConfig};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn global_speed_limit_concurrent_settings_follow_persistence_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::open(&dir.path().join("test.db")).unwrap());
+        store
+            .update_settings(
+                json!({
+                    "allow_local_downloads": true,
+                    "download_dir": dir.path().join("downloads")
+                })
+                .as_object()
+                .unwrap(),
+            )
+            .unwrap();
+        let secrets = Arc::from(crate::secrets::open_with(dir.path(), None).unwrap());
+        let (shutdown, _) = watch::channel(false);
+        let mut manager = Manager::new(store.clone(), secrets, Arc::new(EventBus::new()), shutdown);
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let entered_tx = Mutex::new(Some(entered_tx));
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let release_rx = Mutex::new(release_rx);
+        let first = AtomicBool::new(true);
+        manager.after_settings_persist = Some(Arc::new(move || {
+            if first.swap(false, Ordering::SeqCst) {
+                entered_tx.lock().unwrap().take().unwrap().send(()).unwrap();
+                release_rx.lock().unwrap().recv().unwrap();
+            }
+        }));
+        let manager = Arc::new(manager);
+        let a_manager = manager.clone();
+        let a = tokio::spawn(async move {
+            a_manager
+                .call(
+                    "settings.update",
+                    Some(json!({"global_speed_limit_bps": 1})),
+                )
+                .await
+                .unwrap()
+        });
+        tokio::time::timeout(Duration::from_secs(5), entered_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let b_manager = manager.clone();
+        let mut b = tokio::spawn(async move {
+            b_manager
+                .call(
+                    "settings.update",
+                    Some(json!({"global_speed_limit_bps": null})),
+                )
+                .await
+                .unwrap()
+        });
+        // If B can finish while A is paused after its commit, the old code applies A's
+        // stale snapshot last. A serialized implementation holds B until release.
+        let early_b = tokio::time::timeout(Duration::from_secs(1), &mut b).await;
+        release_tx.send(()).unwrap();
+        a.await.unwrap();
+        if early_b.is_err() {
+            b.await.unwrap();
+        }
+        assert_eq!(store.settings().unwrap().global_speed_limit_bps, None);
+        let settings = manager.call("settings.get", None).await.unwrap();
+        assert_eq!(settings["global_speed_limit_bps"], Value::Null);
+
+        let body = vec![42; 64 * 1024];
+        let server = RangeServer::start(ServerConfig {
+            body: body.clone(),
+            ..ServerConfig::default()
+        })
+        .await;
+        let added = manager
+            .call(
+                "download.add",
+                Some(json!({
+                    "url": server.url().to_string(), "filename": "race.bin", "connections": 1
+                })),
+            )
+            .await
+            .unwrap();
+        let id = added["task_id"].as_str().unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let status = manager
+                    .call("download.status", Some(json!({"task_id": id})))
+                    .await
+                    .unwrap();
+                assert_ne!(status["status"], "failed", "{status}");
+                if status["status"] == "completed" {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("persisted unlimited setting must reach HTTP worker");
+        assert_eq!(
+            std::fs::read(dir.path().join("downloads/race.bin")).unwrap(),
+            body
+        );
+        server.shutdown().await;
+    }
 }

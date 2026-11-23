@@ -359,6 +359,157 @@ async fn pause_accepts_a_pending_task_and_resume_starts_a_paused_one() {
     server.shutdown().await;
 }
 
+/// S10: simultaneous HTTP tasks must share the configured global bandwidth budget.
+#[tokio::test]
+async fn global_speed_limit_is_shared_by_concurrent_http_tasks() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+    let body = vec![42u8; MB];
+    let server = RangeServer::start(ServerConfig {
+        body: body.clone(),
+        ..ServerConfig::default()
+    })
+    .await;
+    let rate = 256 * 1024;
+    let settings = call(
+        &h.manager,
+        "settings.update",
+        json!({
+            "allow_local_downloads": true,
+            "download_dir": dir.path().join("downloads"),
+            "max_connections": 1,
+            "global_speed_limit_bps": rate,
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(settings["global_speed_limit_bps"], rate);
+
+    // Starting the clock before either request makes setup overhead conservative:
+    // it can hide an excess rate, but cannot create a false excess-rate failure.
+    let start = std::time::Instant::now();
+    let mut ids = Vec::new();
+    for filename in ["first.bin", "second.bin"] {
+        let added = call(
+            &h.manager,
+            "download.add",
+            json!({ "url": server.url().to_string(), "filename": filename, "connections": 1 }),
+        )
+        .await
+        .unwrap();
+        ids.push(added["task_id"].as_str().unwrap().to_string());
+    }
+    assert_ne!(ids[0], ids[1]);
+    for id in &ids {
+        let status = call(&h.manager, "download.status", json!({ "task_id": id }))
+            .await
+            .unwrap();
+        assert_eq!(status["status"], "downloading", "task {id}: {status}");
+    }
+
+    let elapsed = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let mut completed = 0;
+            for id in &ids {
+                let status = call(&h.manager, "download.status", json!({ "task_id": id }))
+                    .await
+                    .unwrap();
+                assert_ne!(status["status"], "failed", "task {id}: {status}");
+                if status["status"] == "completed" {
+                    completed += 1;
+                }
+            }
+            if completed == ids.len() {
+                break start.elapsed();
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("both HTTP transfers must complete within 30 seconds");
+    for filename in ["first.bin", "second.bin"] {
+        assert_eq!(
+            std::fs::read(dir.path().join("downloads").join(filename)).unwrap(),
+            body
+        );
+    }
+    server.shutdown().await;
+
+    // Two MiB at 256 KiB/s needs eight seconds, less the bucket's quarter-second
+    // initial burst. A full second of slack also covers polling and clock granularity.
+    assert!(
+        elapsed >= Duration::from_secs(7),
+        "two concurrent 1 MiB transfers exceeded the shared 256 KiB/s limit: {elapsed:?}"
+    );
+}
+
+/// An active HTTP transfer must observe a change to unlimited without restarting.
+#[tokio::test]
+async fn global_speed_limit_hot_update_to_unlimited() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+    let body = vec![42u8; MB];
+    let server = RangeServer::start(ServerConfig {
+        body: body.clone(),
+        ..ServerConfig::default()
+    })
+    .await;
+    call(
+        &h.manager,
+        "settings.update",
+        json!({
+            "allow_local_downloads": true,
+            "download_dir": dir.path().join("downloads"),
+            "max_connections": 1,
+            "global_speed_limit_bps": 64 * 1024,
+        }),
+    )
+    .await
+    .unwrap();
+    let added = call(
+        &h.manager,
+        "download.add",
+        json!({
+            "url": server.url().to_string(), "filename": "hot.bin", "connections": 1
+        }),
+    )
+    .await
+    .unwrap();
+    let id = added["task_id"].as_str().unwrap();
+    // Wait long enough for the worker to enter the original limited transfer.
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let status = call(&h.manager, "download.status", json!({"task_id": id}))
+        .await
+        .unwrap();
+    assert_eq!(status["status"], "downloading", "{status}");
+    call(
+        &h.manager,
+        "settings.update",
+        json!({"global_speed_limit_bps": null}),
+    )
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(4), async {
+        loop {
+            let status = call(&h.manager, "download.status", json!({"task_id": id}))
+                .await
+                .unwrap();
+            assert_ne!(status["status"], "failed", "{status}");
+            if status["status"] == "completed" {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("active transfer must observe unlimited setting");
+    assert_eq!(
+        std::fs::read(dir.path().join("downloads/hot.bin")).unwrap(),
+        body
+    );
+    server.shutdown().await;
+}
+
 #[tokio::test]
 async fn a_paused_task_reports_zero_speed_and_no_eta() {
     let dir = tempfile::tempdir().unwrap();

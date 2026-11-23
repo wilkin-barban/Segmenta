@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use tokio::sync::Notify;
+
 /// Tokens accumulated between two refills, capped by the burst capacity.
 pub fn refill(tokens: f64, rate_bps: f64, elapsed: Duration, capacity: f64) -> f64 {
     (tokens + rate_bps * elapsed.as_secs_f64()).min(capacity)
@@ -28,6 +30,7 @@ struct BucketState {
 pub struct TokenBucket {
     rate: AtomicU64,
     state: Mutex<BucketState>,
+    rate_changed: Notify,
 }
 
 impl TokenBucket {
@@ -40,29 +43,40 @@ impl TokenBucket {
                 tokens: if rate == 0 { 0.0 } else { capacity_for(rate) },
                 last: Instant::now(),
             }),
+            rate_changed: Notify::new(),
         }
     }
 
     /// Change the limit while downloads are running.
     pub fn set_rate(&self, rate_bps: Option<u64>) {
         let rate = rate_bps.unwrap_or(0);
-        self.rate.store(rate, Ordering::Relaxed);
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if self.rate.load(Ordering::Relaxed) == rate {
+            return;
+        }
+        self.rate.store(rate, Ordering::Relaxed);
         state.tokens = state.tokens.min(capacity_for(rate));
         state.last = Instant::now();
+        drop(state);
+        self.rate_changed.notify_waiters();
     }
 
     /// Wait until `bytes` may be sent.
     pub async fn acquire(&self, bytes: u64) {
         let mut remaining = bytes as f64;
         while remaining > 0.0 {
-            let rate = self.rate.load(Ordering::Relaxed);
-            if rate == 0 {
-                return;
-            }
-            let capacity = capacity_for(rate);
+            // Register before checking the rate so an update cannot be lost between
+            // calculating a sleep and starting to wait.
+            let changed = self.rate_changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
             let wait = {
                 let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                let rate = self.rate.load(Ordering::Relaxed);
+                if rate == 0 {
+                    return;
+                }
+                let capacity = capacity_for(rate);
                 let now = Instant::now();
                 state.tokens = refill(
                     state.tokens,
@@ -87,7 +101,12 @@ impl TokenBucket {
             match wait {
                 None if remaining <= 0.0 => return,
                 None => continue,
-                Some(wait) => tokio::time::sleep(wait).await,
+                Some(wait) => {
+                    tokio::select! {
+                        _ = tokio::time::sleep(wait) => {},
+                        _ = &mut changed => {},
+                    }
+                }
             }
         }
     }

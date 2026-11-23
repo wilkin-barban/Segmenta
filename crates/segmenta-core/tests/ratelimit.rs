@@ -61,6 +61,32 @@ fn limited_bucket_paces_a_burst() {
 }
 
 #[test]
+fn sleeping_low_rate_waiters_wake_when_unlimited() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    rt.block_on(async {
+        let bucket = TokenBucket::new(Some(1));
+        let first = bucket.acquire(2000);
+        let second = bucket.acquire(2000);
+        tokio::pin!(first, second);
+        assert!(tokio::time::timeout(Duration::from_millis(20), &mut first)
+            .await
+            .is_err());
+        assert!(tokio::time::timeout(Duration::from_millis(20), &mut second)
+            .await
+            .is_err());
+        bucket.set_rate(None);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            tokio::join!(first, second);
+        })
+        .await
+        .expect("both sleeping waiters must observe the unlimited rate");
+    });
+}
+
+#[test]
 fn rate_can_change_while_downloading() {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_time()

@@ -295,6 +295,17 @@ pub async fn run(
     cancel: Canceller,
 ) -> TaskOutcome {
     let bucket = Arc::new(TokenBucket::new(cfg.speed_limit_bps));
+    run_with_bucket(cfg, spec, events, cancel, bucket).await
+}
+
+/// Run an HTTP download using a bucket shared with other downloads.
+pub async fn run_with_bucket(
+    cfg: EngineConfig,
+    spec: DownloadSpec,
+    events: mpsc::Sender<EngineEvent>,
+    cancel: Canceller,
+    bucket: Arc<TokenBucket>,
+) -> TaskOutcome {
     let _ = events.send(EngineEvent::Probing).await;
     let mut info = match probe_step(&cfg, &spec, &cancel).await {
         ProbeStep::Ready(info) => info,

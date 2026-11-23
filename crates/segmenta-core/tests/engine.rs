@@ -63,6 +63,31 @@ async fn run_to_end(cfg: EngineConfig, spec: DownloadSpec) -> (TaskOutcome, Vec<
     (outcome, collector.await.expect("event collector"))
 }
 
+#[tokio::test]
+async fn standalone_http_unlimited_rates_download_the_whole_file() {
+    let body = payload(MB);
+    let server = RangeServer::start(ServerConfig {
+        body: body.clone(),
+        ..ServerConfig::default()
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    for (index, rate) in [None, Some(0)].into_iter().enumerate() {
+        let mut cfg = local_cfg(1);
+        cfg.speed_limit_bps = rate;
+        let path = dir.path().join(format!("unlimited-{index}.bin"));
+        let (outcome, _) = tokio::time::timeout(
+            Duration::from_secs(5),
+            run_to_end(cfg, spec_for(server.url(), path.clone())),
+        )
+        .await
+        .expect("unlimited HTTP download should complete promptly");
+        expect_completed(outcome);
+        assert_eq!(std::fs::read(path).unwrap(), body);
+    }
+    server.shutdown().await;
+}
+
 /// Run one download and cancel it as soon as the first 250 ms progress tick lands.
 async fn run_until_first_progress(
     cfg: EngineConfig,
