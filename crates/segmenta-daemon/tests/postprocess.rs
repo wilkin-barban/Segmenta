@@ -218,7 +218,11 @@ fn a_hanging_hook_is_killed_by_the_timeout() {
     };
 
     let started = Instant::now();
-    let outcome = outcome_of(run_retrying_spawn(&[hook.display().to_string()], &target, &options));
+    let outcome = outcome_of(run_retrying_spawn(
+        &[hook.display().to_string()],
+        &target,
+        &options,
+    ));
     let elapsed = started.elapsed();
 
     assert_eq!(outcome.exit, HookExit::Timeout);
