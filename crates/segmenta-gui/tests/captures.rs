@@ -42,10 +42,20 @@ fn screenshots_are_written_for_both_themes() {
         );
     }
     // The same directory must be reusable (the release gate runs it twice).
-    std::thread::sleep(Duration::from_millis(10));
+    std::thread::sleep(Duration::from_millis(200));
     let again = segmenta_gui::screenshots::capture(dir.path()).expect("second capture");
     assert_eq!(again.paths.len(), 2);
     assert!(again.rows > 0);
+
+    // A real output error must be returned rather than treated as a retryable frame.
+    std::thread::sleep(Duration::from_millis(200));
+    let blocked = tempfile::tempdir().unwrap();
+    std::fs::create_dir(blocked.path().join("0.0.2-light.png")).unwrap();
+    let error = match segmenta_gui::screenshots::capture(blocked.path()) {
+        Ok(_) => panic!("capture should report the output error"),
+        Err(error) => error,
+    };
+    assert!(error.contains("cannot write"), "unexpected error: {error}");
 }
 
 use segmenta_gui::gtk;

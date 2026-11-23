@@ -62,6 +62,7 @@ pub fn capture(dir: &Path) -> Result<CaptureOutcome, String> {
             let rows_in = Rc::clone(&rows_seen);
             let state_in = Rc::clone(&state_seen);
             let started = std::time::Instant::now();
+            let mut capture_started = None;
             let dir = dir.clone();
             let application = application.clone();
             gtk::glib::timeout_add_local(Duration::from_millis(250), move || {
@@ -80,30 +81,44 @@ pub fn capture(dir: &Path) -> Result<CaptureOutcome, String> {
                 rows_in.set(window.rows().len());
                 *state_in.borrow_mut() = format!("{:?}", window.view_state());
                 let step = phase.get();
-                phase.set(step + 1);
                 match step {
                     0 => {
                         adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceLight)
                     }
                     1 => {}
-                    2 => {
-                        if let Err(err) = save(&window, &dir.join("0.0.2-light.png"), &written) {
-                            *failure.borrow_mut() = Some(err);
+                    2 | 4 => {
+                        let started = capture_started.get_or_insert_with(std::time::Instant::now);
+                        let filename = if step == 2 {
+                            "0.0.2-light.png"
+                        } else {
+                            "0.0.2-dark.png"
+                        };
+                        if started.elapsed() >= Duration::from_secs(6) {
+                            *failure.borrow_mut() =
+                                Some("the window produced no render node".to_string());
                             application.quit();
                             return glib::ControlFlow::Break;
                         }
-                        adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
-                    }
-                    3 => {}
-                    4 => {
-                        if let Err(err) = save(&window, &dir.join("0.0.2-dark.png"), &written) {
-                            *failure.borrow_mut() = Some(err);
+                        match save(&window, &dir.join(filename), &written) {
+                            Ok(false) => return glib::ControlFlow::Continue,
+                            Err(err) => {
+                                *failure.borrow_mut() = Some(err);
+                                application.quit();
+                                return glib::ControlFlow::Break;
+                            }
+                            Ok(true) => capture_started = None,
                         }
-                        application.quit();
-                        return glib::ControlFlow::Break;
+                        if step == 2 {
+                            adw::StyleManager::default()
+                                .set_color_scheme(adw::ColorScheme::ForceDark);
+                        } else {
+                            application.quit();
+                            return glib::ControlFlow::Break;
+                        }
                     }
                     _ => {}
                 }
+                phase.set(step + 1);
                 glib::ControlFlow::Continue
             });
         });
@@ -124,16 +139,18 @@ fn save(
     window: &SegmentaWindow,
     path: &Path,
     written: &Rc<RefCell<Vec<PathBuf>>>,
-) -> Result<(), String> {
-    let texture = render(window)?;
+) -> Result<bool, String> {
+    let Some(texture) = render(window)? else {
+        return Ok(false);
+    };
     texture
         .save_to_png(path)
         .map_err(|err| format!("cannot write {}: {err}", path.display()))?;
     written.borrow_mut().push(path.to_path_buf());
-    Ok(())
+    Ok(true)
 }
 
-fn render(window: &SegmentaWindow) -> Result<gtk::gdk::Texture, String> {
+fn render(window: &SegmentaWindow) -> Result<Option<gtk::gdk::Texture>, String> {
     let widget = window.window();
     let paintable = gtk::WidgetPaintable::new(Some(&widget));
     let snapshot = gtk::Snapshot::new();
@@ -142,20 +159,22 @@ fn render(window: &SegmentaWindow) -> Result<gtk::gdk::Texture, String> {
         f64::from(CAPTURE_WIDTH),
         f64::from(CAPTURE_HEIGHT),
     );
-    let node = snapshot
-        .to_node()
-        .ok_or_else(|| "the window produced no render node".to_string())?;
+    let Some(node) = snapshot.to_node() else {
+        return Ok(None);
+    };
     // `render_texture` requires a realized renderer: create a cairo renderer and
     // realize it against the window's surface before painting.
     let surface = widget
         .surface()
         .ok_or_else(|| "the window has no GdkSurface".to_string())?;
     let renderer = gtk::gsk::CairoRenderer::new();
-    let _ = renderer.realize(Some(&surface));
+    renderer
+        .realize(Some(&surface))
+        .map_err(|err| format!("cannot realize renderer: {err}"))?;
     let texture = renderer.render_texture(&node, None::<&gtk::graphene::Rect>);
     // A realized renderer must be unrealized before it is disposed.
     renderer.unrealize();
-    Ok(texture)
+    Ok(Some(texture))
 }
 
 fn demo_row() -> serde_json::Value {
