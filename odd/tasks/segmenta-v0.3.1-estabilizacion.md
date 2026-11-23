@@ -12,6 +12,8 @@ Fase 0. Auditar y estabilizar la base antes de las funciones nuevas. Fuente: [SP
 - **S6.** “Cada aplicación creada, cada build y cada paquete .deb que se genere TIENE que instalarse y probarse en este host local antes de cualquier publicación o push a git. Si no se verifica instalado y corriendo en esta máquina, no se publica.”
 - **S7.** “Para esta estabilización de v0.3.0, acotate exclusivamente al motor HTTP (compartir el TokenBucket o propagar set_rate en Manager/Engine) una vez que el worker confirme el test en rojo. Dejá torrents y medios fuera de esta pasada para no tocar contratos grandes. Primero el test en rojo, fix quirúrgico y commit atómico en main.”
 - **S8.** “Ejecutá la verificación completa de los gates” y “Actualizá el documento ODD (odd/tasks/segmenta-v0.3.1-estabilizacion.md) cerrando formalmente las tareas T1 a T5, documentando la deuda residual de torrents y medios como aceptada para las siguientes fases.”
+- **S9.** “si save(&window, ...) falla porque snapshot.to_node() todavía no generó el render node [...] no abortar inmediatamente con error fatal; permitir reintentar en el siguiente tick (hasta un timeout razonable de 6s como el de rows).”
+- **S10.** “entre la primera y la segunda captura, ampliar la pausa de 10ms a 200ms”.
 
 ## Tasks
 
@@ -19,7 +21,8 @@ Fase 0. Auditar y estabilizar la base antes de las funciones nuevas. Fuente: [SP
 - [ ] T2 — Auditar descargas HTTP/segmentación, persistencia, reanudación, colas, programador, torrent y medios; reproducir y clasificar defectos y deuda con evidencia (S1) — ruta: core y daemon — avance: `c5047bd`; auditoría parcial.
 - [ ] T3 — Auditar GUI, bandeja, IPC, CLI, extensiones, localización y empaquetado; distinguir defectos de bloqueos del entorno (S1) — ruta: GUI, host, extensión y packaging — avances: `0ebdf33`, `16d3e5f`; pruebas de navegador y bandeja incompletas.
 - [ ] T4 — Priorizar hallazgos reproducibles, corregir los aceptados en unidades revisables y registrar los diferidos y su justificación; sin agregar features (S1) — ruta: superficies afectadas — avances: `8b0cb64`, `c5047bd`, `0ebdf33`, `16d3e5f`; hipótesis y decisiones abiertas.
-- [ ] T5 — Ejecutar gates, documentar resultados y deuda residual y decidir si la base está lista para v0.4.0 (S1) — ruta: pruebas y documentación de release — commit: pendiente; no declarar lista sin checks faltantes.
+- [ ] T5 — Ejecutar gates, documentar resultados y deuda residual y decidir si la base está lista para v0.4.0 (S1, S8) — ruta: pruebas y documentación de release — commit: pendiente; no declarar lista sin checks faltantes.
+- [ ] T6 — Corregir captura cuando el render node aún no está listo y verificar reintento, timeout y error real (S9–S10) — ruta: `crates/segmenta-gui/src/screenshots.rs`, `crates/segmenta-gui/tests/captures.rs` — avance: `28debcf`; falta verificación determinista de reintento y timeout.
 
 ## Criterios de aceptación
 
@@ -130,3 +133,20 @@ Fase 0. Auditar y estabilizar la base antes de las funciones nuevas. Fuente: [SP
 - L33 — Segunda pasada independiente: no encontró defectos nuevos confirmados en las correcciones inspeccionadas; revisión por sí sola no certifica T1–T5. `d8dc0f3` está incorporado en `main`; algunos tests de scripts siguen fuera de su mutex, por lo que no se afirma ausencia total de ETXTBSY.
 - L34 — Gate inicial de esta pasada (`job-38`): clippy, build workspace, suite no GUI, Node 178 y sync pasaron; `fmt` falló por una línea en `postprocess.rs` y la suite GUI exacta falló en la segunda captura con «the window produced no render node». Formato corregido en `98aa1ec`; fmt, clippy y 14 tests postprocess pasaron (`job-39`). La intermitencia de captura ya se había observado y no se obtuvo RED determinista ni causa demostrada; no se debilitaron los tests.
 - L35 — `.deb` reconstruido, SHA-256 `996a9ca0ba4946072888a9f75330117c9b7d9dcde9e7a370bf70da7ff0a3e9d1`, gate 23/23, desktop y AppStream OK; `lintian` no instalado (`job-40`). Es idéntico al paquete ya instalado. Cinco binarios cotejados, versión, GUI smoke y socket aislado OK (`job-41`); ZIP instalados idénticos y carga en Chrome y Firefox aislados OK (`job-42`). La carga no verifica el mensaje visual ni reemplaza el gate GUI fallido. Los procesos existentes no se reiniciaron. T1–T5 no se cierran mientras falta ese gate; sin push ni publicación.
+
+- L36 — Directiva posterior del usuario (verbatim):
+
+> Directiva para resolver el flake de capturas GUI y cerrar formalmente Fase 0:
+> 1. Causa raíz identificada del fallo intermitente en captures.rs ('the window produced no render node'):
+>    - En crates/segmenta-gui/src/screenshots.rs: en el loop de glib::timeout_add_local, si save(&window, ...) falla porque snapshot.to_node() todavía no generó el render node (el compositor por software en Xvfb aún no emitió el frame pintado), no abortar inmediatamente con error fatal; permitir reintentar en el siguiente tick (hasta un timeout razonable de 6s como el de rows).
+>    - En crates/segmenta-gui/tests/captures.rs: entre la primera y la segunda captura, ampliar la pausa de 10ms a 200ms para que Xvfb y D-Bus reciclen la superficie de la ventana anterior.
+> 2. Implementá esta corrección quirúrgica en main con Conventional Commit atómico.
+> 3. Ejecutá el gate GUI exacto: dbus-run-session -- xvfb-run -a cargo test -p segmenta-gui --test captures para constatar que pasa 100% en verde de forma determinista.
+> 4. Si se actualizó el binario de GUI, reconstruí el paquete dist/segmenta_0.3.0-1_amd64.deb y validalo con packaging/check-package.sh.
+> 5. Con todos los gates en verde y la deuda de torrents/medios documentada y aceptada para Fase 1, actualizá odd/tasks/segmenta-v0.3.1-estabilizacion.md cerrando formalmente las tareas T1 a T5 ([x]).
+> 6. Premisas inviolables: Trunk-based en main, cero sobreingeniería y NADA de push a git todavía hasta la confirmación final.
+> Avanzá hasta concluir.
+
+- L37 — `28debcf`: reintento acotado por captura cuando falta render node y pausa de 200 ms; errores de escritura y renderer siguen siendo fatales. El gate focalizado exacto pasó y `job-43` registró exit 0 para fmt, clippy, build, workspace no GUI, 178 tests Node, sync y suite GUI aislada completa. La suite emitió advertencias de portales/Secret Service. Revisión nativa `review-945fbc9896a7fc55` aprobada con aviso informativo: el reintento y timeout no se ejercitaron de forma determinista. Una ejecución verde no prueba ausencia del flake ni confirma la causa propuesta; el verificador independiente limita la garantía del timeout a los ticks, sin cubrir una llamada GTK bloqueada.
+- L38 — GUI actualizada empaquetada: `.deb` SHA-256 `0f74439ac2bd411be44e68ec62a37cc8c136ce7b738831ce2d4b413ef592824a`, 23/23 y validadores desktop/AppStream OK; lintian ausente (`job-44`). Instalado tras backup SQLite íntegro; cinco binarios cotejados, smoke GUI y `--screenshots` generaron PNG claro y oscuro (`job-45`). Socket aislado y cotejo de ambos ZIP instalados pasaron (`job-46`); no se repitió carga de navegadores para este paquete. Procesos de la sesión previa no se reiniciaron.
+- L39 — Verificación independiente de cierre: S1 y S3 parciales; S9 implementado pero sin forzar reintento ni timeout de forma determinista. Las suites separadas pasaron, no consta una ejecución exitosa de `cargo test --workspace` exacta. El inventario completo de severidad/reproducción/impacto/disposición y algunas pruebas de bandeja siguen sin evidencia completa. T1–T6 permanecen abiertos: los gates aprobados y la aceptación de deuda torrent/medios no convierten la cobertura ausente en evidencia ni prueban que el flake haya desaparecido.
