@@ -461,10 +461,10 @@ fn a_ten_megabyte_download_survives_a_daemon_kill_and_matches_its_checksum() {
         expected,
         "resumed bytes must not be corrupted"
     );
-    let status = sandbox.cli_one(&["status", &task_id]);
+    let status = sandbox.cli_in("en_US.UTF-8", &["status", &task_id]);
     assert_eq!(status.code, 0);
     // The status block prints the localized label, not the protocol word (S21).
-    assert!(status.stdout.contains("Completed") || status.stdout.contains("Completada"));
+    assert!(status.stdout.contains("Completed"));
     assert!(!status.stdout.contains("completed"));
 }
 
