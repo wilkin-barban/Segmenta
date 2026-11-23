@@ -41,6 +41,11 @@
     <control>touch</control>
   </supports>
   <releases>
+    <release version="0.3.1" date="2026-11-23">
+      <description>
+        <p>Stabilizes HTTP bandwidth limits, daemon socket selection, browser error messages and screenshot capture.</p>
+      </description>
+    </release>
     <release version="0.0.2" date="2026-11-11">
       <description>
         <p>Fixes from the first remote QA round: the Secret Service keyring is now

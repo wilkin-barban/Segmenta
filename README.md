@@ -101,14 +101,18 @@ sólo después de que el daemon demuestra que tiene los bytes.
 
 ## Instalación
 
+**Estado de v0.3.1:** estabiliza el límite global HTTP, la selección de socket, los errores de
+extensión y las capturas Xvfb; también corrige la prueba de locale de la CLI y el cálculo de
+saturación de disco. La gestión del límite y las hipótesis de pausa/reanudación de torrent y medios
+quedan diferidas a la Fase 1; el reintento de captura no tiene cobertura determinista de timeout.
+
 ### Opción recomendada: Release `.deb`
 
-Descargá el paquete y los checksums desde la
-[Release v0.3.0](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.3.0), luego:
+Descargá el paquete desde la
+[Release v0.3.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.3.1), luego:
 
 ```bash
-sha256sum -c segmenta_0.3.0-SHA256SUMS
-sudo apt install ./segmenta_0.3.0-1_amd64.deb
+sudo apt install ./segmenta_0.3.1-1_amd64.deb
 systemctl --user daemon-reload
 systemctl --user enable --now segmenta.socket
 segmenta hello
@@ -130,8 +134,8 @@ sudo apt-get install build-essential pkg-config libgtk-4-dev libadwaita-1-dev \
 packaging/fetch-ytdlp.sh
 cargo build --release --workspace
 cargo deb -p segmenta-gui --no-build -o dist/
-packaging/check-package.sh dist/segmenta_0.3.0-1_amd64.deb 0.3.0
-sudo apt install ./dist/segmenta_0.3.0-1_amd64.deb
+packaging/check-package.sh dist/segmenta_0.3.1-1_amd64.deb 0.3.1
+sudo apt install ./dist/segmenta_0.3.1-1_amd64.deb
 systemctl --user daemon-reload
 systemctl --user enable --now segmenta.socket
 ```
@@ -260,7 +264,8 @@ en una sola vista; estos son los enlaces directos:
 
 | Versión | Publicación | Release | Notas |
 | --- | --- | --- | --- |
-| **0.3.0** (última) | 2026-11-16 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.3.0) | [Notas](packaging/release-notes-0.3.0.md) |
+| **0.3.1** (última) | 2026-11-23 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.3.1) | [Notas](packaging/release-notes-0.3.1.md) |
+| 0.3.0 | 2026-11-16 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.3.0) | [Notas](packaging/release-notes-0.3.0.md) |
 | 0.2.4 | 2026-11-15 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.4) | [Notas](packaging/release-notes-0.2.4.md) |
 | 0.2.3 | 2026-11-15 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.3) | [Notas](packaging/release-notes-0.2.3.md) |
 | 0.2.1 | 2026-11-14 | [Release](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.2.1) | [Notas](packaging/release-notes-0.2.1.md) |
@@ -273,6 +278,9 @@ en una sola vista; estos son los enlaces directos:
 
 ## Estado y límites
 
+- **v0.3.1**: [Release y assets](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.3.1).
+  Estabiliza HTTP, IPC, mensajes de extensión y captura; los riesgos de torrent y medios quedan
+  diferidos y la recuperación del render node no tiene prueba determinista.
 - **v0.3.0 publicada**: [Release y assets](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.3.0).
   Velocidad real visible en la fila y en torrents/streams, descargas programadas por fecha y hora,
   icono en la bandeja del sistema con acciones de pausa, reanudación y cancelación, y cierre a

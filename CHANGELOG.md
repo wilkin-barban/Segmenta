@@ -5,6 +5,22 @@ Todos los cambios notables de Segmenta se documentan en este archivo.
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el proyecto usa
 [Versionado semántico](https://semver.org/lang/es/).
 
+## [0.3.1] - 2026-11-23
+
+### Fixed
+
+- La prueba de reanudación de la CLI fija su locale para no fallar en portugués.
+- El cálculo de espacio libre conserva la saturación con tipos de distinta anchura y pasa Clippy.
+- Las descargas HTTP comparten el límite global y reciben los cambios de tasa en caliente.
+- El daemon respeta `SEGMENTA_SOCKET`; `--socket` conserva la precedencia.
+- La extensión muestra un mensaje específico cuando el daemon no está disponible.
+- Las capturas Xvfb reintentan la ausencia transitoria del render node con un plazo acotado.
+
+### Limitaciones conocidas
+
+- Los límites para torrent y medios y las hipótesis de pausa/reanudación quedan diferidos a la Fase 1.
+- El reintento y su timeout de capturas no se han forzado de forma determinista en pruebas.
+
 ## [0.3.0] - 2026-11-15
 
 Velocidad real visible en la fila de descargas y en torrents/streams, descargas programadas para una

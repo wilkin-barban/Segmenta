@@ -3366,7 +3366,7 @@ dependencies = [
 
 [[package]]
 name = "segmenta-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "clap",
  "hex 0.4.3",
@@ -3383,7 +3383,7 @@ dependencies = [
 
 [[package]]
 name = "segmenta-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "futures-util",
  "hex 0.4.3",
@@ -3403,7 +3403,7 @@ dependencies = [
 
 [[package]]
 name = "segmenta-daemon"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "clap",
  "futures-util",
@@ -3430,7 +3430,7 @@ dependencies = [
 
 [[package]]
 name = "segmenta-gui"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "glib",
  "gtk4",
@@ -3444,7 +3444,7 @@ dependencies = [
 
 [[package]]
 name = "segmenta-host"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "futures-util",
  "libc",
@@ -3457,7 +3457,7 @@ dependencies = [
 
 [[package]]
 name = "segmenta-i18n"
-version = "0.3.0"
+version = "0.3.1"
 
 [[package]]
 name = "semver"
