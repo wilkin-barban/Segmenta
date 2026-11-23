@@ -16,10 +16,10 @@ Release en `main`; no afirmar verificaciones ni publicación sin evidencia. La F
 
 ## Tasks
 
-- [x] T1 — Actualizar versión y documentación de release (S1–S2) — ruta: manifests, metainfo, notas, README, CHANGELOG — commit: pendiente; validado en `job-50`.
-- [x] T2 — Construir y validar artefactos, verificar instalación y smoke en host (S3–S4) — ruta: `dist/`, packaging — commit: pendiente; `job-50`, `job-51`, `job-52`.
-- [ ] T3 — Commitear, revisar y publicar en orden, sin inferir éxito (S5–S6) — ruta: Git, GitHub — commit: pendiente.
-- [ ] T4 — Registrar publicación y comenzar investigación T1 de Fase 1 (S7–S8) — ruta: `odd/tasks/` — commit: pendiente.
+- [x] T1 — Actualizar versión y documentación de release (S1–S2) — ruta: manifests, metainfo, notas, README, CHANGELOG — commit: `c3beba4`; validado en `job-50`.
+- [x] T2 — Construir y validar artefactos, verificar instalación y smoke en host (S3–S4) — ruta: `dist/`, packaging — commit: `c3beba4`; `job-50`, `job-51`, `job-52`.
+- [x] T3 — Commitear, revisar y publicar en orden, sin inferir éxito (S5–S6) — ruta: Git, GitHub — commit: `c3beba4`; tag `v0.3.1` y release verificados.
+- [x] T4 — Registrar publicación y comenzar investigación T1 de Fase 1 (S7–S8) — ruta: `odd/tasks/` — commit: pendiente; T1 de Fase 1 queda abierta.
 
 ## Log
 
@@ -47,3 +47,4 @@ Release en `main`; no afirmar verificaciones ni publicación sin evidencia. La F
 
 - L3 — `job-50`: fmt, clippy, build, suite no GUI, Node 178, sync y suite GUI aislada pasaron. Paquete 0.3.1: gate 23/23, desktop y AppStream OK; lintian ausente. Metainfo y manifests 0.3.1 de ambos ZIP embebidos verificados. SHA-256 `.deb`: `936f8d5b2ad561962c4c8a1418e1644c956266b20dc7854d95a45c24c325493c`.
 - L4 — `job-51`: instalado con respaldo SQLite íntegro y paquete anterior de recuperación validado; cinco binarios cotejados, versión, smoke GUI y capturas OK. `job-52`: daemon 0.3.1 y socket aislado OK, ambos ZIP instalados coinciden y cargaron en Chrome/Firefox con perfiles temporales. Procesos de la sesión previa no reiniciados; no se verificó visualmente el error de extensión.
+- L5 — Commit `c3beba4`, push de `main` y tag anotado `v0.3.1` realizados; [release publicada](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.3.1) y verificada por GitHub como no draft con los tres assets (`job-53` a `job-56`). Los digests remotos se reportaron `null`; no se afirma cotejo remoto. Revisión nativa `review-e22bacc809fe0a95` aprobada con aviso informativo sobre cobertura determinista de capturas.

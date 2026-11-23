@@ -9,7 +9,7 @@ Fase 1. Depende del cierre documentado de v0.3.1. Fuente: [SPEC-013](../../docs/
 
 ## Tasks
 
-- [ ] T1 — Validar contratos IPC, capacidades del backend torrent y precedentes de postprocesado e inhibición antes de elegir APIs (S1) — ruta: core, daemon e IPC — commit: pendiente.
+- [ ] T1 — Validar contratos IPC, capacidades del backend torrent y precedentes de postprocesado e inhibición antes de elegir APIs (S1) — ruta: core, daemon e IPC — en investigación; commit: pendiente.
 - [ ] T2 — Planificar e implementar cliente MCP por stdio para listar, agregar y actuar sobre tareas, reutilizando IPC y definiendo instalación sin modificar configuración ajena sin consentimiento (S1) — ruta: nuevo crate MCP y documentación — commit: pendiente.
 - [ ] T3 — Integrar extracción opcional tras verificación, formatos y contraseñas, manejo de multipartes y herramienta externa; conservar original salvo opción explícita y éxito comprobado (S1) — ruta: postprocesado daemon — commit: pendiente.
 - [ ] T4 — Inhibir suspensión mientras haya transferencias activas y liberar al pausar, terminar o fallar; degradar si D-Bus no está disponible (S1) — ruta: scheduler/daemon — commit: pendiente.
@@ -49,3 +49,10 @@ Fase 1. Depende del cierre documentado de v0.3.1. Fuente: [SPEC-013](../../docs/
 
 > Cada documento ODD debe seguir estrictamente el estándar: encabezado, Specs con S#, Tasks con T# vinculadas a sus S#, criterios de aceptación, pruebas previstas y riesgos.
 > Ojo: NO implementes nada de código todavía. Tu tarea ahora es exclusivamente de investigación, auditoría y diseño de los artefactos ODD sin sobreingeniería. Dejame los planes armados y reportame el resultado.
+
+- L2 — Inicio autorizado tras publicación v0.3.1 (pedido textual):
+
+> Abrí odd/tasks/segmenta-v0.4.0-automatizacion.md para dar inicio formal a la Fase 1 y comenzá con la tarea T1 (validar contratos IPC, capacidades torrent y postprocesado/inhibición).
+
+- L3 — Fase 1 iniciada tras la [publicación v0.3.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.3.1). T1 en investigación; aún no se autorizó implementación de T2–T6.
+- L4 — Investigación inicial de T1: el daemon usa `download.add/list/pause/resume/delete` (`crates/segmenta-daemon/src/manager.rs`) y socket `$XDG_RUNTIME_DIR/segmenta/daemon.sock`, no los nombres `task.*` ni la ruta propuesta en SPEC-013. La versión fijada de `librqbit` es 9.1.0 y `torrent.rs` usa opciones por defecto, sin modo secuencial explícito; capacidad de cambiar prioridad en caliente aún no validada. El postprocesado actual usa argv directo y límites de tiempo/salida; no existe extracción automática de descargas. El daemon no declara `zbus` directamente; la elección del bus y la disponibilidad de inhibición deben verificarse antes de implementar. Se identificaron hipótesis de ciclo de vida torrent y directorios, no reproducidas; no se las presenta como defectos confirmados. T1 permanece abierta hasta validar las capacidades externas y los límites aplicables.

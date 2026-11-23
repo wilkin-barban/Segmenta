@@ -161,3 +161,4 @@ Fase 0. Auditar y estabilizar la base antes de las funciones nuevas. Fuente: [SP
 > 4. Recordá: NADA de push a git todavía. Una vez hecho el commit, quedate en idle.
 
 - L41 — Se registra la aceptación del PO de la deuda de torrent/medios y de las limitaciones de determinismo para Fase 1. La aprobación no constituye una nueva ejecución ni prueba los caminos no ejercitados; los resultados observados y las limitaciones de L37–L39 permanecen vigentes. No se marcan tareas como completadas sin evidencia suficiente para sus criterios.
+- L42 — Por decisión del PO se publicó [v0.3.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.3.1) y se declaró el cierre formal de Fase 0. El tag anotado apunta a `c3beba4`; GitHub confirmó release no draft con el `.deb` y ambos ZIP. Esta decisión no modifica las limitaciones técnicas ni convierte las tareas parciales en verificadas; T1–T6 conservan su estado documentado.
