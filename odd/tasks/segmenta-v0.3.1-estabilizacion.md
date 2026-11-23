@@ -11,6 +11,7 @@ Fase 0. Auditar y estabilizar la base antes de las funciones nuevas. Fuente: [SP
 - **S5.** “Cero sobreingeniería: Soluciones quirúrgicas, simples y directas a los bugs o deuda que encuentres, sin meter abstracciones pesadas.”
 - **S6.** “Cada aplicación creada, cada build y cada paquete .deb que se genere TIENE que instalarse y probarse en este host local antes de cualquier publicación o push a git. Si no se verifica instalado y corriendo en esta máquina, no se publica.”
 - **S7.** “Para esta estabilización de v0.3.0, acotate exclusivamente al motor HTTP (compartir el TokenBucket o propagar set_rate en Manager/Engine) una vez que el worker confirme el test en rojo. Dejá torrents y medios fuera de esta pasada para no tocar contratos grandes. Primero el test en rojo, fix quirúrgico y commit atómico en main.”
+- **S8.** “Ejecutá la verificación completa de los gates” y “Actualizá el documento ODD (odd/tasks/segmenta-v0.3.1-estabilizacion.md) cerrando formalmente las tareas T1 a T5, documentando la deuda residual de torrents y medios como aceptada para las siguientes fases.”
 
 ## Tasks
 
@@ -31,6 +32,10 @@ Fase 0. Auditar y estabilizar la base antes de las funciones nuevas. Fuente: [SP
 - Reproducir cada bug antes del arreglo y fijarlo mediante prueba pública; conservar comportamiento previo relacionado.
 - Ejecutar tests de workspace, GUI/extensiones y validación de paquetes según disponibilidad; registrar comandos y resultados reales.
 - Pruebas manuales aisladas de bandeja, programación y descargas en entorno soportado; documentar los casos no ejecutados.
+
+## Deuda residual aceptada para fases posteriores
+
+- **Torrent y medios:** el usuario acepta diferir a fases posteriores la investigación y eventual corrección de las hipótesis de pausa/reanudación y del tratamiento de manifiestos HLS/DASH (L31). Son riesgos potencialmente importantes, no defectos reproducidos; no se modificaron en esta fase. La aceptación no demuestra que funcionen ni aprueba una publicación.
 
 ## Riesgos
 
@@ -108,3 +113,20 @@ Fase 0. Auditar y estabilizar la base antes de las funciones nuevas. Fuente: [SP
 - L29 — Gates de ambos cambios: fmt, clippy workspace, suite no GUI, Node 178 y sync pasaron (`job-27`); GUI con D-Bus aislado y Cairo pasó (`job-30`). La corrida GUI anterior falló en captura de render (`job-28`); el test aislado con Cairo pasó (`job-29`), sin causa concluyente. OpenSpec asigna 1029 también a `ERR_NETWORK`; inspección no encontró ese error como respuesta RPC síncrona hacia el navegador hoy, pero la pérdida de `error.data.code` es deuda de contrato.
 - L30 — Paquete actualizado SHA-256 `996a9ca0ba4946072888a9f75330117c9b7d9dcde9e7a370bf70da7ff0a3e9d1`: gate 23/23 (`job-31`), instalado con backup online íntegro y cinco binarios cotejados; smoke GUI OK (`job-32`). Daemon y CLI instalados verificaron `SEGMENTA_SOCKET` en estado aislado (`job-33`). El service worker de la extensión Chromium instalada cargó en Chrome con perfil temporal (`job-34`), sin prueba visual del error. La instalación temporal de Firefox vía ruta falló con HTTP 500 (`job-35`); la sesión de Firefox por separado inició (`job-36`) y la extensión instalada cargó al enviar los bytes del ZIP a geckodriver (`job-37`). Eso verifica carga, no el mensaje visual. Los procesos de la sesión real no se reiniciaron.
 - L31 — Revisión nativa adicional `review-4a67d602ec45ede7` aprobada sobre 31 archivos y 1.213 líneas acumuladas; no reemplaza las verificaciones por unidad. Auditoría de torrent/medios: inspección señala posibles problemas de pausa y reanudación, incluida una ruta que podría tratar manifiestos HLS/DASH como descargas HTTP; no se reprodujeron ni modificaron, conforme al alcance acotado de esta pasada. Son riesgos potencialmente importantes pendientes de prueba aislada y decisión de alcance, no defectos confirmados. Sin push ni publicación.
+
+- L32 — Directiva posterior del usuario (verbatim):
+
+> Directiva de verificación rigurosa de Fase 0 antes de publicación:
+> 1. Dale una segunda pasada rigurosa a todas las correcciones, gates y estado del workspace (incorporado commit d8dc0f3 en main para serializar los tests de postprocess ante ETXTBSY).
+> 2. Ejecutá la verificación completa de los gates:
+>    - fmt y clippy workspace.
+>    - Tests de workspace: suites no-gráficas y suite GUI bajo entorno aislado (dbus-run-session -- xvfb-run -a cargo test -p segmenta-gui).
+>    - Reconstruí el paquete .deb final en dist/ y pasá packaging/check-package.sh.
+>    - Host testing: comprobá la instalación en este host local con sus smoke tests de socket, GUI y extensiones.
+> 3. Actualizá el documento ODD (odd/tasks/segmenta-v0.3.1-estabilizacion.md) cerrando formalmente las tareas T1 a T5, documentando la deuda residual de torrents y medios como aceptada para las siguientes fases.
+> 4. Premisas inviolables: Trunk-based en main, cero sobreingeniería y NADA de push a git todavía hasta dar el visto bueno final.
+> Comenzá ahora.
+
+- L33 — Segunda pasada independiente: no encontró defectos nuevos confirmados en las correcciones inspeccionadas; revisión por sí sola no certifica T1–T5. `d8dc0f3` está incorporado en `main`; algunos tests de scripts siguen fuera de su mutex, por lo que no se afirma ausencia total de ETXTBSY.
+- L34 — Gate inicial de esta pasada (`job-38`): clippy, build workspace, suite no GUI, Node 178 y sync pasaron; `fmt` falló por una línea en `postprocess.rs` y la suite GUI exacta falló en la segunda captura con «the window produced no render node». Formato corregido en `98aa1ec`; fmt, clippy y 14 tests postprocess pasaron (`job-39`). La intermitencia de captura ya se había observado y no se obtuvo RED determinista ni causa demostrada; no se debilitaron los tests.
+- L35 — `.deb` reconstruido, SHA-256 `996a9ca0ba4946072888a9f75330117c9b7d9dcde9e7a370bf70da7ff0a3e9d1`, gate 23/23, desktop y AppStream OK; `lintian` no instalado (`job-40`). Es idéntico al paquete ya instalado. Cinco binarios cotejados, versión, GUI smoke y socket aislado OK (`job-41`); ZIP instalados idénticos y carga en Chrome y Firefox aislados OK (`job-42`). La carga no verifica el mensaje visual ni reemplaza el gate GUI fallido. Los procesos existentes no se reiniciaron. T1–T5 no se cierran mientras falta ese gate; sin push ni publicación.
