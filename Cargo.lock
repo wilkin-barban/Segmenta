@@ -3460,6 +3460,15 @@ name = "segmenta-i18n"
 version = "0.3.1"
 
 [[package]]
+name = "segmenta-mcp"
+version = "0.3.1"
+dependencies = [
+ "libc",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
