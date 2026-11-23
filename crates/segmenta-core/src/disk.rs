@@ -104,7 +104,9 @@ fn free_bytes(fd: RawFd) -> std::io::Result<u64> {
     if rc != 0 {
         return Err(std::io::Error::last_os_error());
     }
-    Ok((stat.f_bavail as u64).saturating_mul(stat.f_frsize as u64))
+    // Widen before multiplying: statvfs field widths vary across platforms.
+    let bytes = (stat.f_bavail as u128) * (stat.f_frsize as u128);
+    Ok(bytes.min(u64::MAX as u128) as u64)
 }
 
 /// A destination file written through explicit offsets.
