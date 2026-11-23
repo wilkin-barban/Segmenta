@@ -6,11 +6,12 @@ Fase 1. Depende del cierre documentado de v0.3.1. Fuente: [SPEC-013](../../docs/
 
 - **S1.** “Automatización, descompresión y asistentes (módulos MCP, extract, inhibición D-Bus, torrent secuencial).”
 - **S2.** “NO implementes nada de código todavía.” Aplica a la preparación de estos planes.
+- **S3.** “Arrancá directamente con T2: planificar e implementar el módulo/servidor MCP por stdio que hable con el daemon por IPC para listar tareas, agregar descargas y cambiar estados.”
 
 ## Tasks
 
-- [ ] T1 — Validar contratos IPC, capacidades del backend torrent y precedentes de postprocesado e inhibición antes de elegir APIs (S1) — ruta: core, daemon e IPC — en investigación; commit: pendiente.
-- [ ] T2 — Planificar e implementar cliente MCP por stdio para listar, agregar y actuar sobre tareas, reutilizando IPC y definiendo instalación sin modificar configuración ajena sin consentimiento (S1) — ruta: nuevo crate MCP y documentación — commit: pendiente.
+- [x] T1 — Validar contratos IPC, capacidades del backend torrent y precedentes de postprocesado e inhibición antes de elegir APIs (S1) — ruta: core, daemon e IPC — acuerdos del PO en L7; commit: este cierre.
+- [ ] T2 — Planificar e implementar servidor MCP por stdio para listar, agregar y actuar sobre tareas, reutilizando IPC y definiendo instalación sin modificar configuración ajena sin consentimiento (S1, S3) — ruta: nuevo crate MCP y documentación — commit: pendiente.
 - [ ] T3 — Integrar extracción opcional tras verificación, formatos y contraseñas, manejo de multipartes y herramienta externa; conservar original salvo opción explícita y éxito comprobado (S1) — ruta: postprocesado daemon — commit: pendiente.
 - [ ] T4 — Inhibir suspensión mientras haya transferencias activas y liberar al pausar, terminar o fallar; degradar si D-Bus no está disponible (S1) — ruta: scheduler/daemon — commit: pendiente.
 - [ ] T5 — Exponer modo secuencial para torrents y acción de reproducción, condicionado a soporte comprobado del backend y del archivo (S1) — ruta: torrent, IPC y GUI — commit: pendiente.
@@ -57,4 +58,20 @@ Fase 1. Depende del cierre documentado de v0.3.1. Fuente: [SPEC-013](../../docs/
 - L3 — Fase 1 iniciada tras la [publicación v0.3.1](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.3.1). T1 en investigación; aún no se autorizó implementación de T2–T6.
 - L4 — Investigación inicial de T1: el daemon usa `download.add/list/pause/resume/delete` (`crates/segmenta-daemon/src/manager.rs`) y socket `$XDG_RUNTIME_DIR/segmenta/daemon.sock`, no los nombres `task.*` ni la ruta propuesta en SPEC-013. La versión fijada de `librqbit` es 9.1.0 y `torrent.rs` usa opciones por defecto, sin modo secuencial explícito; capacidad de cambiar prioridad en caliente aún no validada. El postprocesado actual usa argv directo y límites de tiempo/salida; no existe extracción automática de descargas. El daemon no declara `zbus` directamente; la elección del bus y la disponibilidad de inhibición deben verificarse antes de implementar. Se identificaron hipótesis de ciclo de vida torrent y directorios, no reproducidas; no se las presenta como defectos confirmados.
 - L5 — Fuentes externas consultadas: [`AddTorrentOptions` de librqbit 9.1.0](https://docs.rs/librqbit/9.1.0/librqbit/struct.AddTorrentOptions.html) no documenta un campo `sequential`; sí incluye `output_folder`. La [implementación de streaming 9.1.0](https://docs.rs/librqbit/9.1.0/src/librqbit/torrent_state/streaming.rs.html) expone `ManagedTorrent::stream` asíncrono; eso no demuestra por sí solo que exista un interruptor de prioridad en caliente. El [portal Inhibit](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.Inhibit.html) ofrece inhibición de suspensión y liberación por `Request.Close`; su viabilidad headless y el bus/protocolo concreto siguen por validar. Una URL exploratoria `TorrentHandle` devolvió 404.
-- L6 — La [documentación oficial de logind](https://www.freedesktop.org/software/systemd/man/latest/org.freedesktop.login1.html) describe `Inhibit` para `sleep` y liberación al cerrar el descriptor devuelto; el [idle-inhibit spec](https://apol.pages.freedesktop.org/xdg-specs/idle-inhibit-spec/latest/ch04.html) distingue inactividad de suspensión. Son opciones a evaluar, no una selección de diseño ni una prueba en el host. T1 permanece abierta; no se implementó T2–T6.
+- L6 — La [documentación oficial de logind](https://www.freedesktop.org/software/systemd/man/latest/org.freedesktop.login1.html) describe `Inhibit` para `sleep` y liberación al cerrar el descriptor devuelto; el [idle-inhibit spec](https://apol.pages.freedesktop.org/xdg-specs/idle-inhibit-spec/latest/ch04.html) distingue inactividad de suspensión. En ese momento eran opciones a evaluar, no una selección de diseño ni una prueba en el host.
+- L7 — Decisiones y autorización del PO (texto literal):
+
+> Che, revisé a fondo la investigación de T1 que dejaste documentada en el log (L4 a L6):
+>
+> 1. Contratos IPC: Impecable el hallazgo. Nada de inventar una capa paralela 'task.*'; reusá directamente los métodos reales del daemon ('download.add', 'download.list', 'download.pause', 'download.resume', 'download.delete') sobre el socket '/run/user/1000/segmenta/daemon.sock'.
+> 2. Inhibición D-Bus (T4): Acordado. Nos apoyaremos en 'org.freedesktop.login1' con fallback silencioso si logind no responde, sin complicar el daemon.
+> 3. Torrent secuencial (T5): Acordado. Usaremos la capacidad de streaming/priorización inicial que provee librqbit, sin meter abstracciones pesadas.
+>
+> Con estas decisiones de arquitectura resueltas, tenés luz verde para avanzar:
+> - En odd/tasks/segmenta-v0.4.0-automatizacion.md, cerrá formalmente T1 con estos acuerdos asentados y marcala como completada (- [x]) con commit limpio en main.
+> - Arrancá directamente con T2: planificar e implementar el módulo/servidor MCP por stdio que hable con el daemon por IPC para listar tareas, agregar descargas y cambiar estados.
+> - Como siempre: test-first (contrato JSON-RPC / MCP por stdio), commits atómicos en main (≤400 líneas, Conventional Commits, sin Co-Authored-By de IA) y cero sobreingeniería.
+>
+> Metele que sigo el ciclo de supervisión de 5 minutos.
+
+  T1 se cierra por decisión del PO: el streaming de librqbit no demuestra un interruptor de prioridad en caliente y la inhibición headless no se probó; esas verificaciones prácticas siguen correspondiendo a T5 y T4. No se autorizó implementar T3–T6 en este pedido.
