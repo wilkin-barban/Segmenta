@@ -99,6 +99,11 @@ async fn serve(args: Args) -> Result<(), String> {
     let socket_path = args
         .socket
         .clone()
+        .or_else(|| {
+            std::env::var_os("SEGMENTA_SOCKET")
+                .filter(|path| !path.is_empty())
+                .map(PathBuf::from)
+        })
         .unwrap_or_else(segmenta_daemon::socket_path);
     let bus = Arc::new(EventBus::new());
     let server = match systemd_listen_fd().filter(|_| args.systemd) {

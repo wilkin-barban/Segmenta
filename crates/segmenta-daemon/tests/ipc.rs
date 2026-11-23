@@ -14,6 +14,104 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
+// Exercise the executable rather than the in-process IPC server: environment resolution
+// is part of the daemon's public startup contract.
+#[test]
+fn socket_env_and_command_line_override() {
+    use std::io::{BufRead, BufReader as StdBufReader, Write};
+    use std::os::unix::net::UnixStream as StdUnixStream;
+    use std::process::{Command, Stdio};
+    use std::time::Instant;
+
+    struct ChildGuard(Option<std::process::Child>);
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            if let Some(child) = &mut self.0 {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+
+    for case in ["env", "arg", "empty", "unset"] {
+        let dir = tempfile::tempdir().unwrap();
+        let env_socket = dir.path().join("env.sock");
+        let arg_socket = dir.path().join("arg.sock");
+        let default_socket = dir.path().join("runtime/segmenta/daemon.sock");
+        let expected = match case {
+            "env" => &env_socket,
+            "arg" => &arg_socket,
+            _ => &default_socket,
+        };
+        let mut command = Command::new(env!("CARGO_BIN_EXE_segmenta-daemon"));
+        command
+            .env_clear()
+            .env("HOME", dir.path())
+            .env("XDG_RUNTIME_DIR", dir.path().join("runtime"))
+            .env("XDG_DATA_HOME", dir.path().join("data"))
+            .env("SEGMENTA_SECRET_TOOL", dir.path().join("no-secret-tool"))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        match case {
+            "env" | "arg" => {
+                command.env("SEGMENTA_SOCKET", &env_socket);
+            }
+            "empty" => {
+                command.env("SEGMENTA_SOCKET", "");
+            }
+            _ => {}
+        }
+        if case == "arg" {
+            command.arg("--socket").arg(&arg_socket);
+        }
+        let mut guard = ChildGuard(Some(command.spawn().unwrap()));
+        let child = guard.0.as_mut().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let actual = loop {
+            if let Some(path) = [&env_socket, &arg_socket, &default_socket]
+                .into_iter()
+                .find(|path| path.exists())
+            {
+                break Some(path.clone());
+            }
+            if child.try_wait().unwrap().is_some() || Instant::now() >= deadline {
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        if let Some(path) = &actual {
+            let mut stream = StdUnixStream::connect(path).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            stream
+                .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"system.shutdown\"}\n")
+                .unwrap();
+            let mut response = String::new();
+            StdBufReader::new(stream).read_line(&mut response).unwrap();
+            let response: Value = serde_json::from_str(&response).unwrap();
+            assert_eq!(response["result"]["shutting_down"], true);
+        } else {
+            child.kill().ok();
+        }
+        let output = guard.0.take().unwrap().wait_with_output().unwrap();
+        assert!(output.status.success(), "daemon failed: {:?}", output);
+        assert!(output.stdout.is_empty(), "unexpected stdout: {:?}", output);
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(stderr.contains("segmenta-daemon listening"), "{stderr}");
+        assert!(stderr.contains("segmenta-daemon shutting down"), "{stderr}");
+        assert_eq!(
+            actual.as_deref(),
+            Some(expected.as_path()),
+            "wrong socket; stderr: {stderr}"
+        );
+        assert!(!default_socket.exists() || actual.as_ref() == Some(&default_socket));
+        if case == "arg" {
+            assert!(!env_socket.exists());
+        }
+    }
+}
+
 struct EchoHandler;
 
 impl RpcHandler for EchoHandler {
