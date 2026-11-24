@@ -61,6 +61,14 @@ impl Clock for LocalClock {
     }
 }
 
+/// How often the sleep lock follows the tasks in flight.
+const INHIBIT_PULSE: Duration = Duration::from_secs(2);
+
+/// Whether sleep must be blocked: the user asked for it and something is in flight.
+pub fn should_inhibit(active: usize, requested: bool) -> bool {
+    requested && active > 0
+}
+
 /// A daily window in local wall-clock minutes: inclusive start, exclusive stop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Window {
@@ -249,6 +257,7 @@ fn systemctl(verb: &str) -> Result<(), String> {
 /// The daemon's queue scheduler.
 pub struct QueueScheduler {
     manager: Arc<Manager>,
+    inhibitor: crate::inhibit::SleepInhibitor,
     actions: Arc<dyn HostActions>,
     interval: Duration,
     wake: Arc<Notify>,
@@ -263,6 +272,7 @@ impl QueueScheduler {
         let wake = manager.scheduler_wake();
         QueueScheduler {
             manager,
+            inhibitor: crate::inhibit::SleepInhibitor::new(),
             actions,
             interval,
             wake,
@@ -275,11 +285,18 @@ impl QueueScheduler {
     /// A completion, failure or cancellation wakes the loop immediately; otherwise the
     /// next tick is `interval` away.
     pub async fn run(mut self, mut shutdown: watch::Receiver<bool>) {
+        let mut next_tick = tokio::time::Instant::now() + self.interval;
         loop {
             if *shutdown.borrow() {
                 break;
             }
-            self.tick();
+            // The inhibitor is cheap to poll and must follow a pause or a completion
+            // quickly, so it runs on its own short pulse instead of waiting a full tick.
+            self.sync_inhibitor();
+            if tokio::time::Instant::now() >= next_tick {
+                self.tick();
+                next_tick = tokio::time::Instant::now() + self.interval;
+            }
             tokio::select! {
                 biased;
                 changed = shutdown.changed() => {
@@ -288,10 +305,26 @@ impl QueueScheduler {
                     }
                 }
                 _ = self.wake.notified() => {}
-                _ = tokio::time::sleep(self.interval) => {}
+                _ = tokio::time::sleep(INHIBIT_PULSE) => {}
             }
         }
         tracing::debug!("queue scheduler stopped");
+    }
+
+    /// Keep the sleep lock in step with the transfers in flight.
+    ///
+    /// A helper that died on its own is forgotten first, so the next tick retries instead
+    /// of believing the lock is still held.
+    fn sync_inhibitor(&mut self) {
+        self.inhibitor.dropped();
+        if should_inhibit(
+            self.manager.active_transfers(),
+            self.manager.sleep_inhibition_requested(),
+        ) {
+            self.inhibitor.acquire();
+        } else {
+            self.inhibitor.release();
+        }
     }
 
     /// Evaluate every queue once: start what fits, then run the action of a drained one.

@@ -352,6 +352,7 @@ fn extraction_settings_default_off_and_persist() {
         .is_err());
 }
 
+#[test]
 fn settings_update_validates_types_ranges_and_unknown_keys() {
     let (_dir, store) = open_temp();
     let patch = json!({ "max_connections": 8, "global_speed_limit_bps": 1_000_000 });
@@ -990,4 +991,15 @@ fn migration_from_v5_to_v6_adds_scheduled_at_column_and_preserves_rows() {
     let row = store.get("old-5").unwrap().expect("row exists");
     assert_eq!(row.id, "old-5");
     assert_eq!(row.scheduled_at, None);
+}
+
+#[test]
+fn sleep_inhibition_defaults_on_and_persists() {
+    let (_dir, store) = open_temp();
+    assert!(store.settings().unwrap().inhibit_sleep);
+
+    store
+        .update_settings(json!({ "inhibit_sleep": false }).as_object().unwrap())
+        .unwrap();
+    assert!(!store.settings().unwrap().inhibit_sleep);
 }

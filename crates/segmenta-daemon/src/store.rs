@@ -464,6 +464,8 @@ pub struct Settings {
     pub extract_archives: bool,
     /// Remove the archive after a successful extraction.
     pub extract_remove_source: bool,
+    /// Block system sleep while a transfer is running.
+    pub inhibit_sleep: bool,
     /// Run ClamAV over every finished file before publishing it as `completed`.
     pub antivirus_enabled: bool,
     /// Deadline of one scan, in seconds (1-3600, OpenSpec 12 §5).
@@ -509,6 +511,7 @@ impl Default for Settings {
             postprocess_command: Vec::new(),
             extract_archives: false,
             extract_remove_source: false,
+            inhibit_sleep: true,
             antivirus_enabled: false,
             antivirus_timeout_secs: DEFAULT_ANTIVIRUS_TIMEOUT_SECS,
             antivirus_quarantine_dir: default_quarantine_dir(),
@@ -623,6 +626,7 @@ pub const SETTING_KEYS: &[&str] = &[
     "postprocess_command",
     "extract_archives",
     "extract_remove_source",
+    "inhibit_sleep",
     "antivirus_enabled",
     "antivirus_timeout_secs",
     "antivirus_quarantine_dir",
@@ -1382,6 +1386,18 @@ impl Store {
     ///
     /// A paused task does not hold a slot and neither does a terminal one, exactly the
     /// state list OpenSpec 12 §3 names.
+    /// Tasks in flight across every queue, which is what sleep inhibition watches.
+    pub fn active_transfer_count(&self) -> Result<u32> {
+        let conn = self.lock();
+        let count = conn.query_row(
+            "SELECT COUNT(*) FROM downloads WHERE status IN
+             ('downloading', 'probing', 'retrying', 'verifying', 'finalizing')",
+            [],
+            |row| row.get::<_, u32>(0),
+        )?;
+        Ok(count)
+    }
+
     pub fn active_count(&self, queue: &str) -> Result<u32> {
         Ok(self.active_ids(queue)?.len() as u32)
     }

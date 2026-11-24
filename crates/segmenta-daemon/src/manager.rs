@@ -257,6 +257,16 @@ impl Manager {
         }
     }
 
+    /// Tasks in flight, read from the database so torrents and media count too.
+    pub fn active_transfers(&self) -> usize {
+        self.store.active_transfer_count().unwrap_or(0) as usize
+    }
+
+    /// Whether the user asked the daemon to block sleep during transfers.
+    pub fn sleep_inhibition_requested(&self) -> bool {
+        self.settings().inhibit_sleep
+    }
+
     fn settings(&self) -> Settings {
         self.settings
             .lock()
