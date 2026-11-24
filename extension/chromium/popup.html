@@ -80,6 +80,43 @@
       .status.ok {
         color: #b6f0c8;
       }
+      .downloads {
+        margin-top: 14px;
+        border-top: 1px solid #3a3a44;
+        padding-top: 10px;
+      }
+      .downloads h2 {
+        margin: 0 0 8px;
+        font-size: 12px;
+        font-weight: 700;
+        color: #c9c9cf;
+      }
+      .downloads ul {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .downloads li {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 0;
+        border-bottom: 1px solid #292930;
+      }
+      .downloads .name {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .downloads .meta {
+        font-size: 11px;
+        color: #9a9aa4;
+      }
+      .downloads button {
+        padding: 3px 7px;
+        font-size: 11px;
+      }
     </style>
   </head>
   <body>
@@ -93,6 +130,11 @@
     </div>
     <button id="start" type="button"></button>
     <p id="status" class="status"></p>
+    <section class="downloads">
+      <h2 id="downloads-title"></h2>
+      <ul id="downloads-list"></ul>
+      <button id="downloads-refresh" type="button"></button>
+    </section>
     <script src="shared/browser-api.js"></script>
     <script src="shared/protocol.js"></script>
     <script src="popup.js"></script>

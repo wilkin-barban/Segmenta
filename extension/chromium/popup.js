@@ -29,6 +29,98 @@
     return 'video';
   }
 
+  /** Whether a task in `status` can be paused from the popup. */
+  function canPause(status) {
+    return ['pending', 'probing', 'downloading', 'retrying', 'verifying', 'finalizing'].indexOf(status) !== -1;
+  }
+
+  function progressText(task) {
+    if (!task || typeof task !== 'object') {
+      return '';
+    }
+    if (task.status === 'completed') {
+      return t('downloadsCompleted');
+    }
+    if (task.status === 'paused') {
+      return t('downloadsPaused');
+    }
+    const total = Number(task.total_bytes);
+    const done = Number(task.downloaded_bytes);
+    if (!Number.isFinite(total) || !Number.isFinite(done) || total <= 0) {
+      return task.status || '';
+    }
+    const percent = Math.min(100, Math.round((done / total) * 100));
+    return percent + '%';
+  }
+
+  async function refreshDownloads() {
+    const list = byId('downloads-list');
+    if (!list) {
+      return;
+    }
+    while (list.firstChild) {
+      list.removeChild(list.firstChild);
+    }
+    let reply;
+    try {
+      reply = await API.sendMessage({ type: 'segmenta.list', filter: 'all', limit: 10 });
+    } catch (err) {
+      const item = global.document.createElement('li');
+      item.textContent = t('downloadsError');
+      list.appendChild(item);
+      return;
+    }
+    const tasks = reply && reply.ok === true && Array.isArray(reply.result)
+      ? reply.result
+      : [];
+    if (tasks.length === 0) {
+      const item = global.document.createElement('li');
+      item.textContent = t('downloadsEmpty');
+      list.appendChild(item);
+      return;
+    }
+    for (const task of tasks) {
+      list.appendChild(downloadRow(task));
+    }
+  }
+
+  /** One row: name, progress and the actions its status allows. */
+  function downloadRow(task) {
+    const item = global.document.createElement('li');
+    const name = global.document.createElement('span');
+    name.className = 'name';
+    name.textContent = task.filename || task.url || '';
+    name.title = task.url || '';
+    const meta = global.document.createElement('span');
+    meta.className = 'meta';
+    meta.textContent = progressText(task);
+    item.appendChild(name);
+    item.appendChild(meta);
+    const actions = canPause(task.status)
+      ? [['pause', 'actionPause'], ['cancel', 'actionCancel']]
+      : task.status === 'paused'
+        ? [['resume', 'actionResume'], ['cancel', 'actionCancel']]
+        : [];
+    for (const [action, label] of actions) {
+      const button = global.document.createElement('button');
+      button.type = 'button';
+      button.textContent = t(label);
+      button.addEventListener('click', () => act(task.task_id, action, button));
+      item.appendChild(button);
+    }
+    return item;
+  }
+
+  async function act(taskId, action, button) {
+    button.disabled = true;
+    try {
+      await API.sendMessage({ type: 'segmenta.action', action: action, taskId: taskId });
+    } catch (err) {
+      // The refresh below is the source of truth; nothing else to report here.
+    }
+    await refreshDownloads();
+  }
+
   function boot() {
     byId('title').textContent = t('popupTitle');
     byId('url-label').textContent = t('popupUrlLabel');
@@ -37,6 +129,10 @@
     byId('mode-video').textContent = t('popupModeVideo');
     byId('mode-audio').textContent = t('popupModeAudio');
     byId('start').textContent = t('popupStart');
+    byId('downloads-title').textContent = t('downloadsTitle');
+    byId('downloads-refresh').textContent = t('downloadsRefresh');
+    byId('downloads-refresh').addEventListener('click', refreshDownloads);
+    refreshDownloads();
 
     byId('start').addEventListener('click', async () => {
       const button = byId('start');
