@@ -278,6 +278,8 @@ en una sola vista; estos son los enlaces directos:
 
 ## Estado y límites
 
+- **v0.4.0**: servidor MCP por stdio, extracción segura opcional, inhibición de suspensión y
+  prioridad inicial de torrents; ver [`docs/mcp-and-automation.md`](docs/mcp-and-automation.md).
 - **v0.3.1**: [Release y assets](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.3.1).
   Estabiliza HTTP, IPC, mensajes de extensión y captura; los riesgos de torrent y medios quedan
   diferidos y la recuperación del render node no tiene prueba determinista.
@@ -300,8 +302,8 @@ en una sola vista; estos son los enlaces directos:
 - Una descarga extremadamente pequeña puede completarse antes de que el service worker pueda
   pausarla; en ese caso se notifica y se ofrece añadirla a Segmenta.
 - Sin DRM, AES-128, streams en vivo, subtítulos ni multi-audio.
-- La fase 1 (`main`, sin publicar) agrega el servidor MCP, la extracción opcional, la inhibición de
-  suspensión y la prioridad inicial de torrents; ver [`docs/mcp-and-automation.md`](docs/mcp-and-automation.md).
+- La extracción no verifica firmas ni contenido y una publicación parcial no se revierte; librqbit
+  9.1.0 no permite descarga secuencial del torrent completo.
 - `.deb` para Ubuntu 26.04+; no hay Flatpak, Snap, AppImage, Windows ni macOS.
 
 ## Documentación

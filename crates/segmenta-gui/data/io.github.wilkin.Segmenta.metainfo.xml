@@ -41,6 +41,11 @@
     <control>touch</control>
   </supports>
   <releases>
+    <release version="0.4.0" date="2026-11-24">
+      <description>
+        <p>Adds an MCP server over stdio, optional archive extraction with path containment, sleep inhibition while transfers run and early piece priority for torrents.</p>
+      </description>
+    </release>
     <release version="0.3.1" date="2026-11-23">
       <description>
         <p>Stabilizes HTTP bandwidth limits, daemon socket selection, browser error messages and screenshot capture.</p>

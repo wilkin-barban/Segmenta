@@ -94,6 +94,7 @@ assets = [
     ["../../target/release/segmenta", "usr/bin/", "755"],
     ["../../target/release/segmenta-daemon", "usr/bin/", "755"],
     ["../../target/release/segmenta-host", "usr/bin/", "755"],
+    ["../../target/release/segmenta-mcp", "usr/bin/", "755"],
     ["../../packaging/native-messaging/google-chrome.json", "etc/opt/chrome/native-messaging-hosts/io.github.wilkin.segmenta.json", "644"],
     ["../../packaging/native-messaging/chromium.json", "etc/chromium/native-messaging-hosts/io.github.wilkin.segmenta.json", "644"],
     ["../../packaging/native-messaging/microsoft-edge.json", "etc/opt/edge/native-messaging-hosts/io.github.wilkin.segmenta.json", "644"],
@@ -106,8 +107,8 @@ assets = [
     ["data/io.github.wilkin.Segmenta.desktop", "usr/share/applications/", "644"],
     ["data/io.github.wilkin.Segmenta.metainfo.xml", "usr/share/metainfo/", "644"],
     ["data/io.github.wilkin.Segmenta.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
-    ["../../dist/segmenta-extension-0.3.1.zip", "usr/share/segmenta/extensions/segmenta-chromium.zip", "644"],
-    ["../../dist/segmenta-firefox-0.3.1.zip", "usr/share/segmenta/extensions/segmenta-firefox.zip", "644"],
+    ["../../dist/segmenta-extension-0.4.0.zip", "usr/share/segmenta/extensions/segmenta-chromium.zip", "644"],
+    ["../../dist/segmenta-firefox-0.4.0.zip", "usr/share/segmenta/extensions/segmenta-firefox.zip", "644"],
     ["../../packaging/extensions/README", "usr/share/segmenta/extensions/", "644"],
     ["../../packaging/segmenta-handler.desktop", "usr/share/applications/", "644"],
     # The upstream yt-dlp zipapp pinned in packaging/ytdlp.lock and materialised

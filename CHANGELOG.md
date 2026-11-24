@@ -5,6 +5,28 @@ Todos los cambios notables de Segmenta se documentan en este archivo.
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el proyecto usa
 [Versionado semántico](https://semver.org/lang/es/).
 
+## [0.4.0] - 2026-11-24
+
+### Added
+
+- Servidor MCP por stdio (`segmenta-mcp`) con cinco herramientas que reutilizan el IPC del daemon.
+- Extracción opcional de archivos al finalizar la descarga, con listado previo, rechazo de rutas absolutas y `..`, staging interno sin enlaces simbólicos y publicación sin sobrescribir.
+- Inhibición de suspensión mientras hay transferencias activas, liberada al pausar o terminar y silenciosa si logind no está disponible.
+- Prioridad inicial de piezas en torrents mediante un `FileStream` de librqbit.
+- Ajustes `extract_archives`, `extract_remove_source`, `inhibit_sleep` y `torrent_sequential`.
+- Documentación de la fase en `docs/mcp-and-automation.md`.
+
+### Fixed
+
+- El primer tick del scheduler sigue siendo inmediato y el despertar por evento conserva su latencia.
+- El listado de `7z` ignora el registro del propio archivo anterior al separador, que hacía rechazar archivos sanos con ruta absoluta.
+
+### Limitaciones conocidas
+
+- La extracción no verifica firmas ni contenido; una publicación parcial no se revierte.
+- librqbit 9.1.0 no permite descarga secuencial del torrent completo.
+- La prioridad de torrents y la inhibición real no tienen prueba automatizada.
+
 ## [0.3.1] - 2026-11-23
 
 ### Fixed
