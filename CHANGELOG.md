@@ -5,6 +5,26 @@ Todos los cambios notables de Segmenta se documentan en este archivo.
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el proyecto usa
 [Versionado semántico](https://semver.org/lang/es/).
 
+## [0.5.0] - 2026-11-24
+
+### Added
+
+- Paquetes en SQLite v7 (migración aditiva) con `package.list/create/rename/delete/assign` y las acciones colectivas `pause`, `resume` y `cancel`.
+- Importación Click'n'Load 2 en `127.0.0.1:9666`, apagada por defecto, con descifrado AES-128-CBC, validación de `Host` y límites de entrada.
+- Adaptadores Debrid para Real-Debrid y AllDebrid con el token en el almacén de secretos y códigos de error estables; TorBox queda reconocido pero no implementado.
+- Popup de descargas recientes con pausa, reanudación y cancelación en Chromium y Firefox.
+- `gallery.status` y `gallery.add` para extraer galerías con gallery-dl y agruparlas en un paquete.
+
+### Fixed
+
+- El primer tick del scheduler sigue siendo inmediato y el despertar por evento conserva su latencia.
+
+### Limitaciones conocidas
+
+- La resolución Debrid no está conectada a `download.add` y no hubo llamadas reales a proveedores.
+- No hay superficie de GUI para paquetes, Click'n'Load ni galerías.
+- La extracción de galerías es sincrónica y no deduplica al reimportar.
+
 ## [0.4.0] - 2026-11-24
 
 ### Added

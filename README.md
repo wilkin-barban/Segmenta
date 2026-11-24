@@ -278,8 +278,11 @@ en una sola vista; estos son los enlaces directos:
 
 ## Estado y límites
 
+- **v0.5.0**: paquetes con acciones colectivas (SQLite v7), importación Click'n'Load 2,
+  resolución Debrid para Real-Debrid y AllDebrid, popup de descargas en ambos navegadores y
+  soporte de gallery-dl; ver [`docs/mcp-and-automation.md`](docs/mcp-and-automation.md).
 - **v0.4.0**: servidor MCP por stdio, extracción segura opcional, inhibición de suspensión y
-  prioridad inicial de torrents; ver [`docs/mcp-and-automation.md`](docs/mcp-and-automation.md).
+  prioridad inicial de torrents.
 - **v0.3.1**: [Release y assets](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.3.1).
   Estabiliza HTTP, IPC, mensajes de extensión y captura; los riesgos de torrent y medios quedan
   diferidos y la recuperación del render node no tiene prueba determinista.

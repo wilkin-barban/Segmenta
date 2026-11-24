@@ -1,6 +1,6 @@
 # Segmenta v0.5.0 — ecosistema web, Debrid y paquetes
 
-Fase 2. Depende del cierre de v0.4.0; paquetes preceden a su uso por CNL y galerías. Fuente: [SPEC-013](../../docs/openspec/13-mdm-parity-and-advanced-roadmap.md), módulos 2, 3, 5 y 10; [resumen](../../docs/roadmap-mdm-parity.md). Estado: plan; adaptadores y contratos por verificar.
+Fase 2. Depende del cierre de v0.4.0; paquetes preceden a su uso por CNL y galerías. Fuente: [SPEC-013](../../docs/openspec/13-mdm-parity-and-advanced-roadmap.md), módulos 2, 3, 5 y 10; [resumen](../../docs/roadmap-mdm-parity.md). Estado: cerrada y publicada como [v0.5.0](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.5.0).
 
 ## Specs
 
@@ -16,7 +16,7 @@ Fase 2. Depende del cierre de v0.4.0; paquetes preceden a su uso por CNL y galer
 - [x] T4 — Integrar proveedores Debrid propuestos (Real-Debrid, AllDebrid, TorBox); validar disponibilidad y alcance de otros mencionados en el resumen antes de comprometerlos; proteger credenciales (S1) — ruta: core, daemon y preferencias — commits: `c61e02b` (adaptadores), `9cae600` (tokens y resolución por IPC), `b37b93f` (pruebas). TorBox queda reconocido pero no implementado, y la resolución automática dentro de `download.add` queda pendiente.
 - [x] T5 — Agregar consultas y acciones de descargas recientes al host y popup de Chromium/Firefox (S1) — ruta: host y extensión — commits: `faa56c7` (superficie de mensajes), `5c3d81c` (locales), `ab671db` (popup), `dc2c081` (pruebas de extensión y host).
 - [x] T6 — Integrar detección y ejecución de gallery-dl y agrupar resultados en paquetes; informar ausencia y fallos (S1) — ruta: medios daemon — commits: `7e9e47e` (motor y detección), `99af850` (IPC y paquete), `2beda29` (pruebas).
-- [ ] T7 — Documentar migración, configuración y restricciones; ejecutar gates de release (S1) — ruta: documentación y pruebas — commit: pendiente.
+- [x] T7 — Documentar migración, configuración y restricciones; ejecutar gates de release (S1) — ruta: documentación y pruebas — commits de release en este cierre.
 
 ## Criterios de aceptación
 
@@ -136,3 +136,11 @@ Fase 2. Depende del cierre de v0.4.0; paquetes preceden a su uso por CNL y galer
   - Códigos: 1070 `ERR_GALLERY_UNAVAILABLE` (binario ausente), 1071 `ERR_GALLERY_EMPTY` (corrió y no escribió nada), 1072 `ERR_GALLERY_FAILED` (exit distinto de cero, plazo agotado o URL inválida). Un fallo nunca detiene el daemon: se registra y se responde.
   - Pruebas: 3 de integración contra el daemon real con un `gallery-dl` de mentira en `SEGMENTA_GALLERY_PATH` —agrupación de dos archivos en un paquete con tareas completadas, ausencia del binario sin tocar cola ni paquetes, y los códigos de fallo, vacío y URL ajena—. Suite completa del daemon, `cargo fmt --check` y `cargo clippy -D warnings` en verde.
   - Límites declarados: la extracción es sincrónica con plazo de 110 s, así que una galería muy grande necesita partirse o esperar un modo en segundo plano que no se implementó; no se deduplican archivos ya presentes (se ignoran los que existían antes, pero una reimportación vuelve a crear tareas para los mismos nombres si el extractor los reescribe); y no hay superficie de GUI ni de extensión para lanzar una galería todavía.
+
+- L9 — Cierre de T7 y de la Fase 2.
+  - Documentación: `docs/mcp-and-automation.md` suma secciones de paquetes (v7), Click'n'Load 2, Debrid, popup y gallery-dl con sus límites; `README.md` registra v0.5.0; `CHANGELOG.md` agrega la entrada `[0.5.0] - 2026-11-24`; `packaging/release-notes-0.5.0.md` es el texto de la release.
+  - Versión 0.5.0 en el workspace, el crate de la GUI (nombres de los ZIP), ambos manifiestos, ambos metainfo con fecha 2026-11-24 y las aserciones de versión de las pruebas de extensión.
+  - Build `cargo build --release --workspace`, extensiones empaquetadas (19 archivos cada una, locales es/en/pt_BR) y `.deb` con cargo-deb. `packaging/check-package.sh dist/segmenta_0.5.0-1_amd64.deb 0.5.0` → 23/23 rutas, desktop-file-validate y appstreamcli en verde, lintian no instalado. SHA-256 del paquete: `aa0a4260ffa698ede97c7516c97c7f906cb1ca6172b13c72456e06b58cee1ee7`.
+  - Pruebas: `node extension/tests/run.mjs` 183/183 y `node --test extension/tests/*.test.mjs` 13 archivos sin fallos, tras corregir la aserción de versión de Firefox que había quedado en 0.4.0.
+  - Instalación en el host sobre 0.4.0 con backup previo en `/tmp/segmenta-0.4.0-backup.db`. La base real migró a `user_version = 7`, conserva **7 descargas** y tiene la tabla `packages`. Smokes: `segmenta hello` → «daemon de segmenta 0.5.0 (protocolo v1)», `package.list` responde `[]`, `segmenta-gui --smoke` termina con código 0 bajo xvfb, `segmenta-mcp` 0.5.0 completa el handshake, y el manifiesto dentro del `.deb` declara 0.5.0.
+  - Límites que siguen abiertos, ya documentados: resolución Debrid sin conectar a `download.add`, sin llamadas reales a proveedores, sin superficie de GUI para paquetes/CNL/galerías, galerías sincrónicas sin deduplicar, contraseña CNL no adjunta a las descargas, y prioridad de torrents e inhibición sin prueba automatizada contra el servicio del sistema.
