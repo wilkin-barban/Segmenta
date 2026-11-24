@@ -6,6 +6,7 @@
 pub mod browsers;
 pub mod events;
 pub mod extract;
+pub mod inhibit;
 pub mod ipc;
 pub mod logging;
 pub mod manager;
