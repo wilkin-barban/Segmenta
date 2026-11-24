@@ -287,5 +287,41 @@
   "contextMenuAddTorrent": {
     "message": "Add to Segmenta",
     "description": "Send this page to the Segmenta download manager."
+  },
+  "downloadsTitle": {
+    "message": "Recent downloads",
+    "description": "Title of the popup download list."
+  },
+  "downloadsEmpty": {
+    "message": "No downloads yet.",
+    "description": "Empty download list."
+  },
+  "downloadsError": {
+    "message": "Could not reach the daemon.",
+    "description": "Error listing downloads."
+  },
+  "downloadsRefresh": {
+    "message": "Refresh",
+    "description": "Button to refresh the list."
+  },
+  "downloadsPaused": {
+    "message": "Paused",
+    "description": "State of a paused download."
+  },
+  "downloadsCompleted": {
+    "message": "Completed",
+    "description": "State of a finished download."
+  },
+  "actionPause": {
+    "message": "Pause",
+    "description": "Action to pause a download."
+  },
+  "actionResume": {
+    "message": "Resume",
+    "description": "Action to resume a download."
+  },
+  "actionCancel": {
+    "message": "Cancel",
+    "description": "Action to cancel a download."
   }
 }

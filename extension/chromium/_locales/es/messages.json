@@ -287,5 +287,41 @@
   "contextMenuAddTorrent": {
     "message": "Anadir a Segmenta",
     "description": "Enviar esta pagina al gestor de descargas Segmenta."
+  },
+  "downloadsTitle": {
+    "message": "Descargas recientes",
+    "description": "Título de la lista de descargas del popup."
+  },
+  "downloadsEmpty": {
+    "message": "No hay descargas todavía.",
+    "description": "Lista de descargas vacía."
+  },
+  "downloadsError": {
+    "message": "No se pudo consultar el daemon.",
+    "description": "Error al listar descargas."
+  },
+  "downloadsRefresh": {
+    "message": "Actualizar",
+    "description": "Botón para refrescar la lista."
+  },
+  "downloadsPaused": {
+    "message": "En pausa",
+    "description": "Estado de una descarga pausada."
+  },
+  "downloadsCompleted": {
+    "message": "Completada",
+    "description": "Estado de una descarga terminada."
+  },
+  "actionPause": {
+    "message": "Pausar",
+    "description": "Acción para pausar una descarga."
+  },
+  "actionResume": {
+    "message": "Reanudar",
+    "description": "Acción para reanudar una descarga."
+  },
+  "actionCancel": {
+    "message": "Cancelar",
+    "description": "Acción para cancelar una descarga."
   }
 }
