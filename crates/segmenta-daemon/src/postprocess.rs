@@ -298,7 +298,7 @@ fn execute(command: &[String], target: &HookTarget, options: &HookOptions) -> Ho
 /// user does not control the contents of, so both get the same guarantees — argument
 /// boundaries preserved, no `sh -c`, `stdin` closed, kill on timeout and a bounded record
 /// of the output.
-fn run_process(
+pub(crate) fn run_process(
     argv: &[String],
     timeout: Duration,
     capture_limit: usize,
