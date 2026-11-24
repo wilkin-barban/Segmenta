@@ -300,6 +300,8 @@ en una sola vista; estos son los enlaces directos:
 - Una descarga extremadamente pequeña puede completarse antes de que el service worker pueda
   pausarla; en ese caso se notifica y se ofrece añadirla a Segmenta.
 - Sin DRM, AES-128, streams en vivo, subtítulos ni multi-audio.
+- La fase 1 (`main`, sin publicar) agrega el servidor MCP, la extracción opcional, la inhibición de
+  suspensión y la prioridad inicial de torrents; ver [`docs/mcp-and-automation.md`](docs/mcp-and-automation.md).
 - `.deb` para Ubuntu 26.04+; no hay Flatpak, Snap, AppImage, Windows ni macOS.
 
 ## Documentación
@@ -307,6 +309,7 @@ en una sola vista; estos son los enlaces directos:
 - [`CHANGELOG.md`](CHANGELOG.md) — historial completo por versión.
 - [Índice de releases](#releases) — enlace directo a cada versión y a sus notas.
 - [Todas las releases en GitHub](https://github.com/wilkin-barban/Segmenta/releases) — vista general.
+- [`docs/mcp-and-automation.md`](docs/mcp-and-automation.md) — servidor MCP, extracción de archivos, inhibición de suspensión y prioridad inicial de torrents.
 - [`docs/openspec/`](docs/openspec/) — contratos de arquitectura, motor, IPC, persistencia, extensión y empaquetado.
 - [`docs/qa/`](docs/qa/) — evidencia de QA en Ubuntu.
 - [`odd/tasks/`](odd/tasks/) — planes y evidencia ODD por release.
