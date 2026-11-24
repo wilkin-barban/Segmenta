@@ -12,6 +12,7 @@
 //! * [`error`] — engine error taxonomy shared with the daemon and CLI.
 
 pub mod checksum;
+pub mod debrid;
 pub mod disk;
 pub mod engine;
 pub mod error;
