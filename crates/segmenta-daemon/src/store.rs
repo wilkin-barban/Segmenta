@@ -460,6 +460,10 @@ pub struct Settings {
     pub proxy_url: Option<String>,
     /// Post-processing command without a shell.
     pub postprocess_command: Vec<String>,
+    /// Extract a finished archive next to itself.
+    pub extract_archives: bool,
+    /// Remove the archive after a successful extraction.
+    pub extract_remove_source: bool,
     /// Run ClamAV over every finished file before publishing it as `completed`.
     pub antivirus_enabled: bool,
     /// Deadline of one scan, in seconds (1-3600, OpenSpec 12 §5).
@@ -503,6 +507,8 @@ impl Default for Settings {
             proxy_mode: "system".to_string(),
             proxy_url: None,
             postprocess_command: Vec::new(),
+            extract_archives: false,
+            extract_remove_source: false,
             antivirus_enabled: false,
             antivirus_timeout_secs: DEFAULT_ANTIVIRUS_TIMEOUT_SECS,
             antivirus_quarantine_dir: default_quarantine_dir(),
@@ -615,6 +621,8 @@ pub const SETTING_KEYS: &[&str] = &[
     "proxy_mode",
     "proxy_url",
     "postprocess_command",
+    "extract_archives",
+    "extract_remove_source",
     "antivirus_enabled",
     "antivirus_timeout_secs",
     "antivirus_quarantine_dir",

@@ -2425,6 +2425,41 @@ async fn run_postprocess(
         );
     }
     // The scan runs on the file the hook left behind, which may have been rewritten.
+    if settings.extract_archives
+        && crate::extract::is_archive(std::path::Path::new(&record.final_path))
+    {
+        let path = std::path::PathBuf::from(&record.final_path);
+        let keep_source = !settings.extract_remove_source;
+        let password = std::env::var("SEGMENTA_EXTRACT_PASSWORD")
+            .ok()
+            .filter(|value| !value.is_empty());
+        let search = crate::postprocess::engine_search_path();
+        let extraction = tokio::task::spawn_blocking(move || {
+            crate::extract::extract(&path, keep_source, password.as_deref(), &search)
+        })
+        .await
+        .unwrap_or_else(|err| crate::extract::Extraction::Failed {
+            message: format!("the extraction thread failed: {err}"),
+        });
+        if let Some(message) = extraction.message() {
+            let previous = run.outcome().map(|outcome| outcome.message.clone());
+            let combined = match previous {
+                Some(previous) => format!("{previous}; {message}"),
+                None => message.to_string(),
+            };
+            store.record_postprocess(
+                task_id,
+                PostprocessRecord {
+                    exit_code: match &run {
+                        HookRun::Ran(outcome) => outcome.exit.code(),
+                        HookRun::Skipped => None,
+                    },
+                    message: combined.clone(),
+                },
+            );
+            tracing::info!(task_id = %task_id, message = %combined, "archive extraction finished");
+        }
+    }
     let after_hook = store.get(task_id).ok().flatten().unwrap_or(record);
     let hook_exit = match &run {
         HookRun::Ran(outcome) => outcome.exit.code(),

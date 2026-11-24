@@ -334,6 +334,24 @@ fn settings_start_from_the_catalog_defaults() {
 }
 
 #[test]
+fn extraction_settings_default_off_and_persist() {
+    let (_dir, store) = open_temp();
+    let defaults = store.settings().unwrap();
+    assert!(!defaults.extract_archives);
+    assert!(!defaults.extract_remove_source);
+
+    let patch = json!({ "extract_archives": true, "extract_remove_source": true });
+    let updated = store.update_settings(patch.as_object().unwrap()).unwrap();
+    assert!(updated.extract_archives);
+    assert!(updated.extract_remove_source);
+    let reloaded = store.settings().unwrap();
+    assert!(reloaded.extract_archives && reloaded.extract_remove_source);
+
+    assert!(store
+        .update_settings(json!({ "extract_archives": "yes" }).as_object().unwrap())
+        .is_err());
+}
+
 fn settings_update_validates_types_ranges_and_unknown_keys() {
     let (_dir, store) = open_temp();
     let patch = json!({ "max_connections": 8, "global_speed_limit_bps": 1_000_000 });
