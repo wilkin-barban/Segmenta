@@ -7,6 +7,7 @@ pub mod browsers;
 pub mod cnl2;
 pub mod events;
 pub mod extract;
+pub mod gallery;
 pub mod inhibit;
 pub mod ipc;
 pub mod logging;
