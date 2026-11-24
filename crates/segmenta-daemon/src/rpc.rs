@@ -475,6 +475,44 @@ pub struct DeleteManyParams {
     pub delete_files: bool,
 }
 
+/// Parameters of `package.create`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PackageCreateParams {
+    /// Display name.
+    pub name: String,
+    /// Where it came from: `manual` (default), `cnl2` or `gallery`.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Optional origin recorded by the importer.
+    #[serde(default)]
+    pub source_ref: Option<String>,
+}
+
+/// Parameters of `package.rename`, `package.delete` and the collective actions.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PackageIdParams {
+    /// Target package.
+    pub package_id: String,
+}
+
+/// Parameters of `package.rename`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PackageRenameParams {
+    /// Target package.
+    pub package_id: String,
+    /// New display name.
+    pub name: String,
+}
+
+/// Parameters of `package.assign`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PackageAssignParams {
+    /// Target package.
+    pub package_id: String,
+    /// Download to group under it.
+    pub task_id: String,
+}
+
 /// Parameters of `download.list`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ListParams {

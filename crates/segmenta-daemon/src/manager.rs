@@ -24,7 +24,8 @@ use crate::ipc::{hello_result, RpcHandler};
 use crate::postprocess::{HookOptions, HookRun, HookTarget};
 use crate::rpc::{
     AddDownloadParams, CancelParams, ChecksumParam, DeleteManyParams, DeleteParams, DownloadView,
-    ListParams, MediaAddParams, MediaProbeParams, MediaStatusParams, QueueCreateParams,
+    ListParams, MediaAddParams, MediaProbeParams, MediaStatusParams, PackageAssignParams,
+    PackageCreateParams, PackageIdParams, PackageRenameParams, QueueCreateParams,
     QueueRemoveParams, QueueScheduleParams, RpcError, SegmentView, SiteLoginOriginParams,
     SiteLoginSetParams, TaskIdParams,
 };
@@ -1256,6 +1257,96 @@ impl Manager {
         })
     }
 
+    /// One `package.pause`: every task that can be paused, the rest reported as skipped.
+    async fn package_pause(&self, package_id: &str) -> Result<Value, RpcError> {
+        let ids = self.package_ids(package_id)?;
+        let mut paused = Vec::new();
+        let mut skipped = Vec::new();
+        for id in ids {
+            match self.pause_task(&id).await {
+                Ok(_) => paused.push(id),
+                Err(_) => skipped.push(id),
+            }
+        }
+        Ok(json!({
+            "package_id": package_id,
+            "paused": paused,
+            "skipped": skipped,
+        }))
+    }
+
+    /// One `package.resume`: a terminal task keeps its state and is reported as skipped.
+    fn package_resume(&self, package_id: &str) -> Result<Value, RpcError> {
+        let ids = self.package_ids(package_id)?;
+        let mut resumed = Vec::new();
+        let mut skipped = Vec::new();
+        for id in ids {
+            match self.resume_task(&id) {
+                Ok(_) => resumed.push(id),
+                Err(_) => skipped.push(id),
+            }
+        }
+        Ok(json!({
+            "package_id": package_id,
+            "resumed": resumed,
+            "skipped": skipped,
+        }))
+    }
+
+    /// One `package.cancel`: completed tasks are not cancelled and are reported as skipped.
+    async fn package_cancel(&self, package_id: &str) -> Result<Value, RpcError> {
+        let ids = self.package_ids(package_id)?;
+        let mut cancelled = Vec::new();
+        let mut skipped = Vec::new();
+        for id in ids {
+            let terminal = self
+                .store
+                .get(&id)
+                .ok()
+                .flatten()
+                .map(|record| {
+                    matches!(
+                        record.status,
+                        DownloadStatus::Completed
+                            | DownloadStatus::Failed
+                            | DownloadStatus::Cancelled
+                    )
+                })
+                .unwrap_or(true);
+            if terminal {
+                skipped.push(id);
+                continue;
+            }
+            let params = CancelParams {
+                task_id: id.clone(),
+                delete_file: false,
+            };
+            match self.cancel_task(params).await {
+                Ok(_) => cancelled.push(id),
+                Err(_) => skipped.push(id),
+            }
+        }
+        Ok(json!({
+            "package_id": package_id,
+            "cancelled": cancelled,
+            "skipped": skipped,
+        }))
+    }
+
+    /// Task ids of one package, or a typed error when it does not exist.
+    fn package_ids(&self, package_id: &str) -> Result<Vec<String>, RpcError> {
+        let exists = self
+            .store
+            .packages()
+            .map_err(store_error)?
+            .iter()
+            .any(|package| package.id == package_id);
+        if !exists {
+            return Err(package_not_found(package_id));
+        }
+        self.store.package_task_ids(package_id).map_err(store_error)
+    }
+
     async fn cancel_task(&self, params: CancelParams) -> Result<Value, RpcError> {
         let record = self
             .store
@@ -1772,6 +1863,11 @@ fn remove_task_file(path: &Path) -> Result<bool, String> {
 
 fn store_error(err: StoreError) -> RpcError {
     RpcError::internal(err.to_string())
+}
+
+/// Error of a package id nobody created.
+fn package_not_found(package_id: &str) -> RpcError {
+    RpcError::invalid_params(format!("package `{package_id}` does not exist"))
 }
 
 /// One file of a torrent, as `torrent.add` derives it from the probe.
@@ -3477,6 +3573,102 @@ impl RpcHandler for Manager {
                     let parsed: DeleteParams = serde_json::from_value(parse(params)?)
                         .map_err(|err| RpcError::invalid_params(err.to_string()))?;
                     self.delete_task(parsed).await
+                }
+                "package.list" => {
+                    let _ = parse(params)?;
+                    let packages: Vec<Value> = self
+                        .store
+                        .packages()
+                        .map_err(store_error)?
+                        .into_iter()
+                        .map(|package| {
+                            json!({
+                                "package_id": package.id,
+                                "name": package.name,
+                                "source": package.source,
+                                "source_ref": package.source_ref,
+                                "created_at": package.created_at,
+                                "downloads": package.downloads,
+                            })
+                        })
+                        .collect();
+                    Ok(Value::Array(packages))
+                }
+                "package.create" => {
+                    let parsed: PackageCreateParams = serde_json::from_value(parse(params)?)
+                        .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                    let package_id = uuid::Uuid::new_v4().to_string();
+                    self.store
+                        .create_package(
+                            &package_id,
+                            &parsed.name,
+                            parsed.source.as_deref().unwrap_or("manual"),
+                            parsed.source_ref.as_deref(),
+                        )
+                        .map_err(|err| match err {
+                            StoreError::Invalid(message) => RpcError::invalid_params(message),
+                            other => store_error(other),
+                        })?;
+                    Ok(json!({ "package_id": package_id }))
+                }
+                "package.rename" => {
+                    let parsed: PackageRenameParams = serde_json::from_value(parse(params)?)
+                        .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                    let renamed = self
+                        .store
+                        .rename_package(&parsed.package_id, &parsed.name)
+                        .map_err(|err| match err {
+                            StoreError::Invalid(message) => RpcError::invalid_params(message),
+                            other => store_error(other),
+                        })?;
+                    if !renamed {
+                        return Err(package_not_found(&parsed.package_id));
+                    }
+                    Ok(json!({ "package_id": parsed.package_id }))
+                }
+                "package.delete" => {
+                    // Deleting a package only regroups: its downloads stay alive.
+                    let parsed: PackageIdParams = serde_json::from_value(parse(params)?)
+                        .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                    if !self
+                        .store
+                        .delete_package(&parsed.package_id)
+                        .map_err(store_error)?
+                    {
+                        return Err(package_not_found(&parsed.package_id));
+                    }
+                    Ok(json!({ "package_id": parsed.package_id, "deleted": true }))
+                }
+                "package.assign" => {
+                    let parsed: PackageAssignParams = serde_json::from_value(parse(params)?)
+                        .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                    if !self
+                        .store
+                        .assign_package(&parsed.package_id, &parsed.task_id)
+                        .map_err(store_error)?
+                    {
+                        return Err(RpcError::task_not_found(&parsed.task_id));
+                    }
+                    Ok(json!({
+                        "package_id": parsed.package_id,
+                        "task_id": parsed.task_id,
+                        "assigned": true,
+                    }))
+                }
+                "package.pause" => {
+                    let parsed: PackageIdParams = serde_json::from_value(parse(params)?)
+                        .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                    self.package_pause(&parsed.package_id).await
+                }
+                "package.resume" => {
+                    let parsed: PackageIdParams = serde_json::from_value(parse(params)?)
+                        .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                    self.package_resume(&parsed.package_id)
+                }
+                "package.cancel" => {
+                    let parsed: PackageIdParams = serde_json::from_value(parse(params)?)
+                        .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                    self.package_cancel(&parsed.package_id).await
                 }
                 "download.clean_completed" => {
                     // `{}` is the whole contract: no filter, no file deletion.
