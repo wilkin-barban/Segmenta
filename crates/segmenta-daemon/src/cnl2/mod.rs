@@ -15,8 +15,9 @@
 //! Any page open in the browser can reach a loopback port, so the listener is off unless
 //! the user turns it on, it only answers a loopback peer, it validates `Host` against the
 //! port it is bound to, it bounds the body and the number of links, it imports only
-//! `http`/`https` URLs, and it never starts a download by itself: the links land in a
-//! package, which the queue then schedules like any other task.
+//! `http`/`https` URLs. An import never bypasses the queue: the links become ordinary
+//! tasks grouped in a package, so `max_active`, the schedule window and the priority rules
+//! decide when each one runs, exactly as if the user had added it by hand.
 
 use aes::cipher::{block_padding::NoPadding, BlockDecryptMut, KeyIvInit};
 use base64::Engine;

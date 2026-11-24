@@ -81,7 +81,10 @@ async fn handle_connection(
     }
     if request.method == "GET" {
         let body = match request.path.as_str() {
-            "/flash/check" | "/jdcheck.js" => "JDownloader",
+            // The script form is what sites embed to detect the manager, so it has to be
+            // JavaScript that sets the global; the plain path answers the same fact.
+            "/jdcheck.js" => "var jdownloader = true;",
+            "/flash/check" => "JDownloader",
             _ => "Segmenta Click'n'Load 2",
         };
         stream
