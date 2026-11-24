@@ -19,9 +19,11 @@ export default function suite({ test }) {
     assert.equal(typeof V.validateInbound, 'function');
     assert.equal(V.MAX_MESSAGE_BYTES, 65536);
     assert.deepEqual([...V.MESSAGE_TYPES].sort(), [
+      'segmenta.action',
       'segmenta.add',
       'segmenta.capture',
       'segmenta.capture.decide',
+      'segmenta.list',
       'segmenta.open',
       'segmenta.probe',
       'segmenta.status',

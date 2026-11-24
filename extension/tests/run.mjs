@@ -8,6 +8,7 @@ const SUITES = [
   './protocol.test.mjs',
   './quality.test.mjs',
   './panel.test.mjs',
+  './downloads.test.mjs',
   './locales.test.mjs',
   './validate.test.mjs',
   './manifest.test.mjs',

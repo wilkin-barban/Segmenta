@@ -429,3 +429,23 @@ fn one_connection_serves_the_whole_browser_session() {
     assert_eq!(frames[0]["result"]["reused"], true);
     assert_eq!(frames[1]["result"]["reused"], true);
 }
+
+#[test]
+fn forwards_the_popup_download_surface_and_rejects_anything_else() {
+    let daemon = Daemon::start();
+    let list = json!({"jsonrpc":"2.0","id":1,"method":"download.list","params":{"filter":"active","limit":5}});
+    let pause =
+        json!({"jsonrpc":"2.0","id":2,"method":"download.pause","params":{"task_id":"abc"}});
+    let resume =
+        json!({"jsonrpc":"2.0","id":3,"method":"download.resume","params":{"task_id":"abc"}});
+    let cancel = json!({"jsonrpc":"2.0","id":4,"method":"download.cancel","params":{"task_id":"abc","delete_file":false}});
+    let unknown =
+        json!({"jsonrpc":"2.0","id":5,"method":"debrid.resolve","params":{"link":"https://x/y"}});
+
+    let (result, replies) = run_host(&daemon.path, &[list, pause, resume, cancel, unknown]);
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(replies.len(), 5);
+    // The four download methods reach the daemon; the debrid one is not exposed here.
+    assert_eq!(daemon.handler.calls.load(Ordering::SeqCst), 4);
+    assert_eq!(replies[4]["error"]["code"], -32601);
+}
