@@ -513,6 +513,23 @@ pub struct PackageAssignParams {
     pub task_id: String,
 }
 
+/// Parameters of `debrid.token.set`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DebridTokenParams {
+    /// Provider name: `realdebrid`, `alldebrid` or `torbox`.
+    pub provider: String,
+    /// API token. Stored in the secret store and never returned.
+    #[serde(default)]
+    pub token: Option<String>,
+}
+
+/// Parameters of `debrid.resolve`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DebridResolveParams {
+    /// Hoster link to unrestrict.
+    pub link: String,
+}
+
 /// Parameters of `download.list`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ListParams {

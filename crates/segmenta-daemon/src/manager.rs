@@ -23,11 +23,11 @@ use crate::events::EventBus;
 use crate::ipc::{hello_result, RpcHandler};
 use crate::postprocess::{HookOptions, HookRun, HookTarget};
 use crate::rpc::{
-    AddDownloadParams, CancelParams, ChecksumParam, DeleteManyParams, DeleteParams, DownloadView,
-    ListParams, MediaAddParams, MediaProbeParams, MediaStatusParams, PackageAssignParams,
-    PackageCreateParams, PackageIdParams, PackageRenameParams, QueueCreateParams,
-    QueueRemoveParams, QueueScheduleParams, RpcError, SegmentView, SiteLoginOriginParams,
-    SiteLoginSetParams, TaskIdParams,
+    AddDownloadParams, CancelParams, ChecksumParam, DebridResolveParams, DebridTokenParams,
+    DeleteManyParams, DeleteParams, DownloadView, ListParams, MediaAddParams, MediaProbeParams,
+    MediaStatusParams, PackageAssignParams, PackageCreateParams, PackageIdParams,
+    PackageRenameParams, QueueCreateParams, QueueRemoveParams, QueueScheduleParams, RpcError,
+    SegmentView, SiteLoginOriginParams, SiteLoginSetParams, TaskIdParams,
 };
 use crate::scheduler::{resolve_schedule, Clock, LocalClock, QueueSchedule};
 use crate::secrets::SecretStore;
@@ -1257,6 +1257,107 @@ impl Manager {
         })
     }
 
+    /// Secret alias that holds the token of one provider.
+    fn debrid_alias(provider: &str) -> String {
+        format!("debrid:{provider}")
+    }
+
+    /// Provider configured by the user, if any.
+    fn debrid_provider(&self) -> Option<segmenta_core::debrid::Provider> {
+        let name = self.settings().debrid_provider;
+        if name == "none" {
+            return None;
+        }
+        segmenta_core::debrid::Provider::parse(&name)
+    }
+
+    /// `debrid.status`: the provider and whether a token exists. Never the token.
+    fn debrid_status(&self) -> Value {
+        let provider = self.settings().debrid_provider;
+        let configured = self.debrid_provider().is_some();
+        let has_token = self
+            .secrets
+            .lookup(&Self::debrid_alias(&provider))
+            .ok()
+            .flatten()
+            .map(|token| !token.trim().is_empty())
+            .unwrap_or(false);
+        json!({
+            "provider": provider,
+            "configured": configured,
+            "has_token": has_token,
+        })
+    }
+
+    /// `debrid.token.set`: store the token in the secret store, never in SQLite.
+    fn debrid_store_token(&self, params: DebridTokenParams) -> Result<Value, RpcError> {
+        let provider = segmenta_core::debrid::Provider::parse(&params.provider)
+            .ok_or_else(|| RpcError::invalid_params("unknown debrid provider"))?;
+        let token = params.token.unwrap_or_default().trim().to_string();
+        if token.is_empty() {
+            return Err(RpcError::invalid_params("the token is empty"));
+        }
+        self.secrets
+            .store(&Self::debrid_alias(provider.as_str()), &token)
+            .map_err(|err| RpcError::internal(format!("cannot store the token: {err}")))?;
+        tracing::info!(provider = provider.as_str(), "debrid token stored");
+        Ok(json!({ "provider": provider.as_str(), "stored": true }))
+    }
+
+    /// `debrid.token.clear`: forget the token of one provider.
+    fn debrid_clear_token(&self, provider: &str) -> Result<Value, RpcError> {
+        let provider = segmenta_core::debrid::Provider::parse(provider)
+            .ok_or_else(|| RpcError::invalid_params("unknown debrid provider"))?;
+        self.secrets
+            .delete(&Self::debrid_alias(provider.as_str()))
+            .map_err(|err| RpcError::internal(format!("cannot delete the token: {err}")))?;
+        Ok(json!({ "provider": provider.as_str(), "cleared": true }))
+    }
+
+    /// `debrid.resolve`: exchange one hoster link for the provider's direct one.
+    ///
+    /// The provider is asked only when it is configured and has a token; every failure is
+    /// translated to a stable code and a fixed sentence, so neither the token nor the
+    /// provider payload can reach the caller or the task record.
+    async fn debrid_resolve(&self, link: &str) -> Result<Value, RpcError> {
+        use segmenta_core::debrid::{parse_resolution, resolve_request, DebridError, Provider};
+        let Some(provider) = self.debrid_provider() else {
+            return Err(debrid_error(DebridError::Unsupported(
+                "no provider configured",
+            )));
+        };
+        if provider == Provider::TorBox {
+            // No request is built for a provider whose hoster flow is not verified, so the
+            // caller gets the honest "unsupported" before a token is ever asked for.
+            return Err(debrid_error(DebridError::Unsupported("torbox")));
+        }
+        let token = self
+            .secrets
+            .lookup(&Self::debrid_alias(provider.as_str()))
+            .map_err(|_| RpcError::internal("cannot read the token"))?
+            .filter(|token| !token.trim().is_empty())
+            .ok_or_else(|| debrid_error(DebridError::Unauthorized))?;
+        let request = resolve_request(provider, &token, link).map_err(debrid_error)?;
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(20))
+            .build()
+            .map_err(|_| debrid_error(DebridError::Unreachable))?;
+        let mut builder = client.post(&request.url);
+        for (name, value) in &request.headers {
+            builder = builder.header(name, value);
+        }
+        let response = builder
+            .body(request.body)
+            .send()
+            .await
+            .map_err(|_| debrid_error(DebridError::Unreachable))?;
+        let status = response.status().as_u16();
+        let body = response.text().await.unwrap_or_default();
+        let link = parse_resolution(provider, status, &body).map_err(debrid_error)?;
+        let _ = Provider::as_str(provider);
+        Ok(json!({ "link": link }))
+    }
+
     /// Import one Click'n'Load 2 package.
     ///
     /// The links are enqueued exactly like `download.add` would enqueue them and then
@@ -1910,6 +2011,24 @@ fn remove_task_file(path: &Path) -> Result<bool, String> {
 
 fn store_error(err: StoreError) -> RpcError {
     RpcError::internal(err.to_string())
+}
+
+/// Turn a debrid failure into a typed RPC error with a stable code.
+fn debrid_error(error: segmenta_core::debrid::DebridError) -> RpcError {
+    // The code is stable and the message is fixed: no token, no payload.
+    RpcError::new(debrid_code(&error), error.code(), error.message())
+}
+
+/// Numeric error code the clients receive for each debrid failure.
+fn debrid_code(error: &segmenta_core::debrid::DebridError) -> i64 {
+    match error {
+        segmenta_core::debrid::DebridError::Unsupported(_) => 1060,
+        segmenta_core::debrid::DebridError::Unauthorized => 1061,
+        segmenta_core::debrid::DebridError::LinkUnavailable => 1062,
+        segmenta_core::debrid::DebridError::QuotaExceeded => 1063,
+        segmenta_core::debrid::DebridError::Malformed => 1064,
+        segmenta_core::debrid::DebridError::Unreachable => 1065,
+    }
 }
 
 /// Error of a package id nobody created.
@@ -3716,6 +3835,25 @@ impl RpcHandler for Manager {
                     let parsed: PackageIdParams = serde_json::from_value(parse(params)?)
                         .map_err(|err| RpcError::invalid_params(err.to_string()))?;
                     self.package_cancel(&parsed.package_id).await
+                }
+                "debrid.status" => {
+                    let _ = parse(params)?;
+                    Ok(self.debrid_status())
+                }
+                "debrid.token.set" => {
+                    let parsed: DebridTokenParams = serde_json::from_value(parse(params)?)
+                        .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                    self.debrid_store_token(parsed)
+                }
+                "debrid.token.clear" => {
+                    let parsed: DebridTokenParams = serde_json::from_value(parse(params)?)
+                        .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                    self.debrid_clear_token(&parsed.provider)
+                }
+                "debrid.resolve" => {
+                    let parsed: DebridResolveParams = serde_json::from_value(parse(params)?)
+                        .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                    self.debrid_resolve(&parsed.link).await
                 }
                 "download.clean_completed" => {
                     // `{}` is the whole contract: no filter, no file deletion.

@@ -470,6 +470,8 @@ pub struct Settings {
     pub torrent_sequential: bool,
     /// Accept Click'n'Load 2 imports on the loopback port.
     pub cnl2_enabled: bool,
+    /// Debrid provider used to unrestrict links: `none`, `realdebrid`, `alldebrid` or `torbox`.
+    pub debrid_provider: String,
     /// Run ClamAV over every finished file before publishing it as `completed`.
     pub antivirus_enabled: bool,
     /// Deadline of one scan, in seconds (1-3600, OpenSpec 12 §5).
@@ -518,6 +520,7 @@ impl Default for Settings {
             inhibit_sleep: true,
             torrent_sequential: false,
             cnl2_enabled: false,
+            debrid_provider: "none".to_string(),
             antivirus_enabled: false,
             antivirus_timeout_secs: DEFAULT_ANTIVIRUS_TIMEOUT_SECS,
             antivirus_quarantine_dir: default_quarantine_dir(),
@@ -635,6 +638,7 @@ pub const SETTING_KEYS: &[&str] = &[
     "inhibit_sleep",
     "torrent_sequential",
     "cnl2_enabled",
+    "debrid_provider",
     "antivirus_enabled",
     "antivirus_timeout_secs",
     "antivirus_quarantine_dir",
@@ -774,6 +778,13 @@ impl Settings {
         if self.max_retries > 20 {
             return Err(StoreError::Invalid(
                 "max_retries must be between 0 and 20".to_string(),
+            ));
+        }
+        if self.debrid_provider != "none"
+            && segmenta_core::debrid::Provider::parse(&self.debrid_provider).is_none()
+        {
+            return Err(StoreError::Invalid(
+                "debrid_provider must be none, realdebrid, alldebrid or torbox".to_string(),
             ));
         }
         if !Path::new(&self.download_dir).is_absolute() {
