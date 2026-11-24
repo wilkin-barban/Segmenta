@@ -285,7 +285,9 @@ impl QueueScheduler {
     /// A completion, failure or cancellation wakes the loop immediately; otherwise the
     /// next tick is `interval` away.
     pub async fn run(mut self, mut shutdown: watch::Receiver<bool>) {
-        let mut next_tick = tokio::time::Instant::now() + self.interval;
+        // The first evaluation happens at once: a daemon that starts with pending work must
+        // not wait a whole interval, and a wake resets the deadline the same way.
+        let mut next_tick = tokio::time::Instant::now();
         loop {
             if *shutdown.borrow() {
                 break;
@@ -304,7 +306,12 @@ impl QueueScheduler {
                         break;
                     }
                 }
-                _ = self.wake.notified() => {}
+                // A completion or a cancellation must be evaluated at once, not on the
+                // next interval: the loop top runs the tick when the deadline is due.
+                _ = self.wake.notified() => {
+                    next_tick = tokio::time::Instant::now();
+                }
+                _ = tokio::time::sleep_until(next_tick) => {}
                 _ = tokio::time::sleep(INHIBIT_PULSE) => {}
             }
         }
