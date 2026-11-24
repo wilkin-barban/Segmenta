@@ -291,7 +291,7 @@ fn unsafe_entry(tool: Tool, listing: &str) -> Option<String> {
 /// `7z l -slt` prints the archive itself as a `Path = ...` record before the `----------`
 /// separator, so only the records after it are members. Treating the header as a member
 /// would reject every archive opened by its absolute path.
-fn entries<'a>(tool: Tool, listing: &'a str) -> Vec<&'a str> {
+fn entries(tool: Tool, listing: &str) -> Vec<&str> {
     let lines: Vec<&str> = listing.lines().collect();
     let start = match tool {
         Tool::SevenZip => lines
