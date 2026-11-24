@@ -30,6 +30,8 @@ fn argv_of(dir: &Path, name: &str) -> String {
 /// Stub that answers the listing and extracts `payload` into the `-o` directory.
 fn extracting_stub(dir: &Path, listing: &str, payload: &[&str]) -> PathBuf {
     let mut body = String::from("if [ \"$1\" = l ]; then\n");
+    // Real `7z l -slt` output: the archive's own path first, then the member separator.
+    body.push_str("  printf '%s\\n' 'Path = /absolute/archive.zip'\n");
     body.push_str("  printf '%s\\n' '----------'\n");
     for name in listing.lines() {
         body.push_str(&format!("  printf '%s\\n' 'Path = {name}'\n"));

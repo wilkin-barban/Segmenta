@@ -280,11 +280,31 @@ fn detect(search: &[PathBuf]) -> Option<(Tool, PathBuf)> {
 
 /// Entry names that would escape the destination, if any.
 fn unsafe_entry(tool: Tool, listing: &str) -> Option<String> {
-    listing
-        .lines()
-        .filter_map(|line| tool.entry(line))
+    entries(tool, listing)
+        .into_iter()
         .find(|entry| is_unsafe(entry))
         .map(|entry| entry.to_string())
+}
+
+/// The entry names of a listing, without the archive's own metadata.
+///
+/// `7z l -slt` prints the archive itself as a `Path = ...` record before the `----------`
+/// separator, so only the records after it are members. Treating the header as a member
+/// would reject every archive opened by its absolute path.
+fn entries<'a>(tool: Tool, listing: &'a str) -> Vec<&'a str> {
+    let lines: Vec<&str> = listing.lines().collect();
+    let start = match tool {
+        Tool::SevenZip => lines
+            .iter()
+            .position(|line| line.trim() == "----------")
+            .map(|index| index + 1)
+            .unwrap_or(lines.len()),
+        Tool::Unzip => 0,
+    };
+    lines[start..]
+        .iter()
+        .filter_map(|line| tool.entry(line))
+        .collect()
 }
 
 /// An entry escapes when it is absolute or walks upwards.
