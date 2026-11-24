@@ -1257,6 +1257,53 @@ impl Manager {
         })
     }
 
+    /// Import one Click'n'Load 2 package.
+    ///
+    /// The links are enqueued exactly like `download.add` would enqueue them and then
+    /// grouped under a fresh package. Nothing here decides to download: the queue does,
+    /// and a link the daemon refuses (wrong scheme, bad destination) is counted as
+    /// skipped instead of aborting the import.
+    pub fn import_cnl2(&self, import: crate::cnl2::Import) -> Result<usize, String> {
+        let name = import
+            .source
+            .clone()
+            .filter(|source| !source.trim().is_empty())
+            .unwrap_or_else(|| "Click'n'Load package".to_string());
+        let package_id = uuid::Uuid::new_v4().to_string();
+        self.store
+            .create_package(&package_id, &name, "cnl2", import.source.as_deref())
+            .map_err(|err| err.to_string())?;
+        let mut added = 0;
+        for link in &import.links {
+            let params = AddDownloadParams {
+                url: link.clone(),
+                destination_dir: None,
+                filename: None,
+                headers: BTreeMap::new(),
+                cookies: Vec::new(),
+                connections: None,
+                expected_checksum: None,
+                start_immediately: true,
+                queue_name: "main".to_string(),
+                priority: 0,
+                scheduled_at: None,
+            };
+            match self.add_download(params) {
+                Ok(value) => {
+                    if let Some(task_id) = value.get("task_id").and_then(Value::as_str) {
+                        let _ = self.store.assign_package(&package_id, task_id);
+                        added += 1;
+                    }
+                }
+                Err(err) => {
+                    tracing::info!(link = %link, error = ?err, "cnl2 skipped a link");
+                }
+            }
+        }
+        tracing::info!(package_id = %package_id, links = added, "cnl2 import");
+        Ok(added)
+    }
+
     /// One `package.pause`: every task that can be paused, the rest reported as skipped.
     async fn package_pause(&self, package_id: &str) -> Result<Value, RpcError> {
         let ids = self.package_ids(package_id)?;

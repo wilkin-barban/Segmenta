@@ -468,6 +468,8 @@ pub struct Settings {
     pub inhibit_sleep: bool,
     /// Ask librqbit for the first pieces of a torrent, so playback can start early.
     pub torrent_sequential: bool,
+    /// Accept Click'n'Load 2 imports on the loopback port.
+    pub cnl2_enabled: bool,
     /// Run ClamAV over every finished file before publishing it as `completed`.
     pub antivirus_enabled: bool,
     /// Deadline of one scan, in seconds (1-3600, OpenSpec 12 §5).
@@ -515,6 +517,7 @@ impl Default for Settings {
             extract_remove_source: false,
             inhibit_sleep: true,
             torrent_sequential: false,
+            cnl2_enabled: false,
             antivirus_enabled: false,
             antivirus_timeout_secs: DEFAULT_ANTIVIRUS_TIMEOUT_SECS,
             antivirus_quarantine_dir: default_quarantine_dir(),
@@ -631,6 +634,7 @@ pub const SETTING_KEYS: &[&str] = &[
     "extract_remove_source",
     "inhibit_sleep",
     "torrent_sequential",
+    "cnl2_enabled",
     "antivirus_enabled",
     "antivirus_timeout_secs",
     "antivirus_quarantine_dir",

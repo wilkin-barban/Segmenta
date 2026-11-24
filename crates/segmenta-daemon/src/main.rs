@@ -126,6 +126,30 @@ async fn serve(args: Args) -> Result<(), String> {
     let scheduler =
         QueueScheduler::new(Arc::clone(&manager), Arc::new(SystemActions), TICK_INTERVAL);
     let scheduler = tokio::spawn(scheduler.run(shutdown_rx.clone()));
+    // Click'n'Load 2 is opt-in. A port already taken (JDownloader is the usual owner) is a
+    // reported condition, not a failure: the feature stays off and nothing retries.
+    let cnl2_enabled = store.settings().map(|s| s.cnl2_enabled).unwrap_or(false);
+    if cnl2_enabled {
+        match segmenta_daemon::cnl2::bind(segmenta_daemon::cnl2::DEFAULT_PORT).await {
+            Ok(listener) => {
+                tracing::info!(
+                    port = segmenta_daemon::cnl2::DEFAULT_PORT,
+                    "click'n'load 2 listening"
+                );
+                tokio::spawn(segmenta_daemon::cnl2::serve(
+                    listener,
+                    segmenta_daemon::cnl2::DEFAULT_PORT,
+                    Arc::clone(&manager),
+                    shutdown_rx.clone(),
+                ));
+            }
+            Err(err) => tracing::warn!(
+                port = segmenta_daemon::cnl2::DEFAULT_PORT,
+                error = %err,
+                "click'n'load 2 disabled: the port is not available"
+            ),
+        }
+    }
     tracing::info!(
         version = segmenta_daemon::DAEMON_VERSION,
         socket = %socket_path.display(),
