@@ -1484,6 +1484,16 @@ if (typeof importScripts === 'function') {
         );
       case 'segmenta.status':
         return callHost(() => PROTOCOL.buildStatus({ taskId: value.taskId }));
+      // Recent downloads for the popup: a bounded page, never a full dump.
+      case 'segmenta.list':
+        return callHost(() =>
+          PROTOCOL.buildDownloadList({ filter: value.filter, limit: value.limit })
+        );
+      // Quick actions from the popup, one task at a time.
+      case 'segmenta.action':
+        return callHost(() =>
+          PROTOCOL.buildDownloadAction({ action: value.action, taskId: value.taskId })
+        );
       // Focus an already existing task (S9): `callHost` only, never the announce
       // path, so nothing is added again and no toast is shown.
       case 'segmenta.open':

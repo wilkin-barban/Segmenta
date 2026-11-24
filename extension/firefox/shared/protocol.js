@@ -578,6 +578,44 @@
     return envelope('download.cancel', { task_id: taskId, delete_file: false }, request.id);
   }
 
+  /** Actions the popup can perform on one task. */
+  const TASK_ACTIONS = ['pause', 'resume', 'cancel'];
+
+  /**
+   * Recent downloads for the popup. The filter and the limit are validated here as well
+   * as in `validate.js`, so the host never receives an arbitrary query.
+   */
+  function buildDownloadList(input) {
+    const request = input && typeof input === 'object' ? input : {};
+    const filter = typeof request.filter === 'string' ? request.filter : 'all';
+    const allowed = ['all', 'active', 'paused', 'pending', 'completed', 'failed', 'cancelled'];
+    if (allowed.indexOf(filter) === -1) {
+      throw new ProtocolError('ERR_INVALID_PARAMS', 'unknown filter');
+    }
+    const limit = Number.isInteger(request.limit) ? request.limit : 10;
+    if (limit < 1 || limit > 50) {
+      throw new ProtocolError('ERR_INVALID_PARAMS', 'limit is out of range');
+    }
+    return envelope('download.list', { filter: filter, limit: limit, offset: 0 }, request.id);
+  }
+
+  /** Pause, resume or cancel one task. Cancelling keeps the file on disk. */
+  function buildDownloadAction(input) {
+    const request = input && typeof input === 'object' ? input : {};
+    const taskId = typeof request.taskId === 'string' ? request.taskId.trim() : '';
+    if (!TASK_ID_PATTERN.test(taskId)) {
+      throw new ProtocolError('ERR_INVALID_PARAMS', 'task id is not acceptable');
+    }
+    const action = typeof request.action === 'string' ? request.action : '';
+    if (TASK_ACTIONS.indexOf(action) === -1) {
+      throw new ProtocolError('ERR_INVALID_PARAMS', 'unknown action');
+    }
+    const params = action === 'cancel'
+      ? { task_id: taskId, delete_file: false }
+      : { task_id: taskId };
+    return envelope('download.' + action, params, request.id);
+  }
+
   /**
    * Brings Segmenta to the front focused on one task. The id is validated with the
    * same pattern every other task-scoped method uses, so the extension can never
@@ -711,6 +749,8 @@
     buildTorrentAdd: buildTorrentAdd,
     buildStatus: buildStatus,
     buildDownloadCancel: buildDownloadCancel,
+    buildDownloadList: buildDownloadList,
+    buildDownloadAction: buildDownloadAction,
     buildSystemOpen: buildSystemOpen,
     parentDirectory: parentDirectory,
     envelope: envelope,

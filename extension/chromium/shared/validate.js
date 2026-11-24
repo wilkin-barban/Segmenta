@@ -12,7 +12,7 @@
   }
 
   const MAX_MESSAGE_BYTES = 65536;
-  const MESSAGE_TYPES = ['segmenta.probe', 'segmenta.add', 'segmenta.status', 'segmenta.open', 'segmenta.capture', 'segmenta.torrent.add', 'segmenta.capture.decide'];
+  const MESSAGE_TYPES = ['segmenta.probe', 'segmenta.add', 'segmenta.status', 'segmenta.open', 'segmenta.capture', 'segmenta.torrent.add', 'segmenta.capture.decide', 'segmenta.list', 'segmenta.action'];
   const CAPTURE_DECISIONS = ['accept', 'reject'];
   const MESSAGE_MODES = ['video', 'audio', 'playlist'];
   const PROBE_KINDS = ['video', 'playlist', 'stream'];
@@ -158,6 +158,34 @@
     return ok({ type: 'segmenta.open', taskId: taskId });
   }
 
+  /** Recent downloads for the popup: a known filter and a bounded limit only. */
+  function validateList(message) {
+    const filters = ['all', 'active', 'paused', 'pending', 'completed', 'failed', 'cancelled'];
+    const filter = typeof message.filter === 'string' ? message.filter : 'all';
+    if (filters.indexOf(filter) === -1) {
+      return fail('ERR_INVALID_PARAMS', 'unknown filter');
+    }
+    const raw = message.limit === undefined ? 10 : message.limit;
+    if (!Number.isInteger(raw) || raw < 1 || raw > 50) {
+      return fail('ERR_INVALID_PARAMS', 'limit is out of range');
+    }
+    return ok({ type: 'segmenta.list', filter: filter, limit: raw });
+  }
+
+  /** One quick action on one task: pause, resume or cancel. */
+  function validateAction(message) {
+    const taskId = typeof message.taskId === 'string' ? message.taskId.trim() : '';
+    if (!TASK_ID_PATTERN.test(taskId)) {
+      return fail('ERR_INVALID_PARAMS', 'task id is not acceptable');
+    }
+    const actions = ['pause', 'resume', 'cancel'];
+    const action = typeof message.action === 'string' ? message.action : '';
+    if (actions.indexOf(action) === -1) {
+      return fail('ERR_INVALID_PARAMS', 'unknown action');
+    }
+    return ok({ type: 'segmenta.action', action: action, taskId: taskId });
+  }
+
   function validateCapture(message) {
     const url = typeof message.url === 'string' ? message.url.trim() : '';
     const parsed = PROTOCOL.parseHttpUrl(url);
@@ -260,6 +288,10 @@
         return validateAdd(message, opts);
       case 'segmenta.status':
         return validateStatus(message);
+      case 'segmenta.list':
+        return validateList(message);
+      case 'segmenta.action':
+        return validateAction(message);
       case 'segmenta.open':
         return validateOpen(message);
       case 'segmenta.capture':
