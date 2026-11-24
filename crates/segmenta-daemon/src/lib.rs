@@ -4,6 +4,7 @@
 //! the CLI, the GUI and the integration tests share the same contract types.
 
 pub mod browsers;
+pub mod cnl2;
 pub mod events;
 pub mod extract;
 pub mod inhibit;
