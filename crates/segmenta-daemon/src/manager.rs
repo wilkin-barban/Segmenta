@@ -24,8 +24,8 @@ use crate::ipc::{hello_result, RpcHandler};
 use crate::postprocess::{HookOptions, HookRun, HookTarget};
 use crate::rpc::{
     AddDownloadParams, CancelParams, ChecksumParam, DebridResolveParams, DebridTokenParams,
-    DeleteManyParams, DeleteParams, DownloadView, ListParams, MediaAddParams, MediaProbeParams,
-    MediaStatusParams, PackageAssignParams, PackageCreateParams, PackageIdParams,
+    DeleteManyParams, DeleteParams, DownloadView, GalleryAddParams, ListParams, MediaAddParams,
+    MediaProbeParams, MediaStatusParams, PackageAssignParams, PackageCreateParams, PackageIdParams,
     PackageRenameParams, QueueCreateParams, QueueRemoveParams, QueueScheduleParams, RpcError,
     SegmentView, SiteLoginOriginParams, SiteLoginSetParams, TaskIdParams,
 };
@@ -1257,6 +1257,89 @@ impl Manager {
         })
     }
 
+    /// `gallery.add`: run the extractor and group what it wrote under one package.
+    ///
+    /// The extractor runs off the async runtime: `gallery-dl` is an external process and a
+    /// slow page must not stall the IPC loop. Every failure keeps the daemon alive and is
+    /// reported with its own code, and nothing is registered when nothing was written.
+    async fn gallery_add(&self, params: GalleryAddParams) -> Result<Value, RpcError> {
+        let settings = self.settings();
+        let destination = std::path::PathBuf::from(&settings.download_dir);
+        if !destination.is_absolute() {
+            return Err(RpcError::invalid_params("download_dir is not absolute"));
+        }
+        let url = params.url.trim().to_string();
+        let search = crate::gallery::search_path();
+        let target = destination.clone();
+        let run_url = url.clone();
+        let outcome = tokio::task::spawn_blocking(move || {
+            crate::gallery::run(
+                &run_url,
+                &target,
+                &search,
+                std::time::Duration::from_secs(crate::gallery::DEFAULT_TIMEOUT_SECS),
+            )
+        })
+        .await
+        .unwrap_or(crate::gallery::GalleryRun::Failed {
+            exit: None,
+            message: "the gallery thread failed".to_string(),
+        });
+        let files = match outcome {
+            crate::gallery::GalleryRun::Extracted(files) => files,
+            other => {
+                let code = other.code().unwrap_or("ERR_GALLERY_FAILED");
+                let message = match &other {
+                    crate::gallery::GalleryRun::Unavailable => {
+                        format!("{} is not installed", crate::gallery::BINARY_NAME)
+                    }
+                    crate::gallery::GalleryRun::Empty => "the gallery produced no file".to_string(),
+                    crate::gallery::GalleryRun::Failed { message, .. } => message.clone(),
+                    crate::gallery::GalleryRun::Extracted(_) => unreachable!(),
+                };
+                tracing::info!(error = code, "gallery import refused");
+                return Err(RpcError::new(gallery_code(code), code, message));
+            }
+        };
+        let package_id = uuid::Uuid::new_v4().to_string();
+        let name = gallery_package_name(&url);
+        self.store
+            .create_package(&package_id, &name, "gallery", Some(&url))
+            .map_err(store_error)?;
+        let mut added = 0;
+        for file in &files {
+            let mut record = blank_record(file, &url, &params.queue_name);
+            record.completed_at = None;
+            record.status = DownloadStatus::Completed;
+            record.downloaded_bytes = std::fs::metadata(file)
+                .map(|metadata| metadata.len())
+                .unwrap_or(0);
+            record.total_bytes = Some(record.downloaded_bytes);
+            if self.store.insert_download(&record).is_err() {
+                continue;
+            }
+            let _ = self
+                .store
+                .set_status(&record.id, DownloadStatus::Completed, None);
+            let _ = self.store.assign_package(&package_id, &record.id);
+            added += 1;
+        }
+        if added == 0 {
+            let _ = self.store.delete_package(&package_id);
+            return Err(RpcError::new(
+                gallery_code("ERR_GALLERY_EMPTY"),
+                "ERR_GALLERY_EMPTY",
+                "the gallery produced no usable file",
+            ));
+        }
+        tracing::info!(package_id = %package_id, files = added, "gallery import");
+        Ok(json!({
+            "package_id": package_id,
+            "name": name,
+            "files": added,
+        }))
+    }
+
     /// Secret alias that holds the token of one provider.
     fn debrid_alias(provider: &str) -> String {
         format!("debrid:{provider}")
@@ -2011,6 +2094,65 @@ fn remove_task_file(path: &Path) -> Result<bool, String> {
 
 fn store_error(err: StoreError) -> RpcError {
     RpcError::internal(err.to_string())
+}
+
+/// Numeric code each gallery failure carries to the client.
+fn gallery_code(code: &str) -> i64 {
+    match code {
+        "ERR_GALLERY_UNAVAILABLE" => 1070,
+        "ERR_GALLERY_EMPTY" => 1071,
+        _ => 1072,
+    }
+}
+
+/// Package name for a gallery import: the site, which is what the user recognizes.
+fn gallery_package_name(url: &str) -> String {
+    url.split("://")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .filter(|host| !host.is_empty())
+        .map(|host| host.to_string())
+        .unwrap_or_else(|| "Gallery".to_string())
+}
+
+/// A task record for a file the gallery extractor already wrote.
+fn blank_record(file: &std::path::Path, url: &str, queue: &str) -> DownloadRecord {
+    DownloadRecord {
+        id: uuid::Uuid::new_v4().to_string(),
+        url: url.to_string(),
+        final_url: Some(url.to_string()),
+        final_path: file.to_string_lossy().into_owned(),
+        temp_path: None,
+        total_bytes: None,
+        downloaded_bytes: 0,
+        status: DownloadStatus::Completed,
+        supports_ranges: false,
+        etag: None,
+        last_modified: None,
+        content_type: None,
+        expected_checksum: None,
+        error_code: None,
+        error_message: None,
+        retry_count: 0,
+        priority: 0,
+        queue_name: queue.to_string(),
+        download_type: "direct".to_string(),
+        quarantine_path: None,
+        postprocess_exit: None,
+        postprocess_message: None,
+        created_at: None,
+        completed_at: None,
+        filename: file
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        media_kind: None,
+        media_format: None,
+        playlist_title: None,
+        playlist_count: None,
+        batch_id: None,
+        scheduled_at: None,
+    }
 }
 
 /// Turn a debrid failure into a typed RPC error with a stable code.
@@ -3835,6 +3977,19 @@ impl RpcHandler for Manager {
                     let parsed: PackageIdParams = serde_json::from_value(parse(params)?)
                         .map_err(|err| RpcError::invalid_params(err.to_string()))?;
                     self.package_cancel(&parsed.package_id).await
+                }
+                "gallery.status" => {
+                    let _ = parse(params)?;
+                    let tool = crate::gallery::detect(&crate::gallery::search_path());
+                    Ok(json!({
+                        "tool": crate::gallery::BINARY_NAME,
+                        "available": tool.is_some(),
+                    }))
+                }
+                "gallery.add" => {
+                    let parsed: GalleryAddParams = serde_json::from_value(parse(params)?)
+                        .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                    self.gallery_add(parsed).await
                 }
                 "debrid.status" => {
                     let _ = parse(params)?;

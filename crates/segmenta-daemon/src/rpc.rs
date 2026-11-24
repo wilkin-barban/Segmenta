@@ -523,6 +523,16 @@ pub struct DebridTokenParams {
     pub token: Option<String>,
 }
 
+/// Parameters of `gallery.add`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GalleryAddParams {
+    /// Gallery page to extract.
+    pub url: String,
+    /// Queue the resulting tasks belong to.
+    #[serde(default = "default_queue")]
+    pub queue_name: String,
+}
+
 /// Parameters of `debrid.resolve`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DebridResolveParams {
