@@ -9,6 +9,14 @@ CREATE TABLE IF NOT EXISTS queues (
 
 INSERT OR IGNORE INTO queues(name, max_active) VALUES ('main', 3);
 
+CREATE TABLE IF NOT EXISTS packages (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'manual', -- 'manual' | 'cnl2' | 'gallery'
+    source_ref TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS downloads (
     id TEXT PRIMARY KEY,
     url TEXT NOT NULL,
@@ -40,7 +48,9 @@ CREATE TABLE IF NOT EXISTS downloads (
     postprocess_message TEXT,
     quarantine_path TEXT,
     -- Programación diferida para una fecha/hora exacta en UTC RFC-3339 (v6).
-    scheduled_at TEXT
+    scheduled_at TEXT,
+    -- Paquete al que pertenece la descarga; NULL es "suelta" (v7).
+    package_id TEXT REFERENCES packages(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS download_headers (

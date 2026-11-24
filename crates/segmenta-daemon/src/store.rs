@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Current schema version, stored in `PRAGMA user_version`.
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
@@ -1001,6 +1001,29 @@ impl Store {
         if current < 6 && !has_column(&tx, "downloads", "scheduled_at")? {
             tx.execute_batch("ALTER TABLE downloads ADD COLUMN scheduled_at TEXT")?;
         }
+        if current < 7 {
+            // Packages are additive: an existing download gets `package_id NULL`, which
+            // means "loose", and no table is rebuilt. `ON DELETE SET NULL` keeps a
+            // download alive when its package disappears.
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS packages (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'manual',
+                    source_ref TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );",
+            )?;
+            if !has_column(&tx, "downloads", "package_id")? {
+                tx.execute_batch(
+                    "ALTER TABLE downloads ADD COLUMN package_id TEXT
+                     REFERENCES packages(id) ON DELETE SET NULL",
+                )?;
+            }
+            tx.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_downloads_package ON downloads(package_id)",
+            )?;
+        }
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         Ok(SCHEMA_VERSION)
@@ -1943,6 +1966,117 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<DownloadRecord> {
 
 /// Whether `table` already has `column`, so a migration step that also exists in
 /// `schema.sql` can run without a duplicate-column error.
+/// One package of downloads, as `package.list` reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageRow {
+    /// Package identifier.
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// Where it came from: `manual`, `cnl2` or `gallery`.
+    pub source: String,
+    /// Optional origin recorded by the importer.
+    pub source_ref: Option<String>,
+    /// Creation timestamp, as SQLite stores it.
+    pub created_at: Option<String>,
+    /// Downloads currently grouped in it.
+    pub downloads: u32,
+}
+
+/// Longest accepted package name, in characters.
+pub const PACKAGE_NAME_LIMIT: usize = 120;
+
+/// Trim and validate a package name.
+pub fn normalize_package_name(name: &str) -> Result<String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(StoreError::Invalid("package name is empty".to_string()));
+    }
+    if name.chars().count() > PACKAGE_NAME_LIMIT {
+        return Err(StoreError::Invalid(format!(
+            "package name must not exceed {PACKAGE_NAME_LIMIT} characters"
+        )));
+    }
+    Ok(name.to_string())
+}
+
+impl Store {
+    /// Create one package with a caller-chosen id.
+    pub fn create_package(
+        &self,
+        id: &str,
+        name: &str,
+        source: &str,
+        source_ref: Option<&str>,
+    ) -> Result<()> {
+        let name = normalize_package_name(name)?;
+        self.lock().execute(
+            "INSERT INTO packages (id, name, source, source_ref) VALUES (?1, ?2, ?3, ?4)",
+            params![id, name, source, source_ref],
+        )?;
+        Ok(())
+    }
+
+    /// Every package with its download count, newest first.
+    pub fn packages(&self) -> Result<Vec<PackageRow>> {
+        let conn = self.lock();
+        let mut statement = conn.prepare(
+            "SELECT p.id, p.name, p.source, p.source_ref, p.created_at,
+                    (SELECT COUNT(*) FROM downloads d WHERE d.package_id = p.id)
+             FROM packages p
+             ORDER BY p.created_at DESC, p.rowid DESC",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(PackageRow {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                source: row.get(2)?,
+                source_ref: row.get(3)?,
+                created_at: row.get(4)?,
+                downloads: row.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Rename one package; `false` when the id does not exist.
+    pub fn rename_package(&self, id: &str, name: &str) -> Result<bool> {
+        let name = normalize_package_name(name)?;
+        let changed = self.lock().execute(
+            "UPDATE packages SET name = ?2 WHERE id = ?1",
+            params![id, name],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Drop one package; its downloads stay and become loose.
+    pub fn delete_package(&self, id: &str) -> Result<bool> {
+        let changed = self
+            .lock()
+            .execute("DELETE FROM packages WHERE id = ?1", params![id])?;
+        Ok(changed > 0)
+    }
+
+    /// Group one download under a package; `false` when either side does not exist.
+    pub fn assign_package(&self, package_id: &str, task_id: &str) -> Result<bool> {
+        let changed = self.lock().execute(
+            "UPDATE downloads SET package_id = ?1 WHERE id = ?2",
+            params![package_id, task_id],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Ids of the downloads grouped in one package, in creation order.
+    pub fn package_task_ids(&self, package_id: &str) -> Result<Vec<String>> {
+        let conn = self.lock();
+        let mut statement = conn.prepare(
+            "SELECT id FROM downloads WHERE package_id = ?1 ORDER BY created_at ASC, rowid ASC",
+        )?;
+        let rows = statement.query_map(params![package_id], |row| row.get::<_, String>(0))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+}
+
 fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool> {
     let mut statement = conn.prepare(&format!(
         "SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = ?1"

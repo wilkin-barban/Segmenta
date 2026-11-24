@@ -462,7 +462,7 @@ fn migration_from_v2_to_v3_preserves_data_and_creates_torrent_tables() {
     }
     let store = Store::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 6);
+    assert_eq!(SCHEMA_VERSION, 7);
 
     let rows = store.list(None, 10, 0).unwrap();
     assert_eq!(rows.len(), 1);
@@ -943,7 +943,7 @@ fn a_legacy_site_login_is_listed_but_never_used_for_injection() {
 
 #[test]
 fn migration_from_v5_to_v6_adds_scheduled_at_column_and_preserves_rows() {
-    assert_eq!(SCHEMA_VERSION, 6);
+    assert_eq!(SCHEMA_VERSION, 7);
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("segmenta-v5.db");
     {
@@ -987,7 +987,7 @@ fn migration_from_v5_to_v6_adds_scheduled_at_column_and_preserves_rows() {
         "#).unwrap();
     }
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 6);
+    assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
     let row = store.get("old-5").unwrap().expect("row exists");
     assert_eq!(row.id, "old-5");
     assert_eq!(row.scheduled_at, None);
@@ -1013,4 +1013,66 @@ fn sequential_torrents_default_off_and_persist() {
         .update_settings(json!({ "torrent_sequential": true }).as_object().unwrap())
         .unwrap();
     assert!(store.settings().unwrap().torrent_sequential);
+}
+
+#[test]
+fn a_v6_database_gains_packages_without_touching_its_downloads() {
+    let (dir, store) = open_temp();
+    let record = record("kept", DownloadStatus::Pending);
+    store.insert_download(&record).unwrap();
+    drop(store);
+
+    // Reshape the file into what 0.4.0 left behind: no packages table, no column.
+    let conn = rusqlite::Connection::open(dir.path().join("segmenta.db")).unwrap();
+    conn.execute_batch("DROP INDEX IF EXISTS idx_downloads_package")
+        .unwrap();
+    conn.execute_batch("DROP TABLE packages").unwrap();
+    conn.execute_batch("ALTER TABLE downloads DROP COLUMN package_id")
+        .unwrap();
+    conn.pragma_update(None, "user_version", 6).unwrap();
+    drop(conn);
+
+    let migrated = Store::open(&dir.path().join("segmenta.db")).unwrap();
+    assert_eq!(migrated.schema_version().unwrap(), 7);
+    let kept = migrated.get("kept").unwrap().unwrap();
+    assert_eq!(kept.id, "kept");
+    assert!(migrated.packages().unwrap().is_empty());
+    migrated
+        .create_package("p1", "Bundle", "manual", None)
+        .unwrap();
+    assert!(migrated.assign_package("p1", "kept").unwrap());
+    assert_eq!(migrated.package_task_ids("p1").unwrap(), vec!["kept"]);
+}
+
+#[test]
+fn deleting_a_package_keeps_its_downloads() {
+    let (_dir, store) = open_temp();
+    store
+        .insert_download(&record("one", DownloadStatus::Pending))
+        .unwrap();
+    store
+        .insert_download(&record("two", DownloadStatus::Pending))
+        .unwrap();
+    store
+        .create_package("p1", "  Bundle  ", "cnl2", Some("https://site"))
+        .unwrap();
+    assert!(store.assign_package("p1", "one").unwrap());
+    assert!(store.assign_package("p1", "two").unwrap());
+
+    let listed = store.packages().unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].name, "Bundle", "the name is trimmed");
+    assert_eq!(listed[0].downloads, 2);
+    assert_eq!(listed[0].source, "cnl2");
+
+    assert!(store.rename_package("p1", "Renamed").unwrap());
+    assert_eq!(store.packages().unwrap()[0].name, "Renamed");
+
+    assert!(store.delete_package("p1").unwrap());
+    assert!(store.packages().unwrap().is_empty());
+    assert!(store.get("one").unwrap().is_some());
+    assert!(store.get("two").unwrap().is_some());
+    assert!(!store.delete_package("p1").unwrap());
+    assert!(!store.rename_package("missing", "x").unwrap());
+    assert!(store.create_package("p2", "   ", "manual", None).is_err());
 }
