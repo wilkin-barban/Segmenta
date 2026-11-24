@@ -1003,3 +1003,14 @@ fn sleep_inhibition_defaults_on_and_persists() {
         .unwrap();
     assert!(!store.settings().unwrap().inhibit_sleep);
 }
+
+#[test]
+fn sequential_torrents_default_off_and_persist() {
+    let (_dir, store) = open_temp();
+    assert!(!store.settings().unwrap().torrent_sequential);
+
+    store
+        .update_settings(json!({ "torrent_sequential": true }).as_object().unwrap())
+        .unwrap();
+    assert!(store.settings().unwrap().torrent_sequential);
+}

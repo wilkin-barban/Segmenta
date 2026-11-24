@@ -3166,6 +3166,7 @@ impl Manager {
         let id = task_id.clone();
         let path = record.final_path.clone();
         let task_cancel = cancel.clone();
+        let sequential = self.settings().torrent_sequential;
         let wake = Arc::clone(&self.scheduler_wake);
         let handle = tokio::spawn(async move {
             let mut pipeline = ProgressPipeline::new(
@@ -3184,7 +3185,7 @@ impl Manager {
                     Some(&id),
                     json!({ "status": "downloading" }),
                 );
-                crate::torrent::run_torrent(session, source, task_cancel, |line| {
+                crate::torrent::run_torrent(session, source, task_cancel, sequential, |line| {
                     pipeline.report(line.downloaded, Some(line.total));
                 })
                 .await

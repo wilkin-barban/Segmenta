@@ -466,6 +466,8 @@ pub struct Settings {
     pub extract_remove_source: bool,
     /// Block system sleep while a transfer is running.
     pub inhibit_sleep: bool,
+    /// Ask librqbit for the first pieces of a torrent, so playback can start early.
+    pub torrent_sequential: bool,
     /// Run ClamAV over every finished file before publishing it as `completed`.
     pub antivirus_enabled: bool,
     /// Deadline of one scan, in seconds (1-3600, OpenSpec 12 §5).
@@ -512,6 +514,7 @@ impl Default for Settings {
             extract_archives: false,
             extract_remove_source: false,
             inhibit_sleep: true,
+            torrent_sequential: false,
             antivirus_enabled: false,
             antivirus_timeout_secs: DEFAULT_ANTIVIRUS_TIMEOUT_SECS,
             antivirus_quarantine_dir: default_quarantine_dir(),
@@ -627,6 +630,7 @@ pub const SETTING_KEYS: &[&str] = &[
     "extract_archives",
     "extract_remove_source",
     "inhibit_sleep",
+    "torrent_sequential",
     "antivirus_enabled",
     "antivirus_timeout_secs",
     "antivirus_quarantine_dir",

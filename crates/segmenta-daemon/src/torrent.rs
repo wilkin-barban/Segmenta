@@ -244,10 +244,17 @@ pub async fn shared_session(
 ///
 /// Seeding stays off: the task stops as soon as the payload is complete, and a
 /// cancellation deletes the torrent from the session without touching the data.
+///
+/// `sequential` asks librqbit for the first pieces of the payload, which is what makes an
+/// early play possible. The backend has no whole-torrent sequential switch: opening a
+/// [`librqbit::FileStream`] is the only public way to move piece priority, so the stream is
+/// held open while the task runs and dropped with it. Without that handle the pieces come
+/// in whatever order the peers offer, and the caller must not promise ordered playback.
 pub async fn run_torrent(
     session: std::sync::Arc<librqbit::Session>,
     source: String,
     cancel: segmenta_core::engine::Canceller,
+    sequential: bool,
     mut on_progress: impl FnMut(TorrentProgress),
 ) -> Result<(), String> {
     let response = session
@@ -267,6 +274,18 @@ pub async fn run_torrent(
         librqbit::AddTorrentResponse::ListOnly(_) => {
             return Err("the torrent was opened in list-only mode".to_string())
         }
+    };
+    // Held for the whole task: dropping the stream is what stops the prioritization.
+    let _priority = if sequential {
+        match handle.clone().stream(0).await {
+            Ok(stream) => Some(stream),
+            Err(err) => {
+                tracing::info!(error = %err, "sequential priority is unavailable for this torrent");
+                None
+            }
+        }
+    } else {
+        None
     };
     loop {
         if cancel.is_cancelled() {
