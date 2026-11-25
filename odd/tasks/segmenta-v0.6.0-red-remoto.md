@@ -10,7 +10,7 @@ Fase 3. Depende del cierre de v0.5.0. Fuente: [SPEC-013](../../docs/openspec/13-
 ## Tasks
 
 - [x] T0 — Fix quirúrgico del botón de búsqueda en `segmenta-gui` y test de UI (S1) — ruta: `segmenta-gui` — commit: `86955a8`.
-- [ ] T1 — Integración visual de Paquetes en la GUI (vista/sección y acciones colectivas) y seam de resolución transparente para Debrid (S1) — ruta: GUI, daemon y modelo — commit: pendiente.
+- [x] T1 — Integración visual de Paquetes en la GUI (vista/sección y acciones colectivas) y seam de resolución transparente para Debrid (S1) — ruta: GUI, daemon y modelo — commits: `6aea907` (seam Debrid), `602b171` (modelo y cliente de pruebas), `d6a9e9e` (sección de paquetes con acciones).
 - [ ] T2 — VPN binding (`SO_BINDTODEVICE`) con Kill Switch fail-closed, definiendo qué tráfico queda cubierto y bloqueando el resto si no puede garantizarse (S1) — ruta: core y daemon — commit: pendiente.
 - [ ] T3 — Suplantación TLS / bypass anti-bot con BoringSSL, con alcance, licencias y activación definidos (S1) — ruta: probe y transporte — commit: pendiente.
 - [ ] T4 — Servidor web de control remoto con emparejamiento por código QR, ciclo de vida y revocación de tokens (S1) — ruta: daemon, GUI/CLI y web — commit: pendiente.
@@ -68,3 +68,10 @@ Fase 3. Depende del cierre de v0.5.0. Fuente: [SPEC-013](../../docs/openspec/13-
 
 > Cada documento ODD debe seguir estrictamente el estándar: encabezado, Specs con S#, Tasks con T# vinculadas a sus S#, criterios de aceptación, pruebas previstas y riesgos.
 > Ojo: NO implementes nada de código todavía. Tu tarea ahora es exclusivamente de investigación, auditoría y diseño de los artefactos ODD sin sobreingeniería. Dejame los planes armados y reportame el resultado.
+
+- L5 — T1 cerrado.
+  - Paquetes en la GUI: `PackageRow` en `model.rs`, sección «Paquetes» en la barra lateral alimentada por `package.list` (se refresca al arrancar y bajo demanda) con nombre y cantidad, y botones Pausar / Reanudar / Eliminar que envían `package.pause`, `package.resume` y `package.delete` con el `package_id` de la fila seleccionada. `package.delete` viaja siempre con `delete_file: false`, así que borrar un paquete desde la interfaz nunca borra archivos.
+  - Seam Debrid: `add_dialog::debrid_link` consulta `debrid.status` y, solo si el proveedor está configurado y tiene token, llama a `debrid.resolve`; el `download.add` sale con el enlace directo. Cualquier fallo —proveedor ausente, token faltante, error del proveedor o respuesta que no sea `https`— devuelve el enlace original sin mostrar error, que es lo que hace la función transparente. La cadena corre en el hilo de trabajo del `RequestBus` (`spawn_chained`), nunca en el hilo de GTK.
+  - Pruebas: 4 sin GTK en `tests/debrid_seam.rs` (proveedor configurado, sin proveedor, proveedor que falla y respuesta `http://` rechazada) y una de UI bajo `xvfb-run` en `tests/actions.rs` que carga dos paquetes, verifica nombre y cantidad, selecciona el primero y comprueba que `package.pause` y `package.delete` salen con el id correcto y sin borrar archivos.
+  - Gates: `xvfb-run -a cargo test -p segmenta-gui` en verde (72 pruebas), `cargo clippy -p segmenta-gui --all-targets -D warnings` y `cargo fmt --check` sin avisos.
+  - Límites declarados: la sección lista paquetes pero no filtra la lista de descargas por paquete (el daemon todavía no expone ese filtro en `download.list`); no se muestran origen ni fecha del paquete; y las acciones no refrescan la lista tras el éxito, hay que volver a abrir la vista o esperar al siguiente arranque.
