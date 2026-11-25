@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use segmenta_daemon::secrets::{FileSecretStore, SecretStore};
 use segmenta_daemon::store::{
-    Checkpoint, DownloadRecord, DownloadStatus, SegmentRow, Settings, SiteLoginRow, Store,
+    Checkpoint, DownloadRecord, DownloadStatus, RssFeed, SegmentRow, Settings, SiteLoginRow, Store,
     SCHEMA_VERSION,
 };
 use serde_json::json;
@@ -462,7 +462,7 @@ fn migration_from_v2_to_v3_preserves_data_and_creates_torrent_tables() {
     }
     let store = Store::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 7);
+    assert_eq!(SCHEMA_VERSION, 8);
 
     let rows = store.list(None, 10, 0).unwrap();
     assert_eq!(rows.len(), 1);
@@ -943,7 +943,7 @@ fn a_legacy_site_login_is_listed_but_never_used_for_injection() {
 
 #[test]
 fn migration_from_v5_to_v6_adds_scheduled_at_column_and_preserves_rows() {
-    assert_eq!(SCHEMA_VERSION, 7);
+    assert_eq!(SCHEMA_VERSION, 8);
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("segmenta-v5.db");
     {
@@ -1033,7 +1033,7 @@ fn a_v6_database_gains_packages_without_touching_its_downloads() {
     drop(conn);
 
     let migrated = Store::open(&dir.path().join("segmenta.db")).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 7);
+    assert_eq!(migrated.schema_version().unwrap(), 8);
     let kept = migrated.get("kept").unwrap().unwrap();
     assert_eq!(kept.id, "kept");
     assert!(migrated.packages().unwrap().is_empty());
@@ -1075,4 +1075,47 @@ fn deleting_a_package_keeps_its_downloads() {
     assert!(!store.delete_package("p1").unwrap());
     assert!(!store.rename_package("missing", "x").unwrap());
     assert!(store.create_package("p2", "   ", "manual", None).is_err());
+}
+
+#[test]
+fn rss_feeds_survive_a_restart_and_deduplicate_by_guid() {
+    let (dir, store) = open_temp();
+    store
+        .insert_download(&record("kept", DownloadStatus::Pending))
+        .unwrap();
+    let feed = RssFeed {
+        id: "feed-1".to_string(),
+        url: "https://example.test/feed.xml".to_string(),
+        name: "Example".to_string(),
+        filter_regex: Some("1080p".to_string()),
+        destination: "/tmp/dl".to_string(),
+        check_interval_mins: 30,
+        last_checked_at: None,
+    };
+    store.create_rss_feed(&feed).unwrap();
+
+    // The first time a GUID is a new item; afterwards it is a duplicate.
+    assert!(store.mark_rss_seen("feed-1", "guid-a").unwrap());
+    assert!(!store.mark_rss_seen("feed-1", "guid-a").unwrap());
+    assert!(store.rss_seen("feed-1", "guid-a").unwrap());
+    assert!(!store.rss_seen("feed-1", "guid-b").unwrap());
+    store.set_rss_last_checked("feed-1", 1_700_000_000).unwrap();
+
+    // A new handle sees the same feed, the same stamp and the same dedup state.
+    drop(store);
+    let reopened = Store::open(&dir.path().join("segmenta.db")).unwrap();
+    let feeds = reopened.rss_feeds().unwrap();
+    assert_eq!(feeds.len(), 1);
+    assert_eq!(feeds[0].name, "Example");
+    assert_eq!(feeds[0].check_interval_mins, 30);
+    assert_eq!(feeds[0].last_checked_at, Some(1_700_000_000));
+    assert!(reopened.rss_seen("feed-1", "guid-a").unwrap());
+    // The pre-existing download is still there.
+    assert!(reopened.get("kept").unwrap().is_some());
+
+    // Removing the feed takes its seen items with it.
+    assert!(reopened.remove_rss_feed("feed-1").unwrap());
+    assert!(reopened.rss_feeds().unwrap().is_empty());
+    assert!(!reopened.rss_seen("feed-1", "guid-a").unwrap());
+    assert!(!reopened.remove_rss_feed("feed-1").unwrap());
 }

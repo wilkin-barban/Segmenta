@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Current schema version, stored in `PRAGMA user_version`.
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 8;
 
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
@@ -1092,6 +1092,27 @@ impl Store {
                 "CREATE INDEX IF NOT EXISTS idx_downloads_package ON downloads(package_id)",
             )?;
         }
+        if current < 8 {
+            // RSS is additive: two new tables and nothing touched, so an existing download
+            // list survives the upgrade untouched.
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS rss_feeds (
+                    id TEXT PRIMARY KEY,
+                    url TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    filter_regex TEXT,
+                    destination TEXT NOT NULL,
+                    check_interval_mins INTEGER NOT NULL DEFAULT 60,
+                    last_checked_at INTEGER
+                );
+                CREATE TABLE IF NOT EXISTS rss_seen_items (
+                    feed_id TEXT NOT NULL REFERENCES rss_feeds(id) ON DELETE CASCADE,
+                    guid TEXT NOT NULL,
+                    first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (feed_id, guid)
+                );",
+            )?;
+        }
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         Ok(SCHEMA_VERSION)
@@ -2034,6 +2055,25 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<DownloadRecord> {
 
 /// Whether `table` already has `column`, so a migration step that also exists in
 /// `schema.sql` can run without a duplicate-column error.
+/// One RSS/Atom feed the daemon polls.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RssFeed {
+    /// Feed identifier.
+    pub id: String,
+    /// Feed URL.
+    pub url: String,
+    /// Display name.
+    pub name: String,
+    /// Only items whose title matches this expression are imported.
+    pub filter_regex: Option<String>,
+    /// Directory the resulting tasks use.
+    pub destination: String,
+    /// Minutes between polls.
+    pub check_interval_mins: u32,
+    /// Last poll, in seconds since the epoch.
+    pub last_checked_at: Option<i64>,
+}
+
 /// One package of downloads, as `package.list` reports it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageRow {
@@ -2069,6 +2109,80 @@ pub fn normalize_package_name(name: &str) -> Result<String> {
 }
 
 impl Store {
+    /// Create one feed.
+    pub fn create_rss_feed(&self, feed: &RssFeed) -> Result<()> {
+        self.lock().execute(
+            "INSERT INTO rss_feeds (id, url, name, filter_regex, destination, check_interval_mins)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                feed.id,
+                feed.url,
+                feed.name,
+                feed.filter_regex,
+                feed.destination,
+                feed.check_interval_mins
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Every feed, oldest first.
+    pub fn rss_feeds(&self) -> Result<Vec<RssFeed>> {
+        let conn = self.lock();
+        let mut statement = conn.prepare(
+            "SELECT id, url, name, filter_regex, destination, check_interval_mins, last_checked_at
+             FROM rss_feeds ORDER BY rowid ASC",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(RssFeed {
+                id: row.get(0)?,
+                url: row.get(1)?,
+                name: row.get(2)?,
+                filter_regex: row.get(3)?,
+                destination: row.get(4)?,
+                check_interval_mins: row.get(5)?,
+                last_checked_at: row.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    }
+
+    /// Remove one feed and the GUIDs it had seen; `false` when it did not exist.
+    pub fn remove_rss_feed(&self, id: &str) -> Result<bool> {
+        let conn = self.lock();
+        conn.execute("DELETE FROM rss_seen_items WHERE feed_id = ?1", params![id])?;
+        let changed = conn.execute("DELETE FROM rss_feeds WHERE id = ?1", params![id])?;
+        Ok(changed > 0)
+    }
+
+    /// Record one GUID; `true` only the first time, which is what prevents duplicates.
+    pub fn mark_rss_seen(&self, feed_id: &str, guid: &str) -> Result<bool> {
+        let changed = self.lock().execute(
+            "INSERT OR IGNORE INTO rss_seen_items (feed_id, guid) VALUES (?1, ?2)",
+            params![feed_id, guid],
+        )?;
+        Ok(changed > 0)
+    }
+
+    /// Whether the feed already imported `guid`.
+    pub fn rss_seen(&self, feed_id: &str, guid: &str) -> Result<bool> {
+        let count: i64 = self.lock().query_row(
+            "SELECT COUNT(*) FROM rss_seen_items WHERE feed_id = ?1 AND guid = ?2",
+            params![feed_id, guid],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    /// Stamp the last poll of one feed.
+    pub fn set_rss_last_checked(&self, id: &str, timestamp: i64) -> Result<()> {
+        self.lock().execute(
+            "UPDATE rss_feeds SET last_checked_at = ?2 WHERE id = ?1",
+            params![id, timestamp],
+        )?;
+        Ok(())
+    }
+
     /// Create one package with a caller-chosen id.
     pub fn create_package(
         &self,

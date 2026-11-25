@@ -131,3 +131,22 @@ CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads(status);
 CREATE INDEX IF NOT EXISTS idx_downloads_queue ON downloads(queue_name, priority DESC);
 CREATE INDEX IF NOT EXISTS idx_segments_download_id ON segments(download_id);
 CREATE INDEX IF NOT EXISTS idx_downloads_created_at ON downloads(created_at DESC);
+
+-- Feeds RSS/Atom sondeados por el daemon (v8).
+CREATE TABLE IF NOT EXISTS rss_feeds (
+    id TEXT PRIMARY KEY,
+    url TEXT NOT NULL,
+    name TEXT NOT NULL,
+    filter_regex TEXT,
+    destination TEXT NOT NULL,
+    check_interval_mins INTEGER NOT NULL DEFAULT 60,
+    last_checked_at INTEGER
+);
+
+-- GUIDs ya importados por feed: la deduplicación sobrevive a cualquier reinicio (v8).
+CREATE TABLE IF NOT EXISTS rss_seen_items (
+    feed_id TEXT NOT NULL REFERENCES rss_feeds(id) ON DELETE CASCADE,
+    guid TEXT NOT NULL,
+    first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (feed_id, guid)
+);
