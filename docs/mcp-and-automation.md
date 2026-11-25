@@ -1,24 +1,87 @@
 # Automatización de la fase 1: MCP, extracción, inhibición y torrents
 
-Estado: implementado en `main` sobre v0.3.1 (release v0.4.0 pendiente de publicación).
+Estado: implementado y publicado; el servidor MCP viaja en el `.deb` desde v0.4.0.
 Contrato y evidencia por tarea: [`odd/tasks/segmenta-v0.4.0-automatizacion.md`](../odd/tasks/segmenta-v0.4.0-automatizacion.md).
 
 ## Servidor MCP por stdio
 
-`segmenta-mcp` habla JSON-RPC por líneas sobre stdin/stdout y reenvía al daemon por su socket Unix:
+`/usr/bin/segmenta-mcp` es un puente ligero: habla JSON-RPC por líneas sobre stdin/stdout (el
+transporte MCP estándar) y reenvía cada herramienta al daemon por su socket Unix:
 `SEGMENTA_SOCKET`, si está definido; si no, `$XDG_RUNTIME_DIR/segmenta/daemon.sock`; y como último
-recurso `/tmp/segmenta-<uid>/daemon.sock`. No inicia el daemon ni modifica la configuración de
-ningún cliente: se declara a mano en el cliente MCP.
+recurso `/tmp/segmenta-<uid>/daemon.sock`. No abre puertos, no guarda estado, no inicia el daemon y
+no modifica la configuración de ningún cliente: se declara a mano en el cliente MCP.
 
-Herramientas: `segmenta_list`, `segmenta_add`, `segmenta_pause`, `segmenta_resume` y
-`segmenta_delete`. Cada una usa el método IPC existente (`download.list`, `download.add`,
-`download.pause`, `download.resume`, `download.delete`) sin métodos arbitrarios. `segmenta_delete`
-envía `delete_file: false` cuando el cliente no lo indica; con `delete_file: true` el daemon borra
-también el archivo.
+Cada herramienta usa el método IPC existente (`download.list`, `download.add`, `download.pause`,
+`download.resume`, `download.delete`) sin métodos arbitrarios.
 
-Límites: frames de 1 MiB, 128 respuestas del daemon por llamada y timeouts de 30 s por operación de
-socket. Los diagnósticos van solo a stderr. Los errores del daemon se reportan como error de
-herramienta sin filtrar el detalle interno.
+### Configuración del cliente
+
+El paquete instala el binario en `/usr/bin/segmenta-mcp`. Agregalo a la configuración del cliente
+(`~/.config/Claude/claude_desktop_config.json`, `~/.cursor/mcp.json` o el equivalente):
+
+```json
+{
+  "mcpServers": {
+    "segmenta": {
+      "command": "/usr/bin/segmenta-mcp"
+    }
+  }
+}
+```
+
+Reiniciá el cliente: el servidor aparece con las cinco herramientas de abajo.
+
+### Herramientas y parámetros
+
+#### `segmenta_list`
+
+Lista las descargas con el mismo contrato que `download.list`.
+
+| Parámetro | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `filter` | string | no | `all` (por defecto), `active`, `paused`, `pending`, `completed`, `failed` o `cancelled` |
+| `limit` | integer | no | Filas a devolver; el daemon acota entre 1 y 1000, con 100 por defecto |
+| `offset` | integer | no | Filas a saltear, para paginar; 0 por defecto |
+
+#### `segmenta_add`
+
+Agrega una descarga y devuelve `task_id`, estado, nombre y ruta final.
+
+| Parámetro | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `url` | string | **sí** | URL `http` o `https` |
+| `destination_dir` | string | no | Directorio absoluto; si falta se usa el de la configuración |
+| `filename` | string | no | Nombre sugerido; si falta se deduce del servidor |
+| `connections` | integer | no | Conexiones para esa tarea; el daemon acota entre 1 y 32 |
+| `start_immediately` | boolean | no | Arrancar al crearla; `true` por defecto |
+| `queue_name` | string | no | Cola destino; `main` por defecto |
+| `priority` | integer | no | Prioridad, mayor primero; 0 por defecto |
+
+#### `segmenta_pause`
+
+| Parámetro | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `task_id` | string | **sí** | Tarea a pausar |
+
+#### `segmenta_resume`
+
+| Parámetro | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `task_id` | string | **sí** | Tarea a reanudar o reintentar |
+
+#### `segmenta_delete`
+
+| Parámetro | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `task_id` | string | **sí** | Tarea a eliminar |
+| `delete_file` | boolean | no | Borrar también el archivo del disco; `false` por defecto, y el servidor lo envía explícito porque el daemon exige el campo |
+
+### Límites y errores
+
+Frames de 1 MiB, 128 respuestas del daemon por llamada y timeouts de 30 s por operación de socket.
+Los diagnósticos van solo a stderr, así que stdout queda limpio para el protocolo. Los errores del
+daemon se reportan como error de herramienta (`isError: true`) sin filtrar el detalle interno ni
+devolver la credencial de una URL.
 
 Riesgo operativo: cualquier cliente conectado puede borrar tareas y archivos. Conectá solo clientes
 confiables; el daemon sigue autorizando por UID del socket.

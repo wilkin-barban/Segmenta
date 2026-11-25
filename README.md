@@ -241,6 +241,38 @@ las descargas y reconectarla sin perder el estado.
 | `extension/` | Extensión Chromium MV3, Firefox y tests |
 | `packaging/` | `.deb`, systemd, manifiestos nativos, AppStream, icono y gates |
 
+## Servidor MCP para Asistentes de IA (Model Context Protocol)
+
+`/usr/bin/segmenta-mcp` es un puente ligero: habla **JSON-RPC por líneas sobre stdin/stdout** (el
+transporte MCP estándar) y traduce cada herramienta a una llamada al socket Unix del daemon, con
+la misma resolución de ruta que el CLI. No abre puertos, no guarda estado y no arranca el daemon:
+si no está corriendo, responde un error de herramienta y sigue vivo.
+
+Con eso cualquier cliente compatible puede listar, agregar, pausar, reanudar y eliminar descargas
+conversando con el agente, sin que el modelo toque la base ni el sistema de archivos.
+
+### Configuración
+
+El paquete `.deb` ya instala el binario en `/usr/bin/segmenta-mcp`. Para Claude Desktop, Cursor o
+Antigravity, agregá el servidor a la configuración del cliente
+(`~/.config/Claude/claude_desktop_config.json`, `~/.cursor/mcp.json` o el equivalente):
+
+```json
+{
+  "mcpServers": {
+    "segmenta": {
+      "command": "/usr/bin/segmenta-mcp"
+    }
+  }
+}
+```
+
+Reiniciá el cliente y pedile algo como «listá mis descargas» o «agregá
+https://example.org/file.iso». Las cinco herramientas y sus parámetros están en
+[`docs/mcp-and-automation.md`](docs/mcp-and-automation.md).
+
+Cualquier cliente conectado puede borrar tareas y archivos: conectá solo clientes confiables.
+
 ## Desarrollo y CI
 
 ```bash
