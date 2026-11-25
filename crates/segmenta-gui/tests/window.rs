@@ -1803,3 +1803,57 @@ fn the_header_shows_the_vpn_state_and_opens_the_preferences() {
         );
     });
 }
+
+#[test]
+fn the_remote_dialog_pairs_shows_the_token_once_and_revokes() {
+    run_gui("remote_dialog", || {
+        let app = app("io.github.wilkin.Segmenta.RemoteDialog");
+        let fake = DemoClient::with_downloads(vec![download_row("task-1", "downloading", 1)]);
+        let window = window_with(&app, &fake);
+
+        window.open_remote_dialog();
+        assert!(
+            pump_until(|| window.remote_dialog_open(), Duration::from_secs(3)),
+            "the remote dialog never opened"
+        );
+
+        // Pairing: the daemon mints the token, the dialog shows it with the URL and a QR.
+        window.click_remote_pair();
+        assert!(
+            pump_until(
+                || window.remote_pairing_url().is_some(),
+                Duration::from_secs(3)
+            ),
+            "the pairing url never appeared"
+        );
+        let url = window.remote_pairing_url().unwrap();
+        assert!(url.starts_with("http://"), "{url}");
+        assert!(url.contains("token="), "{url}");
+        assert!(
+            window.remote_token_shown(),
+            "the token must be visible once"
+        );
+        assert!(window.remote_qr_ready(), "the QR must be painted");
+        assert!(
+            window.remote_warning_shown(),
+            "the dialog must warn the token is shown once"
+        );
+
+        // Revoking: the button clears the pairing and tells the daemon.
+        window.click_remote_revoke();
+        assert!(
+            pump_until(
+                || window.remote_pairing_url().is_none(),
+                Duration::from_secs(3)
+            ),
+            "revoking must clear the pairing"
+        );
+        assert!(fake.calls_to("remote.revoke").len() == 1);
+
+        window.close_remote_dialog();
+        assert!(pump_until(
+            || !window.remote_dialog_open(),
+            Duration::from_secs(3)
+        ));
+    });
+}

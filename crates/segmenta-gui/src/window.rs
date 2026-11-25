@@ -109,6 +109,8 @@ struct Inner {
     vpn_state: std::cell::RefCell<Option<(String, String)>>,
     /// Set when the preferences are opened from anywhere in the window.
     preferences_requested: std::cell::Cell<bool>,
+    /// Pairing dialog, when open.
+    remote_dialog: std::cell::RefCell<Option<Rc<crate::remote_dialog::RemoteDialog>>>,
     store: RefCell<crate::model::DownloadStore>,
     filter: Cell<Filter>,
     query: RefCell<String>,
@@ -313,6 +315,7 @@ impl SegmentaWindow {
             vpn_badge: gtk::Button::new(),
             vpn_state: std::cell::RefCell::new(None),
             preferences_requested: std::cell::Cell::new(false),
+            remote_dialog: std::cell::RefCell::new(None),
             store: RefCell::new(crate::model::DownloadStore::default()),
             filter: Cell::new(Filter::All),
             query: RefCell::new(String::new()),
@@ -616,6 +619,151 @@ impl SegmentaWindow {
     /// Press the magnifier the way a mouse click does.
     pub fn click_search_button(&self) {
         self.0.search_toggle.emit_clicked();
+    }
+
+    /// Open the remote pairing dialog.
+    pub fn open_remote_dialog(&self) {
+        if self.0.remote_dialog.borrow().is_some() {
+            return;
+        }
+        let dialog = Rc::new(crate::remote_dialog::RemoteDialog::build(&self.0.window));
+        let client = Arc::clone(&self.0.client);
+
+        let pair = dialog.pair.clone();
+        let pairing = Rc::clone(&dialog.pairing);
+        let token = Rc::clone(&dialog.token);
+        let modules = Rc::clone(&dialog.qr_modules);
+        let picture = dialog.picture.clone();
+        let url_row = dialog.url_row.clone();
+        let token_row = dialog.token_row.clone();
+        let warning = dialog.warning.clone();
+        let status = dialog.status.clone();
+        pair.connect_clicked(move |_| {
+            // A fresh bus per click: the closure runs many times, the bus is used once.
+            let pair_bus = RequestBus::new();
+            pair_bus.spawn(&client, "remote.enable", json!({}));
+            let pairing = Rc::clone(&pairing);
+            let token = Rc::clone(&token);
+            let modules = Rc::clone(&modules);
+            let picture = picture.clone();
+            let url_row = url_row.clone();
+            let token_row = token_row.clone();
+            let warning = warning.clone();
+            let status = status.clone();
+            gtk::glib::timeout_add_local(std::time::Duration::from_millis(120), move || {
+                if let Some((_, Ok(value))) = pair_bus.take().into_iter().next() {
+                    let url = value["pairing"].as_str().unwrap_or_default().to_string();
+                    let secret = url.split("token=").nth(1).unwrap_or_default().to_string();
+                    modules.set(crate::remote_dialog::paint_qr(&picture, &url));
+                    url_row.set_text(&url);
+                    url_row.set_visible(true);
+                    token_row.set_text(&secret);
+                    token_row.set_visible(true);
+                    warning.set_visible(true);
+                    status.set_label("Emparejado. Guardá el token antes de cerrar.");
+                    *pairing.borrow_mut() = Some(url);
+                    *token.borrow_mut() = Some(secret);
+                    return gtk::glib::ControlFlow::Break;
+                }
+                gtk::glib::ControlFlow::Continue
+            });
+        });
+
+        let revoke = dialog.revoke.clone();
+        let revoke_client = Arc::clone(&self.0.client);
+        let revoke_pairing = Rc::clone(&dialog.pairing);
+        let revoke_token = Rc::clone(&dialog.token);
+        let revoke_picture = dialog.picture.clone();
+        let revoke_url = dialog.url_row.clone();
+        let revoke_token_row = dialog.token_row.clone();
+        let revoke_warning = dialog.warning.clone();
+        let revoke_status = dialog.status.clone();
+        revoke.connect_clicked(move |_| {
+            revoke_client
+                .request("remote.revoke", json!({}))
+                .unwrap_or(serde_json::Value::Null);
+            *revoke_pairing.borrow_mut() = None;
+            *revoke_token.borrow_mut() = None;
+            revoke_picture.set_visible(false);
+            revoke_url.set_visible(false);
+            revoke_token_row.set_visible(false);
+            revoke_warning.set_visible(false);
+            revoke_status.set_label("Control remoto apagado.");
+        });
+
+        crate::remote_dialog::refresh(&dialog, &self.0.client);
+        dialog.window.present();
+        *self.0.remote_dialog.borrow_mut() = Some(dialog);
+    }
+
+    /// Whether the pairing dialog is on screen.
+    pub fn remote_dialog_open(&self) -> bool {
+        self.0
+            .remote_dialog
+            .borrow()
+            .as_ref()
+            .map(|dialog| dialog.window.is_visible())
+            .unwrap_or(false)
+    }
+
+    /// Close the pairing dialog.
+    pub fn close_remote_dialog(&self) {
+        if let Some(dialog) = self.0.remote_dialog.borrow_mut().take() {
+            dialog.window.close();
+        }
+    }
+
+    /// The pairing URL, while it is still on screen.
+    pub fn remote_pairing_url(&self) -> Option<String> {
+        self.0
+            .remote_dialog
+            .borrow()
+            .as_ref()
+            .and_then(|dialog| dialog.pairing.borrow().clone())
+    }
+
+    /// Whether the token is currently visible to the user.
+    pub fn remote_token_shown(&self) -> bool {
+        self.0
+            .remote_dialog
+            .borrow()
+            .as_ref()
+            .and_then(|dialog| dialog.token.borrow().clone())
+            .is_some()
+    }
+
+    /// Whether a QR matrix was painted.
+    pub fn remote_qr_ready(&self) -> bool {
+        self.0
+            .remote_dialog
+            .borrow()
+            .as_ref()
+            .map(|dialog| dialog.qr_modules.get() > 0)
+            .unwrap_or(false)
+    }
+
+    /// Whether the one-time warning is visible.
+    pub fn remote_warning_shown(&self) -> bool {
+        self.0
+            .remote_dialog
+            .borrow()
+            .as_ref()
+            .map(|dialog| dialog.warning.is_visible())
+            .unwrap_or(false)
+    }
+
+    /// Press the pairing button, the way a mouse click does.
+    pub fn click_remote_pair(&self) {
+        if let Some(dialog) = self.0.remote_dialog.borrow().as_ref() {
+            dialog.pair.emit_clicked();
+        }
+    }
+
+    /// Press the revoke button, the way a mouse click does.
+    pub fn click_remote_revoke(&self) {
+        if let Some(dialog) = self.0.remote_dialog.borrow().as_ref() {
+            dialog.revoke.emit_clicked();
+        }
     }
 
     /// Text of the VPN pill, or `None` when it is hidden.

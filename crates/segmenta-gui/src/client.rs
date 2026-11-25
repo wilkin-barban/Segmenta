@@ -104,6 +104,8 @@ struct DemoState {
     packages: Vec<Value>,
     /// `vpn.status` answer for the tests.
     vpn: Option<Value>,
+    /// `remote.status` answer for the tests.
+    remote: Option<Value>,
     list_calls: usize,
     /// Every served request with its exact params, for contract assertions.
     calls: Vec<(String, Value)>,
@@ -155,6 +157,19 @@ impl DemoClient {
             state.debrid_link = Some(link.to_string());
         }
         client
+    }
+
+    /// Set the `remote.status` answer the window will display.
+    pub fn set_remote(&self, enabled: bool, paired: bool) {
+        self.state
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .remote = Some(json!({
+            "enabled": enabled,
+            "paired": paired,
+            "port": 8765,
+            "bind": "127.0.0.1",
+        }));
     }
 
     /// Set the `vpn.status` answer the window will display.
@@ -482,6 +497,15 @@ impl Client for DemoClient {
                     "files_failed": files_failed
                 }))
             }
+            "remote.status" => Ok(state.remote.clone().unwrap_or_else(
+                || json!({ "enabled": false, "paired": false, "port": 8765, "bind": "127.0.0.1" }),
+            )),
+            "remote.enable" => Ok(json!({
+                "pairing": "http://192.168.0.5:8765/?token=deadbeefcafe",
+                "port": 8765,
+                "bind": "127.0.0.1",
+            })),
+            "remote.revoke" => Ok(json!({ "revoked": true })),
             "vpn.status" => Ok(state.vpn.clone().unwrap_or_else(
                 || json!({ "configured": false, "interface": "", "state": "none" }),
             )),
