@@ -150,6 +150,9 @@ async fn serve(args: Args) -> Result<(), String> {
             ),
         }
     }
+    // Remote control is opt-in: the supervisor opens the port only while the setting is on
+    // and a token digest exists, and closes it as soon as either goes away.
+    tokio::spawn(remote_supervisor(Arc::clone(&manager), shutdown_rx.clone()));
     tracing::info!(
         version = segmenta_daemon::DAEMON_VERSION,
         socket = %socket_path.display(),
@@ -177,6 +180,57 @@ async fn serve(args: Args) -> Result<(), String> {
     // Keep the lock file alive until the very end.
     drop(lock);
     Ok(())
+}
+
+/// Keep the remote API in step with the settings.
+async fn remote_supervisor(
+    manager: Arc<segmenta_daemon::manager::Manager>,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    let mut server: Option<tokio::task::JoinHandle<()>> = None;
+    let mut bound: Option<(String, u16)> = None;
+    loop {
+        if *shutdown.borrow() {
+            break;
+        }
+        let (enabled, bind, port) = manager.remote_config();
+        let wanted = enabled && manager.remote_digest().is_some();
+        if !wanted {
+            if let Some(handle) = server.take() {
+                handle.abort();
+            }
+            bound = None;
+        } else if bound.as_ref() != Some(&(bind.clone(), port)) {
+            if let Some(handle) = server.take() {
+                handle.abort();
+            }
+            bound = None;
+            let address = format!("{bind}:{port}");
+            match tokio::net::TcpListener::bind(&address).await {
+                Ok(listener) => {
+                    tracing::info!(%address, "remote control listening");
+                    bound = Some((bind, port));
+                    server = Some(tokio::spawn(segmenta_daemon::remote::serve(
+                        listener,
+                        Arc::clone(&manager),
+                        shutdown.clone(),
+                    )));
+                }
+                Err(err) => tracing::warn!(
+                    %address,
+                    error = %err,
+                    "remote control cannot bind; it stays off"
+                ),
+            }
+        }
+        tokio::select! {
+            _ = shutdown.changed() => {}
+            _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {}
+        }
+    }
+    if let Some(handle) = server.take() {
+        handle.abort();
+    }
 }
 
 async fn terminate_signal() {

@@ -523,6 +523,17 @@ pub struct DebridTokenParams {
     pub token: Option<String>,
 }
 
+/// Parameters of `remote.enable`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RemoteEnableParams {
+    /// Port to listen on; keeps the stored one when absent.
+    #[serde(default)]
+    pub port: Option<u16>,
+    /// `127.0.0.1` or `0.0.0.0`; keeps the stored one when absent.
+    #[serde(default)]
+    pub bind: Option<String>,
+}
+
 /// Parameters of `gallery.add`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct GalleryAddParams {

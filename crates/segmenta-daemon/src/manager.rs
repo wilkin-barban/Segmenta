@@ -26,8 +26,9 @@ use crate::rpc::{
     AddDownloadParams, CancelParams, ChecksumParam, DebridResolveParams, DebridTokenParams,
     DeleteManyParams, DeleteParams, DownloadView, GalleryAddParams, ListParams, MediaAddParams,
     MediaProbeParams, MediaStatusParams, PackageAssignParams, PackageCreateParams, PackageIdParams,
-    PackageRenameParams, QueueCreateParams, QueueRemoveParams, QueueScheduleParams, RpcError,
-    SegmentView, SiteLoginOriginParams, SiteLoginSetParams, TaskIdParams,
+    PackageRenameParams, QueueCreateParams, QueueRemoveParams, QueueScheduleParams,
+    RemoteEnableParams, RpcError, SegmentView, SiteLoginOriginParams, SiteLoginSetParams,
+    TaskIdParams,
 };
 use crate::scheduler::{resolve_schedule, Clock, LocalClock, QueueSchedule};
 use crate::secrets::SecretStore;
@@ -1262,6 +1263,62 @@ impl Manager {
         })
     }
 
+    /// `remote.enable`: mint a session token and turn the API on.
+    ///
+    /// The token is returned exactly once, inside the pairing payload; only its digest is
+    /// stored, so nobody — including a later `remote.status` — can read it back.
+    fn remote_enable(&self, params: RemoteEnableParams) -> Result<Value, RpcError> {
+        let mut patch = serde_json::Map::new();
+        patch.insert("remote_enabled".to_string(), json!(true));
+        if let Some(port) = params.port {
+            patch.insert("remote_port".to_string(), json!(port));
+        }
+        if let Some(bind) = params.bind.clone() {
+            patch.insert("remote_bind".to_string(), json!(bind));
+        }
+        let updated = self
+            .store
+            .update_settings(&patch)
+            .map_err(|err| match err {
+                StoreError::Invalid(message) => RpcError::invalid_params(message),
+                other => store_error(other),
+            })?;
+        let token = crate::remote::new_token();
+        self.secrets
+            .store(
+                crate::remote::TOKEN_ALIAS,
+                &crate::remote::token_digest(&token),
+            )
+            .map_err(|err| RpcError::internal(format!("cannot store the token: {err}")))?;
+        *self.settings.lock().unwrap_or_else(|err| err.into_inner()) = updated.clone();
+        let host = if updated.remote_bind == "0.0.0.0" {
+            local_address().unwrap_or_else(|| "127.0.0.1".to_string())
+        } else {
+            updated.remote_bind.clone()
+        };
+        tracing::info!(port = updated.remote_port, "remote control enabled");
+        Ok(json!({
+            "pairing": crate::remote::pairing_payload(&host, updated.remote_port, &token),
+            "port": updated.remote_port,
+            "bind": updated.remote_bind,
+        }))
+    }
+
+    /// `remote.revoke`: forget the token and stop serving.
+    fn remote_revoke(&self) -> Result<Value, RpcError> {
+        self.secrets
+            .delete(crate::remote::TOKEN_ALIAS)
+            .map_err(|err| RpcError::internal(format!("cannot revoke the token: {err}")))?;
+        let patch = json!({ "remote_enabled": false });
+        let updated = self
+            .store
+            .update_settings(patch.as_object().unwrap())
+            .map_err(store_error)?;
+        *self.settings.lock().unwrap_or_else(|err| err.into_inner()) = updated;
+        tracing::info!("remote control revoked");
+        Ok(json!({ "revoked": true }))
+    }
+
     /// `gallery.add`: run the extractor and group what it wrote under one package.
     ///
     /// The extractor runs off the async runtime: `gallery-dl` is an external process and a
@@ -1343,6 +1400,73 @@ impl Manager {
             "name": name,
             "files": added,
         }))
+    }
+
+    /// Remote settings the supervisor polls: enabled, address and port.
+    pub fn remote_config(&self) -> (bool, String, u16) {
+        let settings = self.settings();
+        (
+            settings.remote_enabled,
+            settings.remote_bind.clone(),
+            settings.remote_port,
+        )
+    }
+
+    /// Digest of the active remote session token, if remote control is enabled.
+    pub fn remote_digest(&self) -> Option<String> {
+        let settings = self.settings();
+        if !settings.remote_enabled {
+            return None;
+        }
+        self.secrets
+            .lookup(crate::remote::TOKEN_ALIAS)
+            .ok()
+            .flatten()
+    }
+
+    /// Packages and downloads for the remote API, in the shape the popup already uses.
+    pub fn remote_downloads(&self) -> Result<Value, String> {
+        let records = self
+            .store
+            .list(None, 50, 0)
+            .map_err(|err| err.to_string())?;
+        let rows: Vec<Value> = records
+            .into_iter()
+            .map(|record| {
+                json!({
+                    "task_id": record.id,
+                    "filename": record.filename,
+                    "status": record.status.as_str(),
+                    "downloaded_bytes": record.downloaded_bytes,
+                    "total_bytes": record.total_bytes,
+                })
+            })
+            .collect();
+        Ok(Value::Array(rows))
+    }
+
+    /// One remote action: `pause`, `resume` or `cancel`.
+    pub async fn remote_action(&self, task_id: &str, action: &str) -> Result<Value, &'static str> {
+        if task_id.is_empty() {
+            return Err("ERR_INVALID_TASK");
+        }
+        match action {
+            "pause" => self
+                .pause_task(task_id)
+                .await
+                .map_err(|_| "ERR_REMOTE_ACTION_FAILED"),
+            "resume" => self
+                .resume_task(task_id)
+                .map_err(|_| "ERR_REMOTE_ACTION_FAILED"),
+            "cancel" => self
+                .cancel_task(CancelParams {
+                    task_id: task_id.to_string(),
+                    delete_file: false,
+                })
+                .await
+                .map_err(|_| "ERR_REMOTE_ACTION_FAILED"),
+            _ => Err("ERR_UNKNOWN_ACTION"),
+        }
     }
 
     /// Secret alias that holds the token of one provider.
@@ -2099,6 +2223,18 @@ fn remove_task_file(path: &Path) -> Result<bool, String> {
 
 fn store_error(err: StoreError) -> RpcError {
     RpcError::internal(err.to_string())
+}
+
+/// First non-loopback IPv4 of this host, used to build the pairing URL.
+fn local_address() -> Option<String> {
+    let output = std::process::Command::new("hostname")
+        .arg("-I")
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.split_whitespace()
+        .find(|address| !address.starts_with("127.") && address.contains('.'))
+        .map(str::to_string)
 }
 
 /// Interface the download sockets must use, if the user configured one.
@@ -4022,6 +4158,30 @@ impl RpcHandler for Manager {
                     let parsed: PackageIdParams = serde_json::from_value(parse(params)?)
                         .map_err(|err| RpcError::invalid_params(err.to_string()))?;
                     self.package_cancel(&parsed.package_id).await
+                }
+                "remote.status" => {
+                    let _ = parse(params)?;
+                    let settings = self.settings();
+                    Ok(json!({
+                        "enabled": settings.remote_enabled,
+                        "port": settings.remote_port,
+                        "bind": settings.remote_bind,
+                        "paired": self
+                            .secrets
+                            .lookup(crate::remote::TOKEN_ALIAS)
+                            .ok()
+                            .flatten()
+                            .is_some(),
+                    }))
+                }
+                "remote.enable" => {
+                    let parsed: RemoteEnableParams = serde_json::from_value(parse(params)?)
+                        .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                    self.remote_enable(parsed)
+                }
+                "remote.revoke" => {
+                    let _ = parse(params)?;
+                    self.remote_revoke()
                 }
                 "gallery.status" => {
                     let _ = parse(params)?;
