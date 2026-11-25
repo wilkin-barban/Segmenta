@@ -111,6 +111,8 @@ struct Inner {
     preferences_requested: std::cell::Cell<bool>,
     /// Pairing dialog, when open.
     remote_dialog: std::cell::RefCell<Option<Rc<crate::remote_dialog::RemoteDialog>>>,
+    /// RSS subscriptions panel, when open.
+    rss_panel: std::cell::RefCell<Option<Rc<crate::rss_panel::RssPanel>>>,
     store: RefCell<crate::model::DownloadStore>,
     filter: Cell<Filter>,
     query: RefCell<String>,
@@ -316,6 +318,7 @@ impl SegmentaWindow {
             vpn_state: std::cell::RefCell::new(None),
             preferences_requested: std::cell::Cell::new(false),
             remote_dialog: std::cell::RefCell::new(None),
+            rss_panel: std::cell::RefCell::new(None),
             store: RefCell::new(crate::model::DownloadStore::default()),
             filter: Cell::new(Filter::All),
             query: RefCell::new(String::new()),
@@ -619,6 +622,135 @@ impl SegmentaWindow {
     /// Press the magnifier the way a mouse click does.
     pub fn click_search_button(&self) {
         self.0.search_toggle.emit_clicked();
+    }
+
+    /// Open the RSS subscriptions panel.
+    pub fn open_rss_dialog(&self) {
+        if self.0.rss_panel.borrow().is_some() {
+            return;
+        }
+        let panel = Rc::new(crate::rss_panel::RssPanel::build(&self.0.window));
+        crate::rss_panel::reload(&panel, &self.0.client);
+        panel.window.present();
+        *self.0.rss_panel.borrow_mut() = Some(panel);
+    }
+
+    /// Whether the RSS panel is on screen.
+    pub fn rss_dialog_open(&self) -> bool {
+        self.0
+            .rss_panel
+            .borrow()
+            .as_ref()
+            .map(|panel| panel.window.is_visible())
+            .unwrap_or(false)
+    }
+
+    /// Close the RSS panel.
+    pub fn close_rss_dialog(&self) {
+        if let Some(panel) = self.0.rss_panel.borrow_mut().take() {
+            panel.window.close();
+        }
+    }
+
+    /// Rows currently painted in the RSS panel.
+    pub fn rss_rows(&self) -> Vec<crate::rss_panel::RssRow> {
+        self.0
+            .rss_panel
+            .borrow()
+            .as_ref()
+            .map(|panel| panel.rows.borrow().clone())
+            .unwrap_or_default()
+    }
+
+    /// Message shown when the last check failed.
+    pub fn rss_error(&self) -> Option<String> {
+        self.0
+            .rss_panel
+            .borrow()
+            .as_ref()
+            .filter(|panel| panel.error.is_visible())
+            .map(|panel| panel.error.label().to_string())
+    }
+
+    /// Select one subscription by index.
+    pub fn select_rss_feed(&self, index: i32) {
+        if let Some(panel) = self.0.rss_panel.borrow().as_ref() {
+            panel
+                .list
+                .select_row(panel.list.row_at_index(index).as_ref());
+        }
+    }
+
+    /// Run `rss.check_now` and show whatever failed.
+    pub fn click_rss_check(&self) {
+        let Some(panel) = self.0.rss_panel.borrow().as_ref().cloned() else {
+            return;
+        };
+        let bus = RequestBus::new();
+        bus.spawn(&self.0.client, "rss.check_now", json!({}));
+        let panel_for_answer = Rc::clone(&panel);
+        gtk::glib::timeout_add_local(std::time::Duration::from_millis(120), move || {
+            if let Some((_, result)) = bus.take().into_iter().next() {
+                match result {
+                    Ok(value) => panel_for_answer
+                        .show_error(crate::rss_panel::check_message(&value).as_deref()),
+                    Err(_) => panel_for_answer.show_error(Some("No se pudo consultar el daemon")),
+                }
+                return gtk::glib::ControlFlow::Break;
+            }
+            gtk::glib::ControlFlow::Continue
+        });
+    }
+
+    /// Add one subscription with the values the user typed.
+    pub fn add_rss_feed(&self, name: &str, url: &str, filter: &str, destination: &str) {
+        let Some(panel) = self.0.rss_panel.borrow().as_ref().cloned() else {
+            return;
+        };
+        let params = json!({
+            "url": url,
+            "name": name,
+            "filter": filter,
+            "destination": destination,
+        });
+        match self.0.client.request("rss.feed.add", params) {
+            Ok(_) => {
+                panel.show_error(None);
+                crate::rss_panel::reload(&panel, &self.0.client);
+            }
+            Err(err) => {
+                panel.show_error(Some(&format!("No se pudo agregar: {}", err.ui_message())))
+            }
+        }
+    }
+
+    /// Remove the selected subscription.
+    pub fn remove_selected_rss_feed(&self) {
+        let Some(panel) = self.0.rss_panel.borrow().as_ref().cloned() else {
+            return;
+        };
+        let index = panel
+            .list
+            .selected_row()
+            .map(|row| row.index())
+            .unwrap_or(-1);
+        if index < 0 {
+            return;
+        }
+        let Some(row) = panel.rows.borrow().get(index as usize).cloned() else {
+            return;
+        };
+        match self
+            .0
+            .client
+            .request("rss.feed.remove", json!({ "feed_id": row.feed_id }))
+        {
+            Ok(_) => {
+                panel.show_error(None);
+                crate::rss_panel::reload(&panel, &self.0.client);
+            }
+            Err(err) => panel.show_error(Some(&format!("No se pudo quitar: {}", err.ui_message()))),
+        }
     }
 
     /// Open the remote pairing dialog.

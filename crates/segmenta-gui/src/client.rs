@@ -106,6 +106,9 @@ struct DemoState {
     vpn: Option<Value>,
     /// `remote.status` answer for the tests.
     remote: Option<Value>,
+    /// `rss.feed.list` answer, and whether `rss.check_now` fails.
+    rss_feeds: Vec<Value>,
+    rss_check_fails: bool,
     list_calls: usize,
     /// Every served request with its exact params, for contract assertions.
     calls: Vec<(String, Value)>,
@@ -157,6 +160,22 @@ impl DemoClient {
             state.debrid_link = Some(link.to_string());
         }
         client
+    }
+
+    /// Set the `rss.feed.list` answer the window will display.
+    pub fn set_rss_feeds(&self, feeds: Vec<Value>) {
+        self.state
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .rss_feeds = feeds;
+    }
+
+    /// Make `rss.check_now` answer like a feed that could not be fetched.
+    pub fn fail_rss_check(&self) {
+        self.state
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .rss_check_fails = true;
     }
 
     /// Set the `remote.status` answer the window will display.
@@ -497,6 +516,35 @@ impl Client for DemoClient {
                     "files_failed": files_failed
                 }))
             }
+            "rss.feed.list" => Ok(Value::Array(state.rss_feeds.clone())),
+            "rss.feed.add" => {
+                let url = params["url"].as_str().unwrap_or_default().to_string();
+                let name = params["name"].as_str().unwrap_or("feed").to_string();
+                let next = state.rss_feeds.len() + 1;
+                state.rss_feeds.push(json!({
+                    "feed_id": format!("feed-{next}"),
+                    "name": name,
+                    "url": url,
+                    "filter": params["filter"].clone(),
+                    "destination": params["destination"].clone(),
+                    "interval_minutes": 60,
+                    "last_checked_at": null
+                }));
+                Ok(json!({ "feed_id": "feed-new" }))
+            }
+            "rss.feed.remove" => Ok(json!({ "removed": true })),
+            "rss.check_now" if state.rss_check_fails => Ok(json!({
+                "checked": state.rss_feeds.len(),
+                "added": 0,
+                "failed": 1,
+                "error": "ERR_RSS_UNREACHABLE"
+            })),
+            "rss.check_now" => Ok(json!({
+                "checked": state.rss_feeds.len(),
+                "added": 0,
+                "failed": 0,
+                "error": Value::Null
+            })),
             "remote.status" => Ok(state.remote.clone().unwrap_or_else(
                 || json!({ "enabled": false, "paired": false, "port": 8765, "bind": "127.0.0.1" }),
             )),

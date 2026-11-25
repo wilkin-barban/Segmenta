@@ -1857,3 +1857,87 @@ fn the_remote_dialog_pairs_shows_the_token_once_and_revokes() {
         ));
     });
 }
+
+#[test]
+fn the_rss_panel_lists_adds_and_reports_a_failed_check() {
+    run_gui("rss_panel", || {
+        let app = app("io.github.wilkin.Segmenta.RssPanel");
+        let fake = DemoClient::with_downloads(vec![download_row("task-1", "downloading", 1)]);
+        fake.set_rss_feeds(vec![json!({
+            "feed_id": "feed-1",
+            "name": "Releases",
+            "url": "https://example.test/feed.xml",
+            "filter": "1080p",
+            "destination": "/home/user/Descargas",
+            "interval_minutes": 60,
+            "last_checked_at": 1_700_000_000
+        })]);
+        let window = window_with(&app, &fake);
+
+        window.open_rss_dialog();
+        assert!(
+            pump_until(|| window.rss_dialog_open(), Duration::from_secs(3)),
+            "the rss dialog never opened"
+        );
+        assert!(
+            pump_until(|| window.rss_rows().len() == 1, Duration::from_secs(3)),
+            "the feed never appeared: {:?}",
+            window.rss_rows()
+        );
+        let row = window.rss_rows().remove(0);
+        assert_eq!(row.name, "Releases");
+        assert_eq!(row.url, "https://example.test/feed.xml");
+        assert_eq!(row.destination, "/home/user/Descargas");
+        assert!(row.last_checked.is_some(), "the row shows the last poll");
+
+        // A check that goes well says nothing bad.
+        window.click_rss_check();
+        assert!(
+            pump_until(
+                || fake.calls_to("rss.check_now").len() == 1,
+                Duration::from_secs(3)
+            ),
+            "the check button must reach the daemon"
+        );
+        assert!(window.rss_error().is_none(), "no error for a clean check");
+
+        // A failing check is visible, not an empty list.
+        fake.fail_rss_check();
+        window.click_rss_check();
+        assert!(
+            pump_until(|| window.rss_error().is_some(), Duration::from_secs(3)),
+            "a failed check must be visible"
+        );
+
+        // Adding a subscription goes out with the values the user typed.
+        window.add_rss_feed("Nuevo", "https://example.test/new.xml", "x265", "/tmp/dl");
+        assert!(
+            pump_until(
+                || fake.calls_to("rss.feed.add").len() == 1,
+                Duration::from_secs(3)
+            ),
+            "the add form must reach the daemon"
+        );
+        let sent = &fake.calls_to("rss.feed.add")[0];
+        assert_eq!(sent["url"], "https://example.test/new.xml");
+        assert_eq!(sent["name"], "Nuevo");
+        assert_eq!(sent["filter"], "x265");
+
+        // Removing the selected subscription asks the daemon.
+        window.select_rss_feed(0);
+        window.remove_selected_rss_feed();
+        assert!(
+            pump_until(
+                || fake.calls_to("rss.feed.remove").len() == 1,
+                Duration::from_secs(3)
+            ),
+            "removing must reach the daemon"
+        );
+
+        window.close_rss_dialog();
+        assert!(pump_until(
+            || !window.rss_dialog_open(),
+            Duration::from_secs(3)
+        ));
+    });
+}
