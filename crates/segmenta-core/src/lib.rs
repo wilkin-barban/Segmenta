@@ -17,6 +17,7 @@ pub mod disk;
 pub mod engine;
 pub mod error;
 pub mod filename;
+pub mod netguard;
 pub mod planner;
 pub mod probe;
 pub mod ratelimit;

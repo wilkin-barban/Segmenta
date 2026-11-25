@@ -101,6 +101,8 @@ pub struct HttpConfig {
     pub connect_timeout: Duration,
     /// Maximum silence on a body read.
     pub read_timeout: Duration,
+    /// Interface every socket is bound to (`SO_BINDTODEVICE`); `None` uses the default route.
+    pub interface: Option<String>,
 }
 
 impl Default for HttpConfig {
@@ -113,6 +115,7 @@ impl Default for HttpConfig {
             sensitive_headers: HeaderMap::new(),
             connect_timeout: Duration::from_secs(15),
             read_timeout: Duration::from_secs(30),
+            interface: None,
         }
     }
 }
@@ -141,6 +144,13 @@ impl Session {
                 builder.proxy(reqwest::Proxy::all(proxy).map_err(|err| {
                     CoreError::InvalidUrl(format!("invalid proxy `{proxy}`: {err}"))
                 })?);
+        }
+        // A configured interface is enforced here, before any name is resolved, so a
+        // missing tunnel fails the connection instead of leaking through the default one.
+        if let Some(interface) = &cfg.interface {
+            crate::netguard::ensure_up(interface)
+                .map_err(|problem| CoreError::Network(problem.message(interface)))?;
+            builder = builder.interface(interface);
         }
         let host = url.host_str().unwrap_or_default();
         if host.parse::<IpAddr>().is_err() {
