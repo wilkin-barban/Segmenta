@@ -150,6 +150,22 @@ async fn serve(args: Args) -> Result<(), String> {
             ),
         }
     }
+    // Feeds are polled on their own clock; the loop is cheap and stops with the daemon.
+    {
+        let manager = Arc::clone(&manager);
+        let mut shutdown = shutdown_rx.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                tokio::select! {
+                    _ = shutdown.changed() => break,
+                    _ = tick.tick() => {
+                        let _ = manager.rss_check_due().await;
+                    }
+                }
+            }
+        });
+    }
     // Remote control is opt-in: the supervisor opens the port only while the setting is on
     // and a token digest exists, and closes it as soon as either goes away.
     tokio::spawn(remote_supervisor(Arc::clone(&manager), shutdown_rx.clone()));

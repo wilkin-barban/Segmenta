@@ -523,6 +523,40 @@ pub struct DebridTokenParams {
     pub token: Option<String>,
 }
 
+/// Parameters of `rss.feed.add`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RssFeedAddParams {
+    /// Feed URL.
+    pub url: String,
+    /// Display name; the host when absent.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Only items whose title matches are imported.
+    #[serde(default)]
+    pub filter: Option<String>,
+    /// Destination directory; the settings one when absent.
+    #[serde(default)]
+    pub destination: Option<String>,
+    /// Minutes between polls.
+    #[serde(default)]
+    pub interval_minutes: Option<u32>,
+}
+
+/// Parameters of `rss.check_now`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RssCheckParams {
+    /// One feed, or every feed when absent.
+    #[serde(default)]
+    pub feed_id: Option<String>,
+}
+
+/// Parameters of `rss.feed.remove`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RssFeedIdParams {
+    /// Target feed.
+    pub feed_id: String,
+}
+
 /// Parameters of `remote.enable`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct RemoteEnableParams {

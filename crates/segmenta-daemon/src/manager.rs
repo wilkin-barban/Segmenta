@@ -27,8 +27,8 @@ use crate::rpc::{
     DeleteManyParams, DeleteParams, DownloadView, GalleryAddParams, ListParams, MediaAddParams,
     MediaProbeParams, MediaStatusParams, PackageAssignParams, PackageCreateParams, PackageIdParams,
     PackageRenameParams, QueueCreateParams, QueueRemoveParams, QueueScheduleParams,
-    RemoteEnableParams, RpcError, SegmentView, SiteLoginOriginParams, SiteLoginSetParams,
-    TaskIdParams,
+    RemoteEnableParams, RpcError, RssCheckParams, RssFeedAddParams, RssFeedIdParams, SegmentView,
+    SiteLoginOriginParams, SiteLoginSetParams, TaskIdParams,
 };
 use crate::scheduler::{resolve_schedule, Clock, LocalClock, QueueSchedule};
 use crate::secrets::SecretStore;
@@ -1263,6 +1263,161 @@ impl Manager {
         })
     }
 
+    /// `rss.feed.add`: register a feed after checking its URL is safe to fetch.
+    fn rss_feed_add(&self, params: RssFeedAddParams) -> Result<Value, RpcError> {
+        let url = url::Url::parse(params.url.trim())
+            .map_err(|err| RpcError::invalid_params(format!("invalid url: {err}")))?;
+        segmenta_core::urlssrf::validate_scheme(&url).map_err(|_| {
+            RpcError::new(1085, "ERR_RSS_UNSAFE_URL", "the feed url must be http(s)")
+        })?;
+        let settings = self.settings();
+        let destination = params
+            .destination
+            .filter(|dir| !dir.trim().is_empty())
+            .unwrap_or_else(|| settings.download_dir.clone());
+        if !std::path::Path::new(&destination).is_absolute() {
+            return Err(RpcError::invalid_params("destination must be absolute"));
+        }
+        let feed_id = uuid::Uuid::new_v4().to_string();
+        let name = params
+            .name
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| url.host_str().unwrap_or("feed").to_string());
+        let interval = params.interval_minutes.unwrap_or(60).clamp(5, 24 * 60);
+        self.store
+            .create_rss_feed(&crate::store::RssFeed {
+                id: feed_id.clone(),
+                url: url.to_string(),
+                name,
+                filter_regex: params.filter.filter(|f| !f.trim().is_empty()),
+                destination,
+                check_interval_mins: interval,
+                last_checked_at: None,
+            })
+            .map_err(store_error)?;
+        Ok(json!({ "feed_id": feed_id }))
+    }
+
+    /// Poll the feeds whose interval has elapsed.
+    pub async fn rss_check_due(&self) -> Value {
+        let now = chrono_like_now();
+        let feeds = self.store.rss_feeds().unwrap_or_default();
+        let mut added = 0;
+        for feed in feeds {
+            let due = feed
+                .last_checked_at
+                .map(|last| now - last >= i64::from(feed.check_interval_mins) * 60)
+                .unwrap_or(true);
+            if !due {
+                continue;
+            }
+            match self.rss_import(&feed).await {
+                Ok(count) => added += count,
+                Err(code) => tracing::info!(feed = %feed.id, code, "rss poll failed"),
+            }
+            let _ = self.store.set_rss_last_checked(&feed.id, chrono_like_now());
+        }
+        json!({ "added": added })
+    }
+
+    /// `rss.check_now` and the periodic poll: fetch, filter, dedup and enqueue.
+    async fn rss_check_now(&self, only: Option<&str>) -> Result<Value, RpcError> {
+        let feeds = self.store.rss_feeds().map_err(store_error)?;
+        let mut added = 0;
+        let mut checked = 0;
+        for feed in feeds {
+            if only.is_some_and(|id| id != feed.id) {
+                continue;
+            }
+            checked += 1;
+            match self.rss_import(&feed).await {
+                Ok(count) => added += count,
+                Err(code) => {
+                    tracing::info!(feed = %feed.id, code, "rss check failed");
+                }
+            }
+            let _ = self.store.set_rss_last_checked(&feed.id, chrono_like_now());
+        }
+        Ok(json!({ "checked": checked, "added": added }))
+    }
+
+    /// Import one feed, returning how many tasks were created.
+    async fn rss_import(&self, feed: &crate::store::RssFeed) -> Result<usize, &'static str> {
+        let settings = self.settings();
+        let body = self
+            .rss_fetch(&feed.url, settings.allow_local_downloads)
+            .await?;
+        let items = crate::rss::parse_feed(&body).map_err(|err| err.code())?;
+        let mut added = 0;
+        for item in items {
+            if !crate::rss::matches_filter(feed.filter_regex.as_deref(), &item) {
+                continue;
+            }
+            if self
+                .store
+                .rss_seen(&feed.id, item.dedup_key())
+                .map_err(|_| "ERR_RSS_STORE")?
+            {
+                continue;
+            }
+            let params = AddDownloadParams {
+                url: item.link.clone(),
+                destination_dir: Some(feed.destination.clone()),
+                filename: None,
+                headers: BTreeMap::new(),
+                cookies: Vec::new(),
+                connections: None,
+                expected_checksum: None,
+                start_immediately: true,
+                queue_name: "main".to_string(),
+                priority: 0,
+                scheduled_at: None,
+            };
+            match self.add_download(params) {
+                Ok(_) => {
+                    let _ = self.store.mark_rss_seen(&feed.id, item.dedup_key());
+                    added += 1;
+                }
+                Err(_) => continue,
+            }
+        }
+        Ok(added)
+    }
+
+    /// Fetch one feed body, refusing a URL that points inside the machine unless allowed.
+    async fn rss_fetch(&self, url: &str, allow_local: bool) -> Result<String, &'static str> {
+        let parsed = url::Url::parse(url).map_err(|_| "ERR_RSS_UNSAFE_URL")?;
+        segmenta_core::urlssrf::validate_scheme(&parsed).map_err(|_| "ERR_RSS_UNSAFE_URL")?;
+        let host = parsed.host_str().ok_or("ERR_RSS_UNSAFE_URL")?;
+        let port = parsed.port_or_known_default().unwrap_or(80);
+        if !allow_local {
+            use std::net::ToSocketAddrs;
+            let addresses: Vec<_> = (host, port)
+                .to_socket_addrs()
+                .map_err(|_| "ERR_RSS_UNSAFE_URL")?
+                .collect();
+            if addresses
+                .iter()
+                .any(|address| segmenta_core::urlssrf::is_blocked_ip(address.ip()))
+            {
+                return Err("ERR_RSS_UNSAFE_URL");
+            }
+        }
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|_| "ERR_RSS_UNREACHABLE")?;
+        let response = client
+            .get(parsed)
+            .send()
+            .await
+            .map_err(|_| "ERR_RSS_UNREACHABLE")?;
+        if !response.status().is_success() {
+            return Err("ERR_RSS_UNREACHABLE");
+        }
+        response.text().await.map_err(|_| "ERR_RSS_MALFORMED")
+    }
+
     /// `remote.enable`: mint a session token and turn the API on.
     ///
     /// The token is returned exactly once, inside the pairing payload; only its digest is
@@ -2223,6 +2378,12 @@ fn remove_task_file(path: &Path) -> Result<bool, String> {
 
 fn store_error(err: StoreError) -> RpcError {
     RpcError::internal(err.to_string())
+}
+
+/// Seconds since the epoch, without pulling a date crate for one number.
+fn chrono_like_now() -> i64 {
+    // SAFETY: `time` only writes the value it returns and cannot fail.
+    unsafe { libc::time(std::ptr::null_mut()) as i64 }
 }
 
 /// First non-loopback IPv4 of this host, used to build the pairing URL.
@@ -4158,6 +4319,49 @@ impl RpcHandler for Manager {
                     let parsed: PackageIdParams = serde_json::from_value(parse(params)?)
                         .map_err(|err| RpcError::invalid_params(err.to_string()))?;
                     self.package_cancel(&parsed.package_id).await
+                }
+                "rss.feed.list" => {
+                    let _ = parse(params)?;
+                    let feeds: Vec<Value> = self
+                        .store
+                        .rss_feeds()
+                        .map_err(store_error)?
+                        .into_iter()
+                        .map(|feed| {
+                            json!({
+                                "feed_id": feed.id,
+                                "url": feed.url,
+                                "name": feed.name,
+                                "filter": feed.filter_regex,
+                                "destination": feed.destination,
+                                "interval_minutes": feed.check_interval_mins,
+                                "last_checked_at": feed.last_checked_at,
+                            })
+                        })
+                        .collect();
+                    Ok(Value::Array(feeds))
+                }
+                "rss.feed.add" => {
+                    let parsed: RssFeedAddParams = serde_json::from_value(parse(params)?)
+                        .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                    self.rss_feed_add(parsed)
+                }
+                "rss.feed.remove" => {
+                    let parsed: RssFeedIdParams = serde_json::from_value(parse(params)?)
+                        .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                    if !self
+                        .store
+                        .remove_rss_feed(&parsed.feed_id)
+                        .map_err(store_error)?
+                    {
+                        return Err(RpcError::invalid_params("unknown feed"));
+                    }
+                    Ok(json!({ "feed_id": parsed.feed_id, "removed": true }))
+                }
+                "rss.check_now" => {
+                    let parsed: RssCheckParams = serde_json::from_value(parse(params)?)
+                        .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                    self.rss_check_now(parsed.feed_id.as_deref()).await
                 }
                 "remote.status" => {
                     let _ = parse(params)?;
