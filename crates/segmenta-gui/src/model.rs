@@ -162,6 +162,21 @@ impl SegmentItem {
     }
 }
 
+/// One package of downloads, as `package.list` reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct PackageRow {
+    /// Identifier used by the collective actions.
+    pub package_id: String,
+    /// Display name.
+    pub name: String,
+    /// `manual`, `cnl2` or `gallery`.
+    #[serde(default)]
+    pub source: String,
+    /// How many downloads are grouped in it.
+    #[serde(default)]
+    pub downloads: u32,
+}
+
 /// One download row of `download.list` / `download.status`.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct DownloadItem {

@@ -100,6 +100,8 @@ struct DemoState {
     debrid: Option<Value>,
     /// Link `debrid.resolve` answers with, when the provider is configured.
     debrid_link: Option<String>,
+    /// `package.list` answer, in daemon order.
+    packages: Vec<Value>,
     list_calls: usize,
     /// Every served request with its exact params, for contract assertions.
     calls: Vec<(String, Value)>,
@@ -151,6 +153,25 @@ impl DemoClient {
             state.debrid_link = Some(link.to_string());
         }
         client
+    }
+
+    /// A client that answers `package.list` with these packages.
+    pub fn with_packages(packages: Vec<Value>) -> DemoClient {
+        let client = DemoClient::empty();
+        client
+            .state
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .packages = packages;
+        client
+    }
+
+    /// Replace the `package.list` answer, keeping whatever else the client carries.
+    pub fn set_packages(&self, packages: Vec<Value>) {
+        self.state
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .packages = packages;
     }
 
     /// A client whose provider is configured but fails every resolution.
@@ -449,6 +470,25 @@ impl Client for DemoClient {
                     "files_deleted": files_deleted,
                     "files_failed": files_failed
                 }))
+            }
+            "package.list" => Ok(Value::Array(state.packages.clone())),
+            "package.pause" | "package.resume" | "package.delete" => {
+                let id = params
+                    .get("package_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                // Reflecting the action keeps a later `package.list` consistent.
+                for package in state.packages.iter_mut() {
+                    if package["package_id"].as_str() == Some(id.as_str()) {
+                        if method == "package.delete" {
+                            package["downloads"] = json!(0);
+                        } else {
+                            package["state"] = json!(method.trim_start_matches("package."));
+                        }
+                    }
+                }
+                Ok(json!({ "package_id": id }))
             }
             "debrid.status" => Ok(state.debrid.clone().unwrap_or_else(
                 || json!({ "provider": "none", "configured": false, "has_token": false }),
