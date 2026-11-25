@@ -9,12 +9,13 @@ Fase 3. Depende del cierre de v0.5.0. Fuente: [SPEC-013](../../docs/openspec/13-
 
 ## Tasks
 
-- [ ] T1 — Investigar viabilidad y límites por plataforma para binding, DNS, torrent y procesos externos; definir qué tráfico queda cubierto y bloquear el resto si no puede garantizarse (S1) — ruta: core, daemon y diseño de red — commit: pendiente.
-- [ ] T2 — Implementar binding VPN y kill switch fail-closed con monitoreo y recuperación explícita; documentar permisos y cobertura real (S1) — ruta: red y daemon — commit: pendiente.
-- [ ] T3 — Evaluar BoringSSL y alternativas opcionales, compatibilidad de licencias y efectos; implementar emulación TLS solo con alcance y activación definidos (S1) — ruta: probe y transporte — commit: pendiente.
-- [ ] T4 — Diseñar e implementar control remoto opt-in, autenticación, transporte y emparejamiento QR; definir ciclo de vida y revocación de tokens (S1) — ruta: daemon, GUI/CLI y web — commit: pendiente.
-- [ ] T5 — Implementar RSS/Atom, filtros, sondeo y deduplicación persistente para descargas y torrents (S1) — ruta: scheduler, persistencia y configuración — commit: pendiente.
-- [ ] T6 — Documentar modelo de amenazas, limitaciones y pruebas; ejecutar gates de release (S1) — ruta: documentación y pruebas — commit: pendiente.
+- [x] T0 — Fix quirúrgico del botón de búsqueda en `segmenta-gui` y test de UI (S1) — ruta: `segmenta-gui` — commit: `86955a8`.
+- [ ] T1 — Integración visual de Paquetes en la GUI (vista/sección y acciones colectivas) y seam de resolución transparente para Debrid (S1) — ruta: GUI, daemon y modelo — commit: pendiente.
+- [ ] T2 — VPN binding (`SO_BINDTODEVICE`) con Kill Switch fail-closed, definiendo qué tráfico queda cubierto y bloqueando el resto si no puede garantizarse (S1) — ruta: core y daemon — commit: pendiente.
+- [ ] T3 — Suplantación TLS / bypass anti-bot con BoringSSL, con alcance, licencias y activación definidos (S1) — ruta: probe y transporte — commit: pendiente.
+- [ ] T4 — Servidor web de control remoto con emparejamiento por código QR, ciclo de vida y revocación de tokens (S1) — ruta: daemon, GUI/CLI y web — commit: pendiente.
+- [ ] T5 — Lector RSS para descargas y torrents con filtros y deduplicación persistente (S1) — ruta: scheduler, persistencia y configuración — commit: pendiente.
+- [ ] T6 — Documentación, QA, release build hermético v0.6.0 y prueba en host (S1) — ruta: documentación y pruebas — commit: pendiente.
 
 ## Criterios de aceptación
 
@@ -38,6 +39,23 @@ Fase 3. Depende del cierre de v0.5.0. Fuente: [SPEC-013](../../docs/openspec/13-
 - La propuesta menciona DoH y geolocalización en su tabla pero no los asigna a estas releases: quedan fuera hasta decisión explícita.
 
 ## Log
+
+- L2 — Autorización del PO (texto literal):
+
+> Che, arrancamos con la Fase 3, el pulido visual de la GUI de Fase 2 y la remediación del botón de búsqueda.
+>
+> Hice la investigación técnica del botón de búsqueda y encontré la causa raíz exacta en crates/segmenta-gui/src/window.rs:
+> 1. En la línea 1011 hay un self.search_bar.set_visible(false);. En GTK4, GtkSearchBar maneja su propia revelación según search-mode-enabled. Si le clavás set_visible(false), el widget queda con visible: false en el layout engine de GTK y el toggle jamás lo dibuja en pantalla aunque search_mode esté activo.
+> 2. Además, en la línea 1046 está como add_bottom_bar en vez de add_top_bar(&self.search_bar) debajo del HeaderBar.
+> Eliminá ese set_visible(false), ponelo en add_top_bar, asegurate de que el SearchEntry tome el foco al abrir y agregá el test de regresión.
+>
+> Plan para esta etapa en odd/tasks/segmenta-v0.6.0-red-remoto.md: actualizá el ODD incorporando como primeras tareas: T0 fix quirúrgico del botón de búsqueda con test de UI; T1 integración visual de Paquetes en la GUI y seam de resolución transparente para Debrid; T2 VPN binding con Kill Switch fail-closed; T3 suplantación TLS / bypass anti-bot con BoringSSL; T4 servidor web de control remoto con emparejamiento por QR; T5 lector RSS con filtros y deduplicación; T6 documentación, QA, release build hermético v0.6.0 y prueba en host.
+>
+> Actualizá el documento ODD, empezá con T0 bajo TDD con commit atómico en main sin Co-Authored-By, y seguimos avanzando.
+
+- L3 — T0 cerrado. Diagnóstico confirmado en el código: `self.search_bar.set_visible(false)` (línea 1011) y `add_bottom_bar` (línea 1046), tal como reportó el PO. Corrección en `86955a8`: se quitó el `set_visible(false)`, la barra pasa a `add_top_bar` justo debajo del encabezado, el `SearchEntry` toma el foco al abrir (tanto desde `toggle_search` como desde la acción `win.search`) y se agregó `search_bar_visible()` para poder observarlo desde la prueba.
+- L4 — Evidencia TDD: la primera corrida falló por el acceso inexistente (RED de compilación) y, con la corrección aplicada, la prueba pasa; además se volvió a introducir temporalmente el `set_visible(false)` para comprobar que la prueba lo detecta —falló con «the search bar must not be hidden with set_visible(false)»— y se retiró de nuevo. Suite completa de la GUI bajo `xvfb-run -a cargo test -p segmenta-gui` en verde (67 pruebas) y `cargo clippy -p segmenta-gui --all-targets -D warnings` sin avisos.
+
 
 - L1 — Pedido del usuario (verbatim):
 
