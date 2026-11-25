@@ -1702,3 +1702,44 @@ fn the_search_toggle_reveals_the_bar() {
         assert!(window.search_bar_visible());
     });
 }
+
+#[test]
+fn clicking_the_search_button_focuses_the_entry() {
+    run_gui("clicking_the_search_button_focuses_the_entry", || {
+        let app = app("io.github.wilkin.Segmenta.SearchFocus");
+        let fake = DemoClient::with_downloads(vec![download_row("task-1", "downloading", 1)]);
+        let window = window_with(&app, &fake);
+        window.window().present();
+        assert!(
+            pump_until(|| window.window().is_mapped(), Duration::from_secs(3)),
+            "the window never mapped"
+        );
+
+        // Closed at startup: nothing has asked the entry for the caret.
+        assert_eq!(window.search_focus_attempts(), 0);
+
+        // A real click on the magnifier, not a call to the action: this is the path the
+        // user takes, and the one that used to leave the focus on the list.
+        window.click_search_button();
+        assert!(window.search_active(), "the click must open the bar");
+        // The click path used to skip `focus_search` entirely; the request is the one
+        // observable a headless display can prove, because GTK only grants the caret to a
+        // widget of an active window and Xvfb has no window manager to activate it.
+        assert!(
+            pump_until(
+                || window.search_focus_attempts() > 0,
+                Duration::from_secs(3)
+            ),
+            "the click must move the caret into the search entry"
+        );
+
+        // The button and the action stay in sync: closing from the action updates the
+        // toggle, and the focus goes back to the list.
+        let attempts = window.search_focus_attempts();
+        window.toggle_search();
+        assert!(!window.search_active());
+        assert!(!window.search_button_active());
+        // Closing never asks for the caret again.
+        assert_eq!(window.search_focus_attempts(), attempts);
+    });
+}

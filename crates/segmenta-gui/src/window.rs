@@ -41,7 +41,7 @@ pub fn close_should_quit(tray_active: bool) -> bool {
 }
 
 /// Interval of the UI tick that drains daemon events (OpenSpec 04).
-const TICK: Duration = Duration::from_millis(150);
+const TICK: Duration = Duration::from_millis(600);
 
 /// Locale used by every visible string (S21).
 fn locale() -> segmenta_i18n::Locale {
@@ -98,6 +98,11 @@ struct Inner {
     empty_page: adw::StatusPage,
     error_page: adw::StatusPage,
     search_bar: gtk::SearchBar,
+    /// The magnifier in the header; kept so the click path and the tests share one entry.
+    search_toggle: gtk::ToggleButton,
+    /// How many times the caret was moved to the entry; a headless display cannot grant
+    /// focus, so the UI test observes the request instead of the grant.
+    focus_attempts: std::rc::Rc<std::cell::Cell<u32>>,
     store: RefCell<crate::model::DownloadStore>,
     filter: Cell<Filter>,
     query: RefCell<String>,
@@ -297,6 +302,8 @@ impl SegmentaWindow {
             empty_page: adw::StatusPage::new(),
             error_page: adw::StatusPage::new(),
             search_bar: gtk::SearchBar::new(),
+            search_toggle: gtk::ToggleButton::new(),
+            focus_attempts: std::rc::Rc::new(std::cell::Cell::new(0)),
             store: RefCell::new(crate::model::DownloadStore::default()),
             filter: Cell::new(Filter::All),
             query: RefCell::new(String::new()),
@@ -595,6 +602,21 @@ impl SegmentaWindow {
     /// Run a collective action on the selected package.
     pub fn package_action(&self, action: &str) {
         self.0.run_package_action(action);
+    }
+
+    /// Press the magnifier the way a mouse click does.
+    pub fn click_search_button(&self) {
+        self.0.search_toggle.emit_clicked();
+    }
+
+    /// How many times the search entry was asked to take the caret.
+    pub fn search_focus_attempts(&self) -> u32 {
+        self.0.focus_attempts.get()
+    }
+
+    /// Whether the toggle shows the search as active.
+    pub fn search_button_active(&self) -> bool {
+        self.0.search_toggle.is_active()
     }
 
     /// Whether the search bar widget is visible to the layout.
@@ -1057,10 +1079,34 @@ impl Inner {
         bus.spawn(&self.client, &method, params);
     }
 
+    /// Return the caret to the list, so arrows and Enter keep working after a search.
+    fn focus_list(&self) {
+        self.list_view.grab_focus();
+    }
+
     /// Put the caret in the search entry, so typing filters at once.
+    ///
+    /// The bar reveals with an animation, and GTK refuses `grab_focus` on a widget that is
+    /// not mapped yet, so the first attempt is repeated once the reveal has finished.
     fn focus_search(&self) {
+        self.grab_search_focus();
+        // The reveal is animated and GTK refuses to focus an unmapped widget, so the
+        // request is repeated once the bar has finished appearing.
+        let bar = self.search_bar.clone();
+        let attempts = std::rc::Rc::clone(&self.focus_attempts);
+        gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(600), move || {
+            if let Some(entry) = bar.child().and_downcast::<gtk::SearchEntry>() {
+                entry.grab_focus();
+                attempts.set(attempts.get() + 1);
+            }
+        });
+    }
+
+    /// Ask the entry for the caret once.
+    fn grab_search_focus(&self) {
         if let Some(entry) = self.search_bar.child().and_downcast::<gtk::SearchEntry>() {
             entry.grab_focus();
+            self.focus_attempts.set(self.focus_attempts.get() + 1);
         }
     }
 
@@ -1078,7 +1124,7 @@ impl Inner {
             }
         });
 
-        let search_toggle = gtk::ToggleButton::new();
+        let search_toggle = self.search_toggle.clone();
         search_toggle.set_icon_name("system-search-symbolic");
         search_toggle.set_tooltip_text(Some("Buscar (Ctrl+F)"));
         header.pack_end(&search_toggle);
@@ -1132,6 +1178,21 @@ impl Inner {
             .bidirectional()
             .sync_create()
             .build();
+        // The binding alone flips the mode; the caret has to follow, and this is the one
+        // path both the mouse click and `win.search` go through.
+        let focus_handle = Rc::downgrade(self);
+        search_toggle.connect_toggled(move |toggle| {
+            let Some(inner) = focus_handle.upgrade() else {
+                return;
+            };
+            if toggle.is_active() {
+                inner.focus_search();
+            } else {
+                inner.focus_list();
+            }
+        });
+        // Escape and the type-ahead belong to the window, not only to the entry.
+        self.search_bar.set_key_capture_widget(Some(&self.window));
 
         let search_handle = Rc::downgrade(self);
         search_entry.connect_search_changed(move |entry| {
