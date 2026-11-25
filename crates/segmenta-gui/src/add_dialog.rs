@@ -571,6 +571,34 @@ fn prefill_from_clipboard(form: &Rc<Form>, clip_monitor_enabled: bool) {
     });
 }
 
+/// The link to add: the provider's direct URL when one is configured, else the original.
+///
+/// Transparent by design: an unconfigured provider, a missing token, a provider error or
+/// an answer that is not `https` all return [`None`], and the dialog adds what the user
+/// typed. Nothing about the failure surfaces as a dialog error.
+pub fn debrid_link(client: &Arc<dyn Client>, url: &str) -> Option<String> {
+    let status = client.request("debrid.status", json!({})).ok()?;
+    if status.get("configured").and_then(Value::as_bool) != Some(true)
+        || status.get("has_token").and_then(Value::as_bool) != Some(true)
+    {
+        return None;
+    }
+    let reply = client
+        .request("debrid.resolve", json!({ "link": url }))
+        .ok()?;
+    reply
+        .get("link")
+        .and_then(Value::as_str)
+        .filter(|link| link.starts_with("https://"))
+        .map(str::to_string)
+}
+
+/// [`debrid_link`] over the parameters of one add: the URL lives in `params["url"]`.
+fn resolve_through_debrid(client: &Arc<dyn Client>, params: &Value) -> Option<String> {
+    let url = params.get("url").and_then(Value::as_str)?;
+    debrid_link(client, url)
+}
+
 fn submit(form: &Rc<Form>, client: Arc<dyn Client>, on_added: Rc<dyn Fn(String)>) {
     let url = form.url.text().trim().to_string();
     if !looks_like_http_url(&url) {
@@ -588,7 +616,17 @@ fn submit(form: &Rc<Form>, client: Arc<dyn Client>, on_added: Rc<dyn Fn(String)>
     form.add_button.set_sensitive(false);
 
     let bus = RequestBus::new();
-    bus.spawn(&client, "download.add", params);
+    let chain_params = params;
+    // Debrid seam: when a provider is configured the link is unrestrained first and the
+    // add carries the direct URL. Every failure falls back to the original link, so the
+    // dialog keeps working exactly as before without a provider.
+    bus.spawn_chained(&client, move |client| {
+        let mut params = chain_params;
+        if let Some(link) = resolve_through_debrid(client, &params) {
+            params["url"] = json!(link);
+        }
+        ("download.add".to_string(), params)
+    });
 
     let form = Rc::downgrade(form);
     let deadline = std::time::Instant::now() + Duration::from_secs(60);

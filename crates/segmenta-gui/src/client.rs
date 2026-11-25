@@ -96,6 +96,10 @@ struct DemoState {
     queues: Vec<String>,
     /// Site logins answered by `site_login.list`, never carrying a password.
     site_logins: Vec<Value>,
+    /// `debrid.status` answer; absent means "no provider configured".
+    debrid: Option<Value>,
+    /// Link `debrid.resolve` answers with, when the provider is configured.
+    debrid_link: Option<String>,
     list_calls: usize,
     /// Every served request with its exact params, for contract assertions.
     calls: Vec<(String, Value)>,
@@ -134,6 +138,35 @@ impl DemoClient {
     }
 
     /// Site logins the fake daemon reports, so a page can load them.
+    /// A client whose provider resolves every link to `link`.
+    pub fn with_debrid(link: &str) -> DemoClient {
+        let client = DemoClient::empty();
+        {
+            let mut state = client.state.lock().unwrap_or_else(|err| err.into_inner());
+            state.debrid = Some(json!({
+                "provider": "realdebrid",
+                "configured": true,
+                "has_token": true
+            }));
+            state.debrid_link = Some(link.to_string());
+        }
+        client
+    }
+
+    /// A client whose provider is configured but fails every resolution.
+    pub fn with_failing_debrid() -> DemoClient {
+        let client = DemoClient::empty();
+        {
+            let mut state = client.state.lock().unwrap_or_else(|err| err.into_inner());
+            state.debrid = Some(json!({
+                "provider": "alldebrid",
+                "configured": true,
+                "has_token": true
+            }));
+        }
+        client
+    }
+
     pub fn with_site_logins(entries: Vec<Value>) -> DemoClient {
         let client = DemoClient::empty();
         client.state.lock().unwrap().site_logins = entries;
@@ -417,6 +450,13 @@ impl Client for DemoClient {
                     "files_failed": files_failed
                 }))
             }
+            "debrid.status" => Ok(state.debrid.clone().unwrap_or_else(
+                || json!({ "provider": "none", "configured": false, "has_token": false }),
+            )),
+            "debrid.resolve" => match state.debrid_link.clone() {
+                Some(link) => Ok(json!({ "link": link })),
+                None => Err(ClientError::rpc(1061, "the provider rejected the token")),
+            },
             "download.add" => {
                 let url = params
                     .get("url")
@@ -1107,6 +1147,31 @@ impl RequestBus {
         let client = Arc::clone(client);
         let method = method.to_string();
         std::thread::spawn(move || {
+            let result = client.request(&method, params);
+            results
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .push((id, result));
+        });
+        id
+    }
+
+    /// Spawn a request the caller builds, so a flow can resolve a link before adding it.
+    ///
+    /// `make` runs on the worker thread and receives the client, so it can perform the
+    /// extra round trips the flow needs without touching the toolkit thread.
+    pub fn spawn_chained(
+        &self,
+        client: &Arc<dyn Client>,
+        make: impl FnOnce(&Arc<dyn Client>) -> (String, Value) + Send + 'static,
+    ) -> u64 {
+        let id = self
+            .next_id
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let results = Arc::clone(&self.results);
+        let client = Arc::clone(client);
+        std::thread::spawn(move || {
+            let (method, params) = make(&client);
             let result = client.request(&method, params);
             results
                 .lock()
