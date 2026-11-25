@@ -103,6 +103,43 @@ pub struct HttpConfig {
     pub read_timeout: Duration,
     /// Interface every socket is bound to (`SO_BINDTODEVICE`); `None` uses the default route.
     pub interface: Option<String>,
+    /// TLS fingerprint the transport asks for.
+    pub profile: TlsProfile,
+}
+
+/// TLS fingerprint a request wants to present.
+///
+/// Impersonating Chrome needs a BoringSSL-based transport, which is a large optional
+/// dependency (C++ toolchain, minutes of build). The base build therefore ships only
+/// [`TlsProfile::Standard`] and **refuses** a browser profile instead of pretending: a
+/// silent fallback would keep the 403s the feature exists to avoid while looking like it
+/// worked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TlsProfile {
+    /// The transport's own fingerprint.
+    #[default]
+    Standard,
+    /// Chrome-like fingerprint; requires the optional impersonation build.
+    Chrome,
+}
+
+impl TlsProfile {
+    /// Stable name used by settings and the IPC.
+    pub fn name(self) -> &'static str {
+        match self {
+            TlsProfile::Standard => "standard",
+            TlsProfile::Chrome => "chrome",
+        }
+    }
+
+    /// Parse the `tls_profile` setting; `None` for an unknown value.
+    pub fn parse(value: &str) -> Option<TlsProfile> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "standard" | "" => Some(TlsProfile::Standard),
+            "chrome" => Some(TlsProfile::Chrome),
+            _ => None,
+        }
+    }
 }
 
 impl Default for HttpConfig {
@@ -116,6 +153,31 @@ impl Default for HttpConfig {
             connect_timeout: Duration::from_secs(15),
             read_timeout: Duration::from_secs(30),
             interface: None,
+            profile: TlsProfile::Standard,
+        }
+    }
+}
+
+impl HttpConfig {
+    /// The kill switch: a configured interface must be usable before anything is dialed.
+    pub fn interface_error(&self) -> Option<String> {
+        let interface = self.interface.as_ref()?;
+        crate::netguard::ensure_up(interface)
+            .err()
+            .map(|problem| problem.message(interface))
+    }
+
+    /// Refuse a TLS profile this build cannot provide.
+    ///
+    /// Called before a socket exists, so a refused profile never degrades into a request
+    /// that silently presents the wrong fingerprint.
+    pub fn unsupported_profile(&self) -> std::result::Result<(), CoreError> {
+        match self.profile {
+            TlsProfile::Standard => Ok(()),
+            TlsProfile::Chrome => Err(CoreError::Network(
+                "the chrome TLS profile needs the `impersonate` feature, which this build does not                  include"
+                    .to_string(),
+            )),
         }
     }
 }
@@ -145,13 +207,15 @@ impl Session {
                     CoreError::InvalidUrl(format!("invalid proxy `{proxy}`: {err}"))
                 })?);
         }
-        // A configured interface is enforced here, before any name is resolved, so a
-        // missing tunnel fails the connection instead of leaking through the default one.
+        // Kill switch first, then the transport profile: a dead tunnel is reported before
+        // any fingerprint question, and neither can be skipped by the other.
+        if let Some(message) = cfg.interface_error() {
+            return Err(CoreError::Network(message));
+        }
         if let Some(interface) = &cfg.interface {
-            crate::netguard::ensure_up(interface)
-                .map_err(|problem| CoreError::Network(problem.message(interface)))?;
             builder = builder.interface(interface);
         }
+        cfg.unsupported_profile()?;
         let host = url.host_str().unwrap_or_default();
         if host.parse::<IpAddr>().is_err() {
             // reqwest would resolve the name again; pin the address we validated.
@@ -431,5 +495,43 @@ mod tests {
         assert!(is_sensitive_header("cookie"));
         assert!(!is_sensitive_header("Referer"));
         assert!(!is_sensitive_header("User-Agent"));
+    }
+}
+
+#[cfg(test)]
+mod tls_profile_tests {
+    use super::*;
+
+    #[test]
+    fn the_standard_profile_is_the_default() {
+        let config = HttpConfig::default();
+        assert_eq!(config.profile, TlsProfile::Standard);
+    }
+
+    #[test]
+    fn asking_for_chrome_without_the_feature_is_an_explicit_error() {
+        let config = HttpConfig {
+            profile: TlsProfile::Chrome,
+            ..HttpConfig::default()
+        };
+        assert_eq!(TlsProfile::Chrome.name(), "chrome");
+        // The default build does not claim to impersonate: it refuses instead.
+        let error = config.unsupported_profile().unwrap_err();
+        assert!(
+            error.to_string().contains("impersonate"),
+            "the refusal must name the missing feature: {error}"
+        );
+        assert!(HttpConfig::default().unsupported_profile().is_ok());
+    }
+
+    #[test]
+    fn the_interface_is_checked_before_the_profile() {
+        let config = HttpConfig {
+            profile: TlsProfile::Chrome,
+            interface: Some("vpnx0".to_string()),
+            ..HttpConfig::default()
+        };
+        // A dead tunnel is reported first: the kill switch outranks every transport detail.
+        assert!(config.interface_error().is_some());
     }
 }
