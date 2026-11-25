@@ -12,7 +12,7 @@ Fase 3. Depende del cierre de v0.5.0. Fuente: [SPEC-013](../../docs/openspec/13-
 - [x] T0 — Fix quirúrgico del botón de búsqueda en `segmenta-gui` y test de UI (S1) — ruta: `segmenta-gui` — commit: `86955a8`.
 - [x] T1 — Integración visual de Paquetes en la GUI (vista/sección y acciones colectivas) y seam de resolución transparente para Debrid (S1) — ruta: GUI, daemon y modelo — commits: `6aea907` (seam Debrid), `602b171` (modelo y cliente de pruebas), `d6a9e9e` (sección de paquetes con acciones).
 - [x] T2 — VPN binding (`SO_BINDTODEVICE`) con Kill Switch fail-closed, definiendo qué tráfico queda cubierto y bloqueando el resto si no puede garantizarse (S1) — ruta: core y daemon — commits: `ee8edc0` (guardia de interfaz y binding), `835aec8` (ajuste, rechazos y pruebas).
-- [~] T3 — Suplantación TLS / bypass anti-bot con BoringSSL, con alcance, licencias y activación definidos (S1) — ruta: probe y transporte — seam implementado (`dbc4063`, `be8efae`); la suplantación real espera autorización de dependencias, ver `docs/tls-impersonation-evaluation.md`.
+- [x] T3 — Suplantación TLS / bypass anti-bot con BoringSSL, con alcance, licencias y activación definidos (S1) — ruta: probe y transporte — cerrado como **seam arquitectónico** por decisión del Tech Lead: `dbc4063`, `be8efae`, evaluación en `docs/tls-impersonation-evaluation.md`. La suplantación real no se implementa.
 - [ ] T4 — Servidor web de control remoto con emparejamiento por código QR, ciclo de vida y revocación de tokens (S1) — ruta: daemon, GUI/CLI y web — commit: pendiente.
 - [ ] T5 — Lector RSS para descargas y torrents con filtros y deduplicación persistente (S1) — ruta: scheduler, persistencia y configuración — commit: pendiente.
 - [ ] T6 — Documentación, QA, release build hermético v0.6.0 y prueba en host (S1) — ruta: documentación y pruebas — commit: pendiente.
@@ -93,3 +93,11 @@ Fase 3. Depende del cierre de v0.5.0. Fuente: [SPEC-013](../../docs/openspec/13-
   - Implementado sin dependencias nuevas: `TlsProfile` (`standard`/`chrome`) con `parse`, `HttpConfig.profile`, y `unsupported_profile()` que en el build base **rechaza** `chrome` con un error que nombra la feature faltante, en lugar de caer en silencio a la huella estándar. `interface_error()` corre antes que el perfil en `Session::open`, así que el kill switch de T2 conserva la prioridad. Ajuste `tls_profile` validado al guardarse: `chrome` se rechaza en `settings.update`, no al descargar.
   - Pruebas: RED por compilación (campo y tipo inexistentes), luego 3 unitarias en `probe` y 1 de integración contra el daemon que confirma el rechazo de `chrome`, el rechazo de un valor desconocido y que `standard` sigue funcionando. Clippy y fmt limpios; `segmenta-core --lib` 30 pruebas y las suites de daemon afectadas en verde.
   - Evaluación escrita en `docs/tls-impersonation-evaluation.md`, con las tres estrategias, sus costos y las dos rutas posibles: feature `impersonate` con `rquest` (agrega BoringSSL al build opcional y toca `Cargo.lock`) o cerrar T3 como seam y retirar la promesa del roadmap. **No sumé BoringSSL sin autorización**: es una decisión de dependencias y de cadena de compilación.
+
+- L11 — Decisión del Tech Lead sobre T3 (texto literal):
+
+> 1. T3 (TLS Impersonation / BoringSSL): APROBADO como seam arquitectónico. Excelente criterio técnico: arrastrar rquest con BoringSSL/CMake penalizaría el empaquetado .deb, la portabilidad y la compilación hermética sin un beneficio tangible que justifique el riesgo en el supply chain. El seam con rechazo fail-closed (ERR_TLS_PROFILE_UNSUPPORTED) es la solución correcta. Queda aprobado formalmente por escrito en el log ODD.
+> 2. Push de respaldo: AUTORIZADO.
+> 3. Avanzá inmediatamente con T4.
+
+  T3 queda cerrado como seam: `TlsProfile` rechaza `chrome` con un error que nombra la feature faltante, el ajuste se valida al guardarse y el kill switch de red conserva la prioridad. No se agrega `rquest` ni BoringSSL; la promesa de suplantación real se retira de v0.6.0 y queda documentada en `docs/tls-impersonation-evaluation.md`.
