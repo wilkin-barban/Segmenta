@@ -102,6 +102,8 @@ struct DemoState {
     debrid_link: Option<String>,
     /// `package.list` answer, in daemon order.
     packages: Vec<Value>,
+    /// `vpn.status` answer for the tests.
+    vpn: Option<Value>,
     list_calls: usize,
     /// Every served request with its exact params, for contract assertions.
     calls: Vec<(String, Value)>,
@@ -153,6 +155,15 @@ impl DemoClient {
             state.debrid_link = Some(link.to_string());
         }
         client
+    }
+
+    /// Set the `vpn.status` answer the window will display.
+    pub fn set_vpn(&self, state: &str, interface: &str) {
+        self.state.lock().unwrap_or_else(|err| err.into_inner()).vpn = Some(json!({
+            "configured": !interface.is_empty(),
+            "interface": interface,
+            "state": state,
+        }));
     }
 
     /// A client that answers `package.list` with these packages.
@@ -471,6 +482,9 @@ impl Client for DemoClient {
                     "files_failed": files_failed
                 }))
             }
+            "vpn.status" => Ok(state.vpn.clone().unwrap_or_else(
+                || json!({ "configured": false, "interface": "", "state": "none" }),
+            )),
             "package.list" => Ok(Value::Array(state.packages.clone())),
             "package.pause" | "package.resume" | "package.delete" => {
                 let id = params

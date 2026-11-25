@@ -1743,3 +1743,63 @@ fn clicking_the_search_button_focuses_the_entry() {
         assert_eq!(window.search_focus_attempts(), attempts);
     });
 }
+
+#[test]
+fn the_header_shows_the_vpn_state_and_opens_the_preferences() {
+    run_gui("vpn_badge", || {
+        let app = app("io.github.wilkin.Segmenta.VpnBadge");
+        let fake = DemoClient::with_downloads(vec![download_row("task-1", "downloading", 1)]);
+        fake.set_vpn("none", "");
+        let window = window_with(&app, &fake);
+
+        // No interface configured: no badge at all, so nothing suggests protection.
+        window.reload_vpn();
+        assert!(
+            pump_until(|| window.vpn_badge().is_none(), Duration::from_secs(3)),
+            "without a VPN there must be no badge"
+        );
+
+        // A working interface says so, and names it.
+        fake.set_vpn("active", "wg0");
+        window.reload_vpn();
+        assert!(
+            pump_until(
+                || window.vpn_badge().as_deref() == Some("VPN activa (wg0)"),
+                Duration::from_secs(3)
+            ),
+            "unexpected badge: {:?}",
+            window.vpn_badge()
+        );
+
+        // A dead interface is a warning, not a silent "protected".
+        fake.set_vpn("down", "wg0");
+        window.reload_vpn();
+        assert!(
+            pump_until(
+                || window.vpn_badge().as_deref() == Some("VPN caída (wg0)"),
+                Duration::from_secs(3)
+            ),
+            "unexpected badge: {:?}",
+            window.vpn_badge()
+        );
+        assert_eq!(window.vpn_badge_level().as_deref(), Some("warning"));
+
+        fake.set_vpn("missing", "wg0");
+        window.reload_vpn();
+        assert!(
+            pump_until(
+                || window.vpn_badge().as_deref() == Some("VPN ausente (wg0)"),
+                Duration::from_secs(3)
+            ),
+            "unexpected badge: {:?}",
+            window.vpn_badge()
+        );
+
+        // The badge is the shortcut to the preference that owns the interface.
+        window.click_vpn_badge();
+        assert!(
+            pump_until(|| window.preferences_requested(), Duration::from_secs(3)),
+            "the badge must open the preferences"
+        );
+    });
+}

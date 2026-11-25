@@ -103,6 +103,12 @@ struct Inner {
     /// How many times the caret was moved to the entry; a headless display cannot grant
     /// focus, so the UI test observes the request instead of the grant.
     focus_attempts: std::rc::Rc<std::cell::Cell<u32>>,
+    /// VPN pill in the header; hidden while no interface is configured.
+    vpn_badge: gtk::Button,
+    /// Last `vpn.status` answer: the text and the level the pill paints.
+    vpn_state: std::cell::RefCell<Option<(String, String)>>,
+    /// Set when the preferences are opened from anywhere in the window.
+    preferences_requested: std::cell::Cell<bool>,
     store: RefCell<crate::model::DownloadStore>,
     filter: Cell<Filter>,
     query: RefCell<String>,
@@ -304,6 +310,9 @@ impl SegmentaWindow {
             search_bar: gtk::SearchBar::new(),
             search_toggle: gtk::ToggleButton::new(),
             focus_attempts: std::rc::Rc::new(std::cell::Cell::new(0)),
+            vpn_badge: gtk::Button::new(),
+            vpn_state: std::cell::RefCell::new(None),
+            preferences_requested: std::cell::Cell::new(false),
             store: RefCell::new(crate::model::DownloadStore::default()),
             filter: Cell::new(Filter::All),
             query: RefCell::new(String::new()),
@@ -607,6 +616,43 @@ impl SegmentaWindow {
     /// Press the magnifier the way a mouse click does.
     pub fn click_search_button(&self) {
         self.0.search_toggle.emit_clicked();
+    }
+
+    /// Text of the VPN pill, or `None` when it is hidden.
+    pub fn vpn_badge(&self) -> Option<String> {
+        self.0
+            .vpn_state
+            .borrow()
+            .as_ref()
+            .map(|(text, _level)| text.clone())
+    }
+
+    /// Severity painted by the pill: `ok`, `warning` or `error`.
+    pub fn vpn_badge_level(&self) -> Option<String> {
+        self.0
+            .vpn_state
+            .borrow()
+            .as_ref()
+            .map(|(_text, level)| level.clone())
+    }
+
+    /// Reload the VPN pill from the daemon.
+    pub fn reload_vpn(&self) {
+        self.0.reload_vpn();
+    }
+
+    /// Press the pill, the way a mouse click does.
+    pub fn click_vpn_badge(&self) {
+        self.0.vpn_badge.emit_clicked();
+    }
+
+    /// Whether the preferences were opened at least once.
+    ///
+    /// The dialog itself is covered by its own tests; what a click on the pill must prove
+    /// is that the shortcut reaches it, and `active_window` is useless under Xvfb because
+    /// no window manager ever activates a window.
+    pub fn preferences_requested(&self) -> bool {
+        self.0.preferences_requested.get()
     }
 
     /// How many times the search entry was asked to take the caret.
@@ -979,6 +1025,7 @@ impl SegmentaWindow {
 
     /// Opens the preferences dialog.
     pub fn open_preferences(&self) {
+        self.0.preferences_requested.set(true);
         let settings = self.0.settings.borrow().clone();
         let handle = self.clone();
         prefs::present(
@@ -1010,6 +1057,49 @@ impl SegmentaWindow {
 }
 
 impl Inner {
+    /// Ask the daemon for the VPN state and paint the pill.
+    fn reload_vpn(self: &Rc<Self>) {
+        let bus = crate::client::RequestBus::new();
+        bus.spawn(&self.client, "vpn.status", json!({}));
+        let handle = Rc::downgrade(self);
+        gtk::glib::timeout_add_local(std::time::Duration::from_millis(120), move || {
+            let Some(inner) = handle.upgrade() else {
+                return gtk::glib::ControlFlow::Break;
+            };
+            if let Some((_, Ok(value))) = bus.take().into_iter().next() {
+                inner.apply_vpn(value);
+                return gtk::glib::ControlFlow::Break;
+            }
+            gtk::glib::ControlFlow::Continue
+        });
+    }
+
+    /// Paint the pill from one `vpn.status` answer.
+    fn apply_vpn(&self, value: serde_json::Value) {
+        let state = value["state"].as_str().unwrap_or("none");
+        let interface = value["interface"].as_str().unwrap_or("");
+        let (text, level) = match state {
+            "active" => (format!("VPN activa ({interface})"), "ok"),
+            "down" => (format!("VPN caída ({interface})"), "warning"),
+            "missing" => (format!("VPN ausente ({interface})"), "warning"),
+            "invalid" => (format!("VPN mal configurada ({interface})"), "error"),
+            // No interface: the pill is not shown at all, so nothing suggests protection.
+            _ => {
+                *self.vpn_state.borrow_mut() = None;
+                self.vpn_badge.set_visible(false);
+                return;
+            }
+        };
+        self.vpn_badge.set_label(&text);
+        for class in ["ok", "warning", "error"] {
+            self.vpn_badge.remove_css_class(class);
+        }
+        self.vpn_badge.add_css_class(level);
+        self.vpn_badge.set_tooltip_text(Some(&text));
+        self.vpn_badge.set_visible(true);
+        *self.vpn_state.borrow_mut() = Some((text, level.to_string()));
+    }
+
     /// Ask the daemon for the packages and rebuild the sidebar section.
     fn refresh_packages(self: &Rc<Self>) {
         let bus = crate::client::RequestBus::new();
@@ -1123,6 +1213,19 @@ impl Inner {
                 SegmentaWindow(inner).open_add_dialog();
             }
         });
+
+        // The VPN pill sits next to the menu: it is the shortcut to the preference that
+        // owns the interface, and it disappears when no interface is configured.
+        self.vpn_badge.add_css_class("flat");
+        self.vpn_badge.add_css_class("pill");
+        self.vpn_badge.set_visible(false);
+        let vpn_handle = Rc::downgrade(self);
+        self.vpn_badge.connect_clicked(move |_| {
+            if let Some(inner) = vpn_handle.upgrade() {
+                SegmentaWindow(inner).open_preferences();
+            }
+        });
+        header.pack_end(&self.vpn_badge);
 
         let search_toggle = self.search_toggle.clone();
         search_toggle.set_icon_name("system-search-symbolic");
@@ -1665,6 +1768,7 @@ impl Inner {
         self.request("system.hello", json!({}), Pending::Hello);
         self.load_settings();
         self.reload_all();
+        self.reload_vpn();
         // The sidebar section starts with whatever the daemon already has.
         self.refresh_packages();
     }
