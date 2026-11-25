@@ -1675,3 +1675,30 @@ fn tray_pause_command_acts_on_current_active_task_or_noop() {
         },
     );
 }
+
+#[test]
+fn the_search_toggle_reveals_the_bar() {
+    run_gui("the_search_toggle_reveals_the_bar", || {
+        let app = app("io.github.wilkin.Segmenta.SearchToggle");
+        let fake = DemoClient::with_downloads(vec![download_row("task-1", "downloading", 1)]);
+        let window = window_with(&app, &fake);
+
+        // Closed at startup: search mode is off, but the widget itself must stay
+        // visible because GtkSearchBar reveals it from `search-mode-enabled`.
+        assert!(!window.search_active());
+        // The regression: `set_visible(false)` took the widget out of the layout, so the
+        // toggle set the search mode and GTK never drew the bar.
+        assert!(
+            window.search_bar_visible(),
+            "the search bar must not be hidden with set_visible(false)"
+        );
+
+        window.toggle_search();
+        assert!(window.search_active());
+        assert!(window.search_bar_visible());
+
+        window.toggle_search();
+        assert!(!window.search_active());
+        assert!(window.search_bar_visible());
+    });
+}

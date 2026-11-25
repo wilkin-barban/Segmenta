@@ -560,6 +560,17 @@ impl SegmentaWindow {
     pub fn toggle_search(&self) {
         let visible = !self.0.search_bar.is_search_mode();
         self.0.search_bar.set_search_mode(visible);
+        if visible {
+            self.0.focus_search();
+        }
+    }
+
+    /// Whether the search bar widget is visible to the layout.
+    ///
+    /// GtkSearchBar reveals its content from `search-mode-enabled`; the widget itself must
+    /// stay visible, which is what the toggle relies on.
+    pub fn search_bar_visible(&self) -> bool {
+        self.0.search_bar.is_visible()
     }
 
     /// Whether the loading page is still part of the stack (it is detached once the
@@ -945,6 +956,13 @@ impl SegmentaWindow {
 }
 
 impl Inner {
+    /// Put the caret in the search entry, so typing filters at once.
+    fn focus_search(&self) {
+        if let Some(entry) = self.search_bar.child().and_downcast::<gtk::SearchEntry>() {
+            entry.grab_focus();
+        }
+    }
+
     fn build_layout(self: &Rc<Self>) {
         let header = adw::HeaderBar::new();
 
@@ -1008,7 +1026,6 @@ impl Inner {
         search_entry.set_placeholder_text(Some("Buscar por nombre o URL"));
         self.search_bar.set_child(Some(&search_entry));
         self.search_bar.connect_entry(&search_entry);
-        self.search_bar.set_visible(false);
         search_toggle
             .bind_property("active", &self.search_bar, "search-mode-enabled")
             .bidirectional()
@@ -1043,7 +1060,10 @@ impl Inner {
 
         let content_toolbar = adw::ToolbarView::new();
         content_toolbar.add_top_bar(&header);
-        content_toolbar.add_bottom_bar(&self.search_bar);
+        // Directly under the header: GtkSearchBar reveals itself from
+        // `search-mode-enabled`, and hiding it with `set_visible(false)` used to keep it
+        // out of the layout so the toggle never drew it.
+        content_toolbar.add_top_bar(&self.search_bar);
         content_toolbar.set_content(Some(&self.stack));
 
         let content_page = adw::NavigationPage::builder()
@@ -1371,10 +1391,16 @@ impl Inner {
         let search = gtk::gio::SimpleAction::new("search", None);
         let handle = Rc::downgrade(self);
         let search_bar = self.search_bar.clone();
+        let search_window = Rc::downgrade(self);
         search.connect_activate(move |_, _| {
             let _ = handle;
             let visible = !search_bar.is_search_mode();
             search_bar.set_search_mode(visible);
+            if visible {
+                if let Some(inner) = search_window.upgrade() {
+                    inner.focus_search();
+                }
+            }
         });
         self.window.add_action(&search);
 
