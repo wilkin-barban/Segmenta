@@ -123,6 +123,44 @@ pub fn present(
     proxy.add(&local);
     network.add(&proxy);
 
+    // ------------------------------------------------------------------- VPN
+    //
+    // The interface lives here because the kill switch reads it from the daemon; the
+    // header pill repaints from `vpn.status` as soon as the settings round trip lands.
+    let vpn = adw::PreferencesGroup::builder()
+        .title(tr(locale(), Msg::PrefsVpn))
+        .description(tr(locale(), Msg::VpnKillSwitchHint))
+        .build();
+    let vpn_interface = adw::EntryRow::builder()
+        .title(tr(locale(), Msg::VpnInterface))
+        .text(settings.vpn_interface.clone())
+        .build();
+    vpn.add(&vpn_interface);
+    network.add(&vpn);
+
+    // ---------------------------------------------------------------- Debrid
+    let debrid = adw::PreferencesGroup::builder()
+        .title(tr(locale(), Msg::PrefsDebrid))
+        .description(tr(locale(), Msg::DebridHint))
+        .build();
+    let providers = gtk::StringList::new(&["none", "realdebrid", "alldebrid"]);
+    let current = match settings.debrid_provider.as_str() {
+        "realdebrid" => 1,
+        "alldebrid" => 2,
+        _ => 0,
+    };
+    let debrid_provider = adw::ComboRow::builder()
+        .title(tr(locale(), Msg::DebridProvider))
+        .model(&providers)
+        .selected(current)
+        .build();
+    debrid.add(&debrid_provider);
+    let debrid_token = adw::PasswordEntryRow::builder()
+        .title(tr(locale(), Msg::DebridToken))
+        .build();
+    debrid.add(&debrid_token);
+    network.add(&debrid);
+
     // -------------------------------------------------------------- Browsers
     //
     // The page never guesses readiness: every row is the `extension.status`
@@ -410,6 +448,52 @@ pub fn present(
             bus.spawn(&client, "settings.update", patch);
         })
     };
+
+    {
+        // VPN interface: applied on Enter, so the daemon receives one complete value.
+        let save_vpn = Rc::clone(&save);
+        vpn_interface.connect_apply(move |row| {
+            save_vpn(json!({ "vpn_interface": row.text().trim() }));
+        });
+    }
+    {
+        // Debrid provider is a plain setting; the token is a secret and goes elsewhere.
+        let save_provider = Rc::clone(&save);
+        debrid_provider.connect_selected_notify(move |row| {
+            let name = match row.selected() {
+                1 => "realdebrid",
+                2 => "alldebrid",
+                _ => "none",
+            };
+            save_provider(json!({ "debrid_provider": name }));
+        });
+    }
+    {
+        // `debrid.token.set` writes the token to the keyring; clearing the row afterwards
+        // keeps a secret out of a screenshot.
+        let token_client = Arc::clone(&client);
+        let token_row = debrid_token.clone();
+        let provider_row = debrid_provider.clone();
+        debrid_token.connect_apply(move |row| {
+            let value = row.text().trim().to_string();
+            if value.is_empty() {
+                return;
+            }
+            let provider = match provider_row.selected() {
+                1 => "realdebrid",
+                2 => "alldebrid",
+                _ => "none",
+            };
+            if provider == "none" {
+                return;
+            }
+            let _ = token_client.request(
+                "debrid.token.set",
+                json!({ "provider": provider, "token": value }),
+            );
+            token_row.set_text("");
+        });
+    }
 
     let save_capture = Rc::clone(&save);
     capture_enabled.connect_active_notify(move |row| {

@@ -162,6 +162,10 @@ impl SegmentItem {
     }
 }
 
+fn default_debrid_provider() -> String {
+    "none".to_string()
+}
+
 /// One package of downloads, as `package.list` reports it.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct PackageRow {
@@ -946,6 +950,12 @@ pub struct Settings {
     pub allow_local_downloads: bool,
     #[serde(default)]
     pub max_retries: u32,
+    /// Interface every download socket is bound to; empty means the default route.
+    #[serde(default)]
+    pub vpn_interface: String,
+    /// Debrid provider: `none`, `realdebrid` or `alldebrid`.
+    #[serde(default = "default_debrid_provider")]
+    pub debrid_provider: String,
     #[serde(default)]
     pub proxy_mode: String,
     #[serde(default)]
