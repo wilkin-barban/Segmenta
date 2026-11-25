@@ -6,6 +6,7 @@ pub mod client;
 pub mod model;
 pub mod prefs;
 pub mod remote_dialog;
+pub mod rss_panel;
 pub mod screenshots;
 pub mod segment_view;
 pub mod tray;
