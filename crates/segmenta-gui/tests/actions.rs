@@ -12,6 +12,8 @@ use serde_json::{json, Value};
 
 use segmenta_gui::adw::prelude::*;
 use segmenta_gui::client::{Client, DemoClient};
+use segmenta_gui::gtk::prelude::ActionGroupExt;
+
 use segmenta_gui::model::Filter;
 use segmenta_gui::window::{SegmentaWindow, ViewState};
 use segmenta_gui::{adw, glib, gtk};
@@ -596,5 +598,34 @@ fn the_packages_section_lists_and_acts_on_a_package() {
         let delete = &fake.calls_to("package.delete")[0];
         assert_eq!(delete["package_id"], "pkg-1");
         assert_eq!(delete["delete_file"], false);
+    });
+}
+
+#[test]
+fn the_menu_opens_the_remote_and_rss_dialogs() {
+    run_gui("menu_remote_rss", || {
+        let application = app("io.github.wilkin.Segmenta.MenuDialogs");
+        let fake = DemoClient::with_downloads(vec![row("a", "downloading", "ubuntu.iso")]);
+        let window = ready_window(&application, &fake, 1);
+
+        let actions = ActionGroupExt::list_actions(&window.window());
+        assert!(
+            actions.iter().any(|name| name == "remote"),
+            "the window must expose win.remote, got {actions:?}"
+        );
+        // The same action the hamburger menu invokes, not the method behind it.
+        ActionGroupExt::activate_action(&window.window(), "remote", None);
+        assert!(
+            pump_until(|| window.remote_dialog_open(), Duration::from_secs(3)),
+            "win.remote must open the pairing dialog"
+        );
+        window.close_remote_dialog();
+
+        ActionGroupExt::activate_action(&window.window(), "rss", None);
+        assert!(
+            pump_until(|| window.rss_dialog_open(), Duration::from_secs(3)),
+            "win.rss must open the subscriptions panel"
+        );
+        window.close_rss_dialog();
     });
 }

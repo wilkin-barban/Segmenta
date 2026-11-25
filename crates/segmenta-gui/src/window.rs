@@ -1315,6 +1315,8 @@ impl SegmentaWindow {
             Rc::new(move |updated: Settings| {
                 *handle.0.settings.borrow_mut() = updated;
                 handle.0.apply_settings_to_ui();
+                // A VPN interface change must show up in the header without a restart.
+                handle.0.reload_vpn();
             }),
         );
     }
@@ -1539,6 +1541,8 @@ impl Inner {
             Some(tr(locale(), Msg::DeleteSelection)),
             Some("win.delete-selected"),
         );
+        menu.append(Some(tr(locale(), Msg::RemotePairing)), Some("win.remote"));
+        menu.append(Some(tr(locale(), Msg::RssFeeds)), Some("win.rss"));
         menu.append(
             Some(tr(locale(), Msg::Preferences)),
             Some("win.preferences"),
@@ -1932,6 +1936,24 @@ impl Inner {
             }
         });
         self.window.add_action(&add);
+
+        let remote = gtk::gio::SimpleAction::new("remote", None);
+        let handle = Rc::downgrade(self);
+        remote.connect_activate(move |_, _| {
+            if let Some(inner) = handle.upgrade() {
+                SegmentaWindow(inner).open_remote_dialog();
+            }
+        });
+        self.window.add_action(&remote);
+
+        let rss = gtk::gio::SimpleAction::new("rss", None);
+        let handle = Rc::downgrade(self);
+        rss.connect_activate(move |_, _| {
+            if let Some(inner) = handle.upgrade() {
+                SegmentaWindow(inner).open_rss_dialog();
+            }
+        });
+        self.window.add_action(&rss);
 
         let preferences = gtk::gio::SimpleAction::new("preferences", None);
         let handle = Rc::downgrade(self);

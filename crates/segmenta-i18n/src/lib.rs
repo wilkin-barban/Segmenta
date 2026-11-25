@@ -127,6 +127,37 @@ catalog! {
     Retry => { en: "Retry", es: "Reintentar", pt: "Tentar de novo" },
     Reload => { en: "Reload", es: "Recargar", pt: "Recarregar" },
     Preferences => { en: "Preferences", es: "Preferencias", pt: "Preferências" },
+    RemotePairing => {
+        en: "Remote pairing", es: "Emparejamiento remoto", pt: "Emparelhamento remoto"
+    },
+    RssFeeds => { en: "RSS subscriptions", es: "Suscripciones RSS", pt: "Inscrições RSS" },
+    VpnInterface => {
+        en: "Network interface",
+        es: "Interfaz de red",
+        pt: "Interface de rede"
+    },
+    VpnKillSwitchHint => {
+        en: "Downloads are bound to this interface; if it is down they are blocked instead of leaking.",
+        es: "Las descargas se atan a esta interfaz; si está caída se bloquean en vez de filtrar la IP.",
+        pt: "Os downloads são presos a esta interface; se ela cair, são bloqueados em vez de vazar."
+    },
+    DebridHint => {
+        en: "The token is stored in the keyring, never in the settings database.",
+        es: "El token se guarda en el llavero, nunca en la base de ajustes.",
+        pt: "O token fica no chaveiro, nunca no banco de ajustes."
+    },
+    DebridProvider => {
+        en: "Provider",
+        es: "Proveedor",
+        pt: "Provedor"
+    },
+    PrefsVpn => { en: "VPN", es: "VPN", pt: "VPN" },
+    PrefsDebrid => { en: "Debrid", es: "Debrid", pt: "Debrid" },
+    DebridToken => {
+        en: "API token",
+        es: "Token de API",
+        pt: "Token de API"
+    },
     About => { en: "About", es: "Acerca de", pt: "Sobre" },
     Quit => { en: "Quit", es: "Salir", pt: "Sair" },
     Search => { en: "Search", es: "Buscar", pt: "Pesquisar" },
