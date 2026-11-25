@@ -24,6 +24,7 @@ clap.workspace = true
 futures-util.workspace = true
 hex.workspace = true
 libc.workspace = true
+quick-xml.workspace = true
 rand.workspace = true
 reqwest.workspace = true
 rusqlite.workspace = true

@@ -16,6 +16,7 @@ pub mod media;
 pub mod postprocess;
 pub mod remote;
 pub mod rpc;
+pub mod rss;
 pub mod scheduler;
 pub mod secrets;
 pub mod store;
