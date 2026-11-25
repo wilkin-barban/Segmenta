@@ -548,3 +548,53 @@ fn a_second_activation_reuses_the_existing_window() {
         );
     });
 }
+
+#[test]
+fn the_packages_section_lists_and_acts_on_a_package() {
+    run_gui("packages_section", || {
+        let application = app("io.github.wilkin.Segmenta.Packages1");
+        let fake = DemoClient::with_downloads(vec![row("a", "downloading", "ubuntu.iso")]);
+        fake.set_packages(vec![
+            json!({"package_id": "pkg-1", "name": "Bundle", "source": "cnl2", "downloads": 3}),
+            json!({"package_id": "pkg-2", "name": "Gallery", "source": "gallery", "downloads": 1}),
+        ]);
+        let window = ready_window(&application, &fake, 1);
+
+        window.reload_packages();
+        assert!(
+            pump_until(|| window.packages().len() == 2, Duration::from_secs(3)),
+            "the packages never loaded: {:?}",
+            window.packages()
+        );
+        assert_eq!(
+            window.packages(),
+            vec![("Bundle".to_string(), 3), ("Gallery".to_string(), 1)]
+        );
+
+        // A collective action goes out for the selected package only.
+        window.select_package(0);
+        window.package_action("pause");
+        assert!(
+            pump_until(
+                || !fake.calls_to("package.pause").is_empty(),
+                Duration::from_secs(3)
+            ),
+            "no package.pause was sent"
+        );
+        let sent = fake.calls_to("package.pause");
+        assert_eq!(sent[0]["package_id"], "pkg-1");
+
+        // Deleting a package never asks to delete its files.
+        window.package_action("delete");
+        assert!(
+            pump_until(
+                || !fake.calls_to("package.delete").is_empty(),
+                Duration::from_secs(3)
+            ),
+            "no package.delete was sent"
+        );
+        let delete = &fake.calls_to("package.delete")[0];
+        assert_eq!(delete["package_id"], "pkg-1");
+        assert_eq!(delete["delete_file"], false);
+    });
+}

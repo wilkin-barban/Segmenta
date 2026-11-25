@@ -90,6 +90,9 @@ struct Inner {
     selection: gtk::SingleSelection,
     filter_list: gtk::ListBox,
     queue_list: gtk::ListBox,
+    /// Packages shown in the sidebar, in daemon order.
+    packages_list: gtk::ListBox,
+    packages: std::cell::RefCell<Vec<crate::model::PackageRow>>,
     queue_group: gtk::Box,
     count_labels: RefCell<Vec<(Filter, gtk::Label)>>,
     empty_page: adw::StatusPage,
@@ -287,6 +290,8 @@ impl SegmentaWindow {
             selection,
             filter_list: gtk::ListBox::new(),
             queue_list: gtk::ListBox::new(),
+            packages_list: gtk::ListBox::new(),
+            packages: std::cell::RefCell::new(Vec::new()),
             queue_group: gtk::Box::new(gtk::Orientation::Vertical, 6),
             count_labels: RefCell::new(Vec::new()),
             empty_page: adw::StatusPage::new(),
@@ -563,6 +568,33 @@ impl SegmentaWindow {
         if visible {
             self.0.focus_search();
         }
+    }
+
+    /// Packages currently painted in the sidebar, as `(name, downloads)`.
+    pub fn packages(&self) -> Vec<(String, u32)> {
+        self.0
+            .packages
+            .borrow()
+            .iter()
+            .map(|package| (package.name.clone(), package.downloads))
+            .collect()
+    }
+
+    /// Reload the package section from the daemon.
+    pub fn reload_packages(&self) {
+        self.0.refresh_packages();
+    }
+
+    /// Select one package row by index, the way a click does.
+    pub fn select_package(&self, index: i32) {
+        self.0
+            .packages_list
+            .select_row(self.0.packages_list.row_at_index(index).as_ref());
+    }
+
+    /// Run a collective action on the selected package.
+    pub fn package_action(&self, action: &str) {
+        self.0.run_package_action(action);
     }
 
     /// Whether the search bar widget is visible to the layout.
@@ -956,6 +988,75 @@ impl SegmentaWindow {
 }
 
 impl Inner {
+    /// Ask the daemon for the packages and rebuild the sidebar section.
+    fn refresh_packages(self: &Rc<Self>) {
+        let bus = crate::client::RequestBus::new();
+        bus.spawn(&self.client, "package.list", json!({}));
+        let handle = Rc::downgrade(self);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        gtk::glib::timeout_add_local(std::time::Duration::from_millis(120), move || {
+            let Some(inner) = handle.upgrade() else {
+                return gtk::glib::ControlFlow::Break;
+            };
+            if let Some((_, Ok(value))) = bus.take().into_iter().next() {
+                let rows: Vec<crate::model::PackageRow> =
+                    serde_json::from_value::<Vec<crate::model::PackageRow>>(value)
+                        .unwrap_or_default();
+                inner.fill_packages(rows);
+                return gtk::glib::ControlFlow::Break;
+            }
+            if std::time::Instant::now() >= deadline {
+                return gtk::glib::ControlFlow::Break;
+            }
+            gtk::glib::ControlFlow::Continue
+        });
+    }
+
+    /// Replace the package rows and keep the list consistent.
+    fn fill_packages(&self, rows: Vec<crate::model::PackageRow>) {
+        while let Some(child) = self.packages_list.row_at_index(0) {
+            self.packages_list.remove(&child);
+        }
+        for package in &rows {
+            let row = gtk::ListBoxRow::new();
+            let line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            let name = gtk::Label::new(Some(&package.name));
+            name.set_xalign(0.0);
+            name.set_hexpand(true);
+            name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            let count = gtk::Label::new(Some(&package.downloads.to_string()));
+            count.add_css_class("dim-label");
+            count.add_css_class("numeric");
+            line.append(&name);
+            line.append(&count);
+            row.set_child(Some(&line));
+            self.packages_list.append(&row);
+        }
+        *self.packages.borrow_mut() = rows;
+    }
+
+    /// Run `pause`, `resume` or `delete` on the selected package.
+    fn run_package_action(&self, action: &str) {
+        let index = self
+            .packages_list
+            .selected_row()
+            .map(|row| row.index())
+            .unwrap_or(-1);
+        if index < 0 {
+            return;
+        }
+        let Some(package) = self.packages.borrow().get(index as usize).cloned() else {
+            return;
+        };
+        let method = format!("package.{action}");
+        let mut params = json!({ "package_id": package.package_id });
+        if action == "delete" {
+            params["delete_file"] = json!(false);
+        }
+        let bus = crate::client::RequestBus::new();
+        bus.spawn(&self.client, &method, params);
+    }
+
     /// Put the caret in the search entry, so typing filters at once.
     fn focus_search(&self) {
         if let Some(entry) = self.search_bar.child().and_downcast::<gtk::SearchEntry>() {
@@ -1167,6 +1268,35 @@ impl Inner {
         self.queue_group.append(&queue_title);
         self.queue_group.append(&self.queue_list);
         container.append(&self.queue_group);
+
+        let packages_title = gtk::Label::new(Some("Paquetes"));
+        packages_title.set_xalign(0.0);
+        packages_title.add_css_class("dim-label");
+        packages_title.add_css_class("caption-heading");
+        self.packages_list.add_css_class("navigation-sidebar");
+        self.packages_list
+            .set_selection_mode(gtk::SelectionMode::Single);
+        container.append(&packages_title);
+        container.append(&self.packages_list);
+
+        let packages_actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        for (label, action) in [
+            ("Pausar", "pause"),
+            ("Reanudar", "resume"),
+            ("Eliminar", "delete"),
+        ] {
+            let button = gtk::Button::with_label(label);
+            button.add_css_class("flat");
+            button.set_hexpand(true);
+            let handle = Rc::downgrade(self);
+            button.connect_clicked(move |_| {
+                if let Some(inner) = handle.upgrade() {
+                    inner.run_package_action(action);
+                }
+            });
+            packages_actions.append(&button);
+        }
+        container.append(&packages_actions);
 
         let queue_handle = Rc::downgrade(self);
         self.queue_list.connect_row_selected(move |_, row| {
@@ -1474,6 +1604,8 @@ impl Inner {
         self.request("system.hello", json!({}), Pending::Hello);
         self.load_settings();
         self.reload_all();
+        // The sidebar section starts with whatever the daemon already has.
+        self.refresh_packages();
     }
 
     fn request(&self, method: &str, params: Value, pending: Pending) -> u64 {
