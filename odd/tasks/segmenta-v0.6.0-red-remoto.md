@@ -1,6 +1,6 @@
 # Segmenta v0.6.0 — red avanzada y control remoto
 
-Fase 3. Depende del cierre de v0.5.0. Fuente: [SPEC-013](../../docs/openspec/13-mdm-parity-and-advanced-roadmap.md), módulos 6, 7, 9 y 11; [resumen](../../docs/roadmap-mdm-parity.md). Estado: plan; mecanismos propuestos no están validados.
+Fase 3. Depende del cierre de v0.5.0. Fuente: [SPEC-013](../../docs/openspec/13-mdm-parity-and-advanced-roadmap.md), módulos 6, 7, 9 y 11; [resumen](../../docs/roadmap-mdm-parity.md). Estado: **cerrada y publicada** como [v0.6.0](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.6.0).
 
 ## Specs
 
@@ -15,7 +15,7 @@ Fase 3. Depende del cierre de v0.5.0. Fuente: [SPEC-013](../../docs/openspec/13-
 - [x] T3 — Suplantación TLS / bypass anti-bot con BoringSSL, con alcance, licencias y activación definidos (S1) — ruta: probe y transporte — cerrado como **seam arquitectónico** por decisión del Tech Lead: `dbc4063`, `be8efae`, evaluación en `docs/tls-impersonation-evaluation.md`. La suplantación real no se implementa.
 - [x] T4 — Servidor web de control remoto con emparejamiento por código QR, ciclo de vida y revocación de tokens (S1) — ruta: daemon, GUI/CLI y web — commits: `c942917` (servidor y token), `c1c4a2e` (IPC de emparejamiento), `ed5945c` (pruebas), `2bad8a7` (CLI). QR desde la GUI queda pendiente.
 - [x] T5 — Lector RSS para descargas y torrents con filtros y deduplicación persistente (S1) — ruta: scheduler, persistencia y configuración — commits: `4cca59a` (schema v8 y store), `4f3bedd` (parser), `bdf253b` (sondeo e IPC), `dff93bb` (pruebas). Torrentes por RSS quedan pendientes.
-- [ ] T6 — Documentación, QA, release build hermético v0.6.0 y prueba en host (S1) — ruta: documentación y pruebas — commit: pendiente.
+- [x] T6 — Documentación, QA, release build hermético v0.6.0 y prueba en host (S1) — ruta: documentación y pruebas — commit: `91cc389`, tag `v0.6.0`, release publicada.
 
 ## Criterios de aceptación
 
@@ -119,3 +119,11 @@ Fase 3. Depende del cierre de v0.5.0. Fuente: [SPEC-013](../../docs/openspec/13-
   - Scheduler e IPC: `rss.feed.list/add/remove` y `rss.check_now` (un feed o todos); el daemon además sondea cada 60 s los feeds cuyo intervalo venció. Cada ítem nuevo entra por el mismo `download.add` que usa el resto, y el GUID se marca **después** de encolar.
   - Pruebas: 4 unitarias del parser (RSS con y sin guid, Atom con `href`, filtros, XML truncado) y 3 de integración con un feed servido por HTTP local: filtro que deja pasar un solo ítem, segundo sondeo sin duplicados, reinicio del daemon sobre el mismo directorio **sin reimportar**, y rechazo de una URL `file://`.
   - Límites declarados: los feeds solo encolan descargas HTTP/HTTPS; los ítems que apuntan a un `.torrent` o a un magnet no se convierten en tareas de torrent todavía. No hay límite de tamaño del cuerpo del feed más allá del timeout de 30 s. El intervalo mínimo es 5 minutos y el sondeo de fondo corre cada 60 s.
+
+- L14 — Cierre de T6 y de la Fase 3.
+  - Versión 0.6.0 en el workspace (los crates heredan `version.workspace`), nombres de los ZIP en el crate de la GUI, ambos manifiestos, ambos metainfo con fecha 2026-11-25 y las aserciones de versión de las pruebas de extensión.
+  - Documentación: `docs/phase-three-network-and-remote.md` describe VPN, control remoto y RSS con sus límites; `docs/tls-impersonation-evaluation.md` ya cubría el seam; `README.md` enlaza ambos y registra v0.6.0; `CHANGELOG.md` agrega `[0.6.0] - 2026-11-25`; `packaging/release-notes-0.6.0.md` es el texto de la release.
+  - Build `cargo build --release --workspace`, extensiones empaquetadas (19 archivos cada una, locales es/en/pt_BR, 183 pruebas de extensión verdes) y `.deb` con cargo-deb: `packaging/check-package.sh dist/segmenta_0.6.0-1_amd64.deb 0.6.0` → 23/23 rutas, desktop-file-validate y appstreamcli en verde, lintian no instalado.
+  - Prueba en host: backup previo en `/tmp/segmenta-0.5.0-backup.db`; instalado sobre 0.5.0. `dpkg` reporta 0.6.0-1, `segmenta --version` → 0.6.0, el daemon responde «0.6.0 (protocolo v1)», la base real migró a `user_version = 8` conservando **7 descargas** y con `rss_feeds`/`rss_seen_items` creadas, y `segmenta-gui --smoke` termina con código 0 bajo xvfb.
+  - Incidente detectado y corregido en el host: `remote.status` respondía `paired: true` con el control remoto apagado. La causa es que las pruebas de integración de T4, aunque usan directorios temporales para la base, escriben el digest del token en el **keyring real** del usuario, no en un almacén aislado. Se revocó con `segmenta remote revoke` y el estado quedó consistente. Queda como deuda de aislamiento de pruebas: esos tests deberían forzar el almacén de archivos.
+  - Publicación: commit `91cc389`, `main` pusheado, tag anotado `v0.6.0` y [release publicada](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.6.0) sin borrador con los tres assets (`.deb` 11,9 MB y ambos ZIP).
