@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 struct FeedServer {
     child: Child,
     port: u16,
+    #[allow(dead_code)]
     dir: tempfile::TempDir,
 }
 
@@ -212,4 +213,25 @@ fn an_unsafe_or_unknown_feed_is_rejected() {
     assert_eq!(refused["error"]["code"], 1085, "{refused}");
     let unknown = daemon.request("rss.feed.remove", json!({ "feed_id": "nope" }));
     assert!(unknown.get("error").is_some());
+}
+
+#[test]
+fn a_failing_feed_is_reported_instead_of_looking_empty() {
+    // A server that answers 404 for the feed: the check must report the failure.
+    let server = FeedServer::start("not a feed");
+    let daemon = Daemon::fresh();
+    daemon.call("rss.feed.add", json!({ "url": server.url() }));
+    // Point the feed at a missing path so the fetch fails.
+    let feeds = daemon.call("rss.feed.list", json!({}));
+    let feed_id = feeds[0]["feed_id"].as_str().unwrap().to_string();
+    daemon.call("rss.feed.remove", json!({ "feed_id": feed_id }));
+    daemon.call(
+        "rss.feed.add",
+        json!({ "url": format!("http://127.0.0.1:{}/missing.xml", server.port) }),
+    );
+
+    let result = daemon.call("rss.check_now", json!({}));
+    assert_eq!(result["failed"], 1, "{result}");
+    assert_eq!(result["added"], 0, "{result}");
+    assert_eq!(result["error"], "ERR_RSS_UNREACHABLE", "{result}");
 }

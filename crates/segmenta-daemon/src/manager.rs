@@ -1325,6 +1325,8 @@ impl Manager {
         let feeds = self.store.rss_feeds().map_err(store_error)?;
         let mut added = 0;
         let mut checked = 0;
+        let mut failed = 0;
+        let mut last_error = None;
         for feed in feeds {
             if only.is_some_and(|id| id != feed.id) {
                 continue;
@@ -1334,11 +1336,18 @@ impl Manager {
                 Ok(count) => added += count,
                 Err(code) => {
                     tracing::info!(feed = %feed.id, code, "rss check failed");
+                    failed += 1;
+                    last_error = Some(code);
                 }
             }
             let _ = self.store.set_rss_last_checked(&feed.id, chrono_like_now());
         }
-        Ok(json!({ "checked": checked, "added": added }))
+        Ok(json!({
+            "checked": checked,
+            "added": added,
+            "failed": failed,
+            "error": last_error,
+        }))
     }
 
     /// Import one feed, returning how many tasks were created.
