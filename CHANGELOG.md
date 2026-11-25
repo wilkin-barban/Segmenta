@@ -5,6 +5,28 @@ Todos los cambios notables de Segmenta se documentan en este archivo.
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el proyecto usa
 [Versionado semántico](https://semver.org/lang/es/).
 
+## [0.6.0] - 2026-11-25
+
+### Added
+
+- Sección de paquetes en la ventana con pausa, reanudación y eliminación colectivas.
+- Seam Debrid transparente en el diálogo de alta: resuelve el enlace cuando hay proveedor y cae a la URL original ante cualquier fallo.
+- VPN binding por interfaz (`vpn_interface`) con kill switch fail-closed y rechazo explícito de torrentes bajo VPN.
+- Control remoto apagado por defecto, con token de sesión revocable, emparejamiento por URL/QR desde la CLI y API `GET /api/downloads` + `POST /api/action`.
+- Lector RSS con schema v8, filtros por alternativas y deduplicación persistente por GUID.
+- `tls_profile` como seam: `chrome` se rechaza con un error explícito porque el build no incluye suplantación TLS.
+
+### Fixed
+
+- El botón de búsqueda abre la barra: se quitó `set_visible(false)` de la `GtkSearchBar`, la barra pasa bajo el encabezado y el campo toma el foco.
+
+### Limitaciones conocidas
+
+- Control remoto sobre HTTP sin TLS, solo CLI para el QR y sin límite de intentos de autenticación.
+- Torrentes bloqueados bajo VPN porque librqbit no permite atar sus sockets.
+- RSS solo encola descargas HTTP/HTTPS, no torrentes.
+- La sección de paquetes no filtra las descargas por paquete.
+
 ## [0.5.0] - 2026-11-24
 
 ### Added

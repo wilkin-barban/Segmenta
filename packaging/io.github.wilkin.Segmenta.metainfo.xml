@@ -41,6 +41,11 @@
     <control>touch</control>
   </supports>
   <releases>
+    <release version="0.6.0" date="2026-11-25">
+      <description>
+        <p>Adds a VPN kill switch, a token-guarded remote control API with QR pairing, RSS feeds with persistent deduplication, a fixed search bar and package actions in the desktop client.</p>
+      </description>
+    </release>
     <release version="0.5.0" date="2026-11-24">
       <description>
         <p>Adds packages with collective actions, Click'n'Load 2 imports, Real-Debrid and AllDebrid link resolution, a downloads popup in both browsers and gallery-dl support.</p>
