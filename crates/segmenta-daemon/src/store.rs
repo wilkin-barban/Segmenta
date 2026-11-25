@@ -472,6 +472,8 @@ pub struct Settings {
     pub cnl2_enabled: bool,
     /// Debrid provider used to unrestrict links: `none`, `realdebrid`, `alldebrid` or `torbox`.
     pub debrid_provider: String,
+    /// Interface every download socket is bound to; empty means the default route.
+    pub vpn_interface: String,
     /// Run ClamAV over every finished file before publishing it as `completed`.
     pub antivirus_enabled: bool,
     /// Deadline of one scan, in seconds (1-3600, OpenSpec 12 §5).
@@ -521,6 +523,7 @@ impl Default for Settings {
             torrent_sequential: false,
             cnl2_enabled: false,
             debrid_provider: "none".to_string(),
+            vpn_interface: String::new(),
             antivirus_enabled: false,
             antivirus_timeout_secs: DEFAULT_ANTIVIRUS_TIMEOUT_SECS,
             antivirus_quarantine_dir: default_quarantine_dir(),
@@ -639,6 +642,7 @@ pub const SETTING_KEYS: &[&str] = &[
     "torrent_sequential",
     "cnl2_enabled",
     "debrid_provider",
+    "vpn_interface",
     "antivirus_enabled",
     "antivirus_timeout_secs",
     "antivirus_quarantine_dir",
@@ -778,6 +782,13 @@ impl Settings {
         if self.max_retries > 20 {
             return Err(StoreError::Invalid(
                 "max_retries must be between 0 and 20".to_string(),
+            ));
+        }
+        if !self.vpn_interface.is_empty()
+            && segmenta_core::netguard::validate_name(&self.vpn_interface).is_err()
+        {
+            return Err(StoreError::Invalid(
+                "vpn_interface must be a kernel network interface name".to_string(),
             ));
         }
         if self.debrid_provider != "none"

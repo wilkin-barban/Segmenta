@@ -575,6 +575,8 @@ impl Manager {
 
     /// `download.add`
     fn add_download(&self, params: AddDownloadParams) -> Result<Value, RpcError> {
+        // Kill switch first: without a usable interface nothing is dialed at all.
+        vpn_guard(&self.settings())?;
         let url = url::Url::parse(&params.url)
             .map_err(|err| RpcError::invalid_params(format!("invalid url: {err}")))?;
         if !matches!(url.scheme(), "http" | "https") {
@@ -830,6 +832,7 @@ impl Manager {
         let http = HttpConfig {
             user_agent: format!("Segmenta/{}", crate::DAEMON_VERSION),
             allow_local: settings.allow_local_downloads,
+            interface: vpn_interface(&settings),
             proxy: if settings.proxy_mode == "manual" {
                 settings.proxy_url.clone()
             } else if settings.proxy_mode == "none" {
@@ -2094,6 +2097,33 @@ fn remove_task_file(path: &Path) -> Result<bool, String> {
 
 fn store_error(err: StoreError) -> RpcError {
     RpcError::internal(err.to_string())
+}
+
+/// Interface the download sockets must use, if the user configured one.
+fn vpn_interface(settings: &Settings) -> Option<String> {
+    let name = settings.vpn_interface.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// Kill switch: refuse a task when the selected interface is not usable.
+///
+/// Failing here means no socket is ever created, which is the point: a download that
+/// cannot be bound must not silently leave through the default route.
+fn vpn_guard(settings: &Settings) -> Result<(), RpcError> {
+    let Some(interface) = vpn_interface(settings) else {
+        return Ok(());
+    };
+    segmenta_core::netguard::ensure_up(&interface).map_err(|problem| {
+        RpcError::new(
+            match problem {
+                segmenta_core::netguard::InterfaceProblem::InvalidName => 1080,
+                segmenta_core::netguard::InterfaceProblem::Missing => 1081,
+                segmenta_core::netguard::InterfaceProblem::Down => 1082,
+            },
+            problem.code(),
+            problem.message(&interface),
+        )
+    })
 }
 
 /// Numeric code each gallery failure carries to the client.
@@ -3395,6 +3425,19 @@ impl Manager {
     }
 
     async fn torrent_add(&self, params: Value) -> Result<Value, RpcError> {
+        // librqbit opens its own sockets and exposes no way to bind them to a device, so a
+        // torrent under a VPN setting is refused: it either stays inside the tunnel or does
+        // not run. Allowing it would leak the real address.
+        if let Some(interface) = vpn_interface(&self.settings()) {
+            return Err(RpcError::new(
+                1083,
+                "ERR_VPN_TORRENT_UNSUPPORTED",
+                format!(
+                    "torrents cannot be bound to `{interface}`; disable the vpn interface \
+                     or download over HTTP"
+                ),
+            ));
+        }
         let url = params
             .get("url")
             .and_then(|v| v.as_str())
