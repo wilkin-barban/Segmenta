@@ -29,6 +29,7 @@ hex = "0.4"
 httpdate = "1.0"
 libc = "0.2"
 percent-encoding = "2"
+qrcode = { version = "0.14", default-features = false }
 quick-xml = "0.41"
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "http2"] }
