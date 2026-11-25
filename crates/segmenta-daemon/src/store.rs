@@ -474,6 +474,8 @@ pub struct Settings {
     pub debrid_provider: String,
     /// Interface every download socket is bound to; empty means the default route.
     pub vpn_interface: String,
+    /// TLS fingerprint: `standard`, or `chrome` in an impersonation build.
+    pub tls_profile: String,
     /// Run ClamAV over every finished file before publishing it as `completed`.
     pub antivirus_enabled: bool,
     /// Deadline of one scan, in seconds (1-3600, OpenSpec 12 §5).
@@ -524,6 +526,7 @@ impl Default for Settings {
             cnl2_enabled: false,
             debrid_provider: "none".to_string(),
             vpn_interface: String::new(),
+            tls_profile: "standard".to_string(),
             antivirus_enabled: false,
             antivirus_timeout_secs: DEFAULT_ANTIVIRUS_TIMEOUT_SECS,
             antivirus_quarantine_dir: default_quarantine_dir(),
@@ -643,6 +646,7 @@ pub const SETTING_KEYS: &[&str] = &[
     "cnl2_enabled",
     "debrid_provider",
     "vpn_interface",
+    "tls_profile",
     "antivirus_enabled",
     "antivirus_timeout_secs",
     "antivirus_quarantine_dir",
@@ -783,6 +787,22 @@ impl Settings {
             return Err(StoreError::Invalid(
                 "max_retries must be between 0 and 20".to_string(),
             ));
+        }
+        match segmenta_core::probe::TlsProfile::parse(&self.tls_profile) {
+            Some(segmenta_core::probe::TlsProfile::Standard) => {}
+            Some(segmenta_core::probe::TlsProfile::Chrome) => {
+                // Refused at the settings boundary: a download must never discover at dial
+                // time that the fingerprint it was promised does not exist in this build.
+                return Err(StoreError::Invalid(
+                    "tls_profile chrome needs the `impersonate` build, which this binary does                      not include"
+                        .to_string(),
+                ));
+            }
+            None => {
+                return Err(StoreError::Invalid(
+                    "tls_profile must be standard or chrome".to_string(),
+                ));
+            }
         }
         if !self.vpn_interface.is_empty()
             && segmenta_core::netguard::validate_name(&self.vpn_interface).is_err()

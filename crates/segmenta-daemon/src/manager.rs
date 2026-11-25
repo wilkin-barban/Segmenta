@@ -833,6 +833,8 @@ impl Manager {
             user_agent: format!("Segmenta/{}", crate::DAEMON_VERSION),
             allow_local: settings.allow_local_downloads,
             interface: vpn_interface(&settings),
+            profile: segmenta_core::probe::TlsProfile::parse(&settings.tls_profile)
+                .unwrap_or_default(),
             proxy: if settings.proxy_mode == "manual" {
                 settings.proxy_url.clone()
             } else if settings.proxy_mode == "none" {

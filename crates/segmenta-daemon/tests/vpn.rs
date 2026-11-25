@@ -114,3 +114,18 @@ fn torrents_are_refused_under_a_vpn_interface() {
     );
     assert_eq!(refused["error"]["code"], 1083, "{refused}");
 }
+
+#[test]
+fn a_chrome_tls_profile_is_refused_by_a_build_without_impersonation() {
+    let daemon = Daemon::start();
+    let refused = daemon.request("settings.update", json!({"tls_profile": "chrome"}));
+    let message = refused["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("impersonate"), "{refused}");
+
+    // The default profile keeps working and a typo is still rejected.
+    daemon.call("settings.update", json!({"tls_profile": "standard"}));
+    assert!(daemon
+        .request("settings.update", json!({"tls_profile": "netscape"}))
+        .get("error")
+        .is_some());
+}
