@@ -129,3 +129,22 @@ fn a_chrome_tls_profile_is_refused_by_a_build_without_impersonation() {
         .get("error")
         .is_some());
 }
+
+#[test]
+fn the_daemon_reports_the_interface_state_for_the_window() {
+    let daemon = Daemon::start();
+    let none = daemon.call("vpn.status", json!({}));
+    assert_eq!(none["state"], "none");
+    assert_eq!(none["configured"], false);
+
+    // `lo` exists on every Linux host that runs these tests.
+    daemon.call("settings.update", json!({"vpn_interface": "lo"}));
+    let active = daemon.call("vpn.status", json!({}));
+    assert_eq!(active["state"], "active");
+    assert_eq!(active["interface"], "lo");
+
+    daemon.call("settings.update", json!({"vpn_interface": "vpnx0"}));
+    let missing = daemon.call("vpn.status", json!({}));
+    assert_eq!(missing["state"], "missing");
+    assert_eq!(missing["configured"], true);
+}

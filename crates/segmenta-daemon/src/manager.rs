@@ -4363,6 +4363,28 @@ impl RpcHandler for Manager {
                         .map_err(|err| RpcError::invalid_params(err.to_string()))?;
                     self.rss_check_now(parsed.feed_id.as_deref()).await
                 }
+                "vpn.status" => {
+                    let _ = parse(params)?;
+                    let settings = self.settings();
+                    let interface = settings.vpn_interface.trim().to_string();
+                    let state = if interface.is_empty() {
+                        "none"
+                    } else {
+                        match segmenta_core::netguard::ensure_up(&interface) {
+                            Ok(()) => "active",
+                            Err(segmenta_core::netguard::InterfaceProblem::Missing) => "missing",
+                            Err(segmenta_core::netguard::InterfaceProblem::Down) => "down",
+                            Err(segmenta_core::netguard::InterfaceProblem::InvalidName) => {
+                                "invalid"
+                            }
+                        }
+                    };
+                    Ok(json!({
+                        "configured": !interface.is_empty(),
+                        "interface": interface,
+                        "state": state,
+                    }))
+                }
                 "remote.status" => {
                     let _ = parse(params)?;
                     let settings = self.settings();
