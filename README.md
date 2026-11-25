@@ -278,6 +278,8 @@ en una sola vista; estos son los enlaces directos:
 
 ## Estado y límites
 
+- **v0.7.0**: controles en la ventana para VPN, emparejamiento remoto con QR, suscripciones RSS
+  y paquetes, más el foco del buscador; ver [`docs/gui-controls.md`](docs/gui-controls.md).
 - **v0.6.0**: buscador arreglado, paquetes en la ventana, Debrid transparente, VPN con kill
   switch, control remoto con token revocable y lector RSS (schema v8);
   ver [`docs/phase-three-network-and-remote.md`](docs/phase-three-network-and-remote.md).
@@ -318,6 +320,7 @@ en una sola vista; estos son los enlaces directos:
 - [Índice de releases](#releases) — enlace directo a cada versión y a sus notas.
 - [Todas las releases en GitHub](https://github.com/wilkin-barban/Segmenta/releases) — vista general.
 - [`docs/mcp-and-automation.md`](docs/mcp-and-automation.md) — servidor MCP, extracción de archivos, inhibición de suspensión y prioridad inicial de torrents.
+- [`docs/gui-controls.md`](docs/gui-controls.md) — buscador, paquetes, VPN, emparejamiento remoto y panel RSS.
 - [`docs/phase-three-network-and-remote.md`](docs/phase-three-network-and-remote.md) — VPN con kill switch, control remoto y RSS.
 - [`docs/tls-impersonation-evaluation.md`](docs/tls-impersonation-evaluation.md) — por qué la suplantación TLS quedó como seam.
 - [`docs/openspec/`](docs/openspec/) — contratos de arquitectura, motor, IPC, persistencia, extensión y empaquetado.

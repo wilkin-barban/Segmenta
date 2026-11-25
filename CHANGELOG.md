@@ -5,6 +5,27 @@ Todos los cambios notables de Segmenta se documentan en este archivo.
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y el proyecto usa
 [Versionado semántico](https://semver.org/lang/es/).
 
+## [0.7.0] - 2026-11-25
+
+### Added
+
+- Píldora de estado de VPN en el encabezado con los estados activa, caída, ausente y mal configurada, alimentada por `vpn.status` del daemon.
+- Diálogo de emparejamiento remoto con URL, token mostrado una sola vez, QR generado en Rust puro y botón de revocación.
+- Panel de suscripciones RSS con alta, baja, «Comprobar ahora» y aviso visible cuando una comprobación falla.
+- Sección de paquetes en la barra lateral con pausa, reanudación y eliminación colectivas.
+- `rss.check_now` informa `failed` y el código del error del último feed que no se pudo leer.
+
+### Fixed
+
+- El clic en la lupa de búsqueda deja el cursor en el campo; antes el foco quedaba en la lista y solo `Ctrl+F` funcionaba.
+- La barra de búsqueda recibe el key capture de la ventana, así que Escape y la escritura funcionan siempre.
+
+### Limitaciones conocidas
+
+- La sección de paquetes no filtra descargas por paquete y el panel RSS no edita suscripciones.
+- El estado de error de un feed no se guarda en la base.
+- Control remoto sobre HTTP sin TLS; el QR de la CLI depende de `qrencode`.
+
 ## [0.6.0] - 2026-11-25
 
 ### Added

@@ -2,7 +2,7 @@
 
 Frente abierto después de v0.6.0. Cubre la remediación del buscador (foco al hacer clic) y la
 exposición en la ventana de las funciones de las fases 2 y 3: VPN con kill switch, control
-remoto y RSS. Estado: plan; sin cambios de código de aplicación todavía.
+remoto y RSS. Estado: **cerrada y publicada** como [v0.7.0](https://github.com/wilkin-barban/Segmenta/releases/tag/v0.7.0).
 
 ## Specs
 
@@ -19,7 +19,7 @@ remoto y RSS. Estado: plan; sin cambios de código de aplicación todavía.
 - [x] T3 — Diálogo de emparejamiento remoto: muestra el estado del control remoto, permite activarlo y desactivarlo, presenta la URL de emparejamiento una sola vez y dibuja el QR sin depender de `qrencode` (S4) — ruta: `segmenta-gui` y cliente IPC — commits: `375f7f5` (crate `qrcode` y pintado), `43f7371` (diálogo).
 - [x] T4 — Panel de feeds RSS: lista de suscripciones con nombre, filtro, destino, intervalo y último sondeo; alta, baja y “comprobar ahora”; estado visible cuando una comprobación falla (S4) — ruta: `segmenta-gui` y cliente IPC — commits: `3f5bf63` (panel), `6360966` (conexión e IPC), más el ajuste del daemon en `4e1e5b7`.
 
-- [ ] T5 — Documentar los controles nuevos, actualizar capturas y ejecutar los gates de la ventana antes de cerrar el frente (S4) — ruta: documentación y pruebas — commit: pendiente.
+- [x] T5 — Documentar los controles nuevos, actualizar capturas y ejecutar los gates de la ventana antes de cerrar el frente (S4) — ruta: documentación y pruebas — commit de release y cierre.
 
 ## Criterios de aceptación
 
@@ -94,3 +94,10 @@ remoto y RSS. Estado: plan; sin cambios de código de aplicación todavía.
   - Pruebas: RED primero por compilación (panel, accesos y respuestas del cliente simulado inexistentes), después verde. La prueba de UI abre el panel, verifica la fila con nombre, URL, destino y último sondeo; comprueba que una comprobación limpia no muestra error y que una fallida sí; envía el alta con los valores escritos y quita la seleccionada verificando el `feed_id` enviado; y cierra el panel. Prueba de integración del daemon: un feed con URL inexistente responde `failed: 1` y `ERR_RSS_UNREACHABLE`.
   - Gates: `xvfb-run -a cargo test -p segmenta-gui` en verde (75 pruebas), `cargo test -p segmenta-daemon --test rss` en verde (4 pruebas), Clippy y fmt limpios.
   - Límites declarados: el panel no edita una suscripción existente (hay que quitarla y volver a crearla); el estado por feed no se conserva en la base, así que un fallo sólo se ve en la comprobación que lo produjo y no sobrevive al reinicio; y el alta no valida la URL en la GUI, la rechaza el daemon con su código.
+
+- L9 — Cierre de T5 y de la release.
+  - Documentación: `docs/gui-controls.md` describe el buscador, los paquetes, el seam Debrid, la píldora de VPN, el emparejamiento remoto y el panel RSS con sus límites; `README.md` enlaza el documento y registra v0.7.0; `CHANGELOG.md` agrega `[0.7.0] - 2026-11-25`; `packaging/release-notes-0.7.0.md` es el texto de la release.
+  - Versión 0.7.0 en el workspace, nombres de los ZIP en el crate de la GUI, ambos manifiestos, ambos metainfo con fecha 2026-11-25 y las aserciones de versión de las pruebas de extensión.
+  - Build `cargo build --release --workspace`, extensiones empaquetadas (19 archivos cada una, 183 pruebas de extensión verdes) y `.deb` con cargo-deb: `packaging/check-package.sh dist/segmenta_0.7.0-1_amd64.deb 0.7.0` → 23/23 rutas, desktop-file-validate y appstreamcli en verde, lintian no instalado.
+  - Prueba en host con `dpkg -i` (y `apt-get -f install` sin cambios pendientes), backup previo en `/tmp/segmenta-0.6.0-backup.db`: `dpkg` reporta `0.7.0-1 install ok installed`, `segmenta --version` → 0.7.0, el daemon responde «0.7.0 (protocolo v1)», la base sigue en `user_version = 8` conservando **7 descargas**, `rss_feeds` existe y está vacía, `segmenta remote status` responde el estado apagado y sin pareja, `vpn.status` responde `state: "none"` con `configured: false`, `segmenta-gui --smoke` termina con código 0 bajo xvfb y el manifiesto dentro del `.deb` declara 0.7.0.
+  - Nota de contexto: el pedido menciona `packaging/package.sh`, que no existe en el repositorio; el empaquetado se hace con `cargo deb` y se valida con `packaging/check-package.sh`, que es lo que se usó.

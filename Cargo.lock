@@ -3421,7 +3421,7 @@ dependencies = [
 
 [[package]]
 name = "segmenta-cli"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "clap",
  "hex 0.4.3",
@@ -3438,7 +3438,7 @@ dependencies = [
 
 [[package]]
 name = "segmenta-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "futures-util",
  "hex 0.4.3",
@@ -3458,7 +3458,7 @@ dependencies = [
 
 [[package]]
 name = "segmenta-daemon"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "aes",
  "base64 0.22.1",
@@ -3489,7 +3489,7 @@ dependencies = [
 
 [[package]]
 name = "segmenta-gui"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "glib",
  "gtk4",
@@ -3504,7 +3504,7 @@ dependencies = [
 
 [[package]]
 name = "segmenta-host"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "futures-util",
  "libc",
@@ -3517,11 +3517,11 @@ dependencies = [
 
 [[package]]
 name = "segmenta-i18n"
-version = "0.6.0"
+version = "0.7.0"
 
 [[package]]
 name = "segmenta-mcp"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "libc",
  "serde_json",

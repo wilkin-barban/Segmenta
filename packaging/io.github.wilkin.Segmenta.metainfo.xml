@@ -41,6 +41,11 @@
     <control>touch</control>
   </supports>
   <releases>
+    <release version="0.7.0" date="2026-11-25">
+      <description>
+        <p>Adds window controls for the network and automation features: VPN state, remote pairing with QR, RSS subscriptions, and fixes the search focus.</p>
+      </description>
+    </release>
     <release version="0.6.0" date="2026-11-25">
       <description>
         <p>Adds a VPN kill switch, a token-guarded remote control API with QR pairing, RSS feeds with persistent deduplication, a fixed search bar and package actions in the desktop client.</p>
