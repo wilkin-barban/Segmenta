@@ -14,6 +14,7 @@ pub mod logging;
 pub mod manager;
 pub mod media;
 pub mod postprocess;
+pub mod remote;
 pub mod rpc;
 pub mod scheduler;
 pub mod secrets;

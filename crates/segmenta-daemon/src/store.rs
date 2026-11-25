@@ -476,6 +476,12 @@ pub struct Settings {
     pub vpn_interface: String,
     /// TLS fingerprint: `standard`, or `chrome` in an impersonation build.
     pub tls_profile: String,
+    /// Serve the remote control API.
+    pub remote_enabled: bool,
+    /// Port of the remote control API.
+    pub remote_port: u16,
+    /// Address the remote control API listens on.
+    pub remote_bind: String,
     /// Run ClamAV over every finished file before publishing it as `completed`.
     pub antivirus_enabled: bool,
     /// Deadline of one scan, in seconds (1-3600, OpenSpec 12 §5).
@@ -527,6 +533,9 @@ impl Default for Settings {
             debrid_provider: "none".to_string(),
             vpn_interface: String::new(),
             tls_profile: "standard".to_string(),
+            remote_enabled: false,
+            remote_port: 8765,
+            remote_bind: "127.0.0.1".to_string(),
             antivirus_enabled: false,
             antivirus_timeout_secs: DEFAULT_ANTIVIRUS_TIMEOUT_SECS,
             antivirus_quarantine_dir: default_quarantine_dir(),
@@ -647,6 +656,9 @@ pub const SETTING_KEYS: &[&str] = &[
     "debrid_provider",
     "vpn_interface",
     "tls_profile",
+    "remote_enabled",
+    "remote_port",
+    "remote_bind",
     "antivirus_enabled",
     "antivirus_timeout_secs",
     "antivirus_quarantine_dir",
@@ -786,6 +798,16 @@ impl Settings {
         if self.max_retries > 20 {
             return Err(StoreError::Invalid(
                 "max_retries must be between 0 and 20".to_string(),
+            ));
+        }
+        if self.remote_port < 1024 {
+            return Err(StoreError::Invalid(
+                "remote_port must be 1024 or higher".to_string(),
+            ));
+        }
+        if !matches!(self.remote_bind.as_str(), "127.0.0.1" | "0.0.0.0") {
+            return Err(StoreError::Invalid(
+                "remote_bind must be 127.0.0.1 or 0.0.0.0".to_string(),
             ));
         }
         match segmenta_core::probe::TlsProfile::parse(&self.tls_profile) {
