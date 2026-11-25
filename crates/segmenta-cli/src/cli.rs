@@ -135,6 +135,18 @@ enum Command {
     },
     /// Ask the daemon for its protocol and version.
     Hello,
+    /// Remote control: pair a device, then show or revoke the session.
+    Remote {
+        /// Action to run.
+        #[arg(value_name = "pair|status|revoke")]
+        action: String,
+        /// Port for the remote API (pair only).
+        #[arg(short, long)]
+        port: Option<u16>,
+        /// Bind address: 127.0.0.1 or 0.0.0.0 (pair only).
+        #[arg(short, long)]
+        bind: Option<String>,
+    },
     /// Daemon diagnostics and lifecycle.
     System {
         #[command(subcommand)]
@@ -1176,6 +1188,37 @@ fn run(cli: Cli, locale: Locale) -> Result<String, ClientError> {
                 }
             }
         },
+        Command::Remote { action, port, bind } => match action.as_str() {
+            "pair" => {
+                let mut params = json!({});
+                if let Some(port) = port {
+                    params["port"] = json!(port);
+                }
+                if let Some(bind) = &bind {
+                    params["bind"] = json!(bind);
+                }
+                let result = client.call("remote.enable", params)?;
+                if json_out {
+                    out.push_str(&format!("{result}\n"));
+                } else if let Some(pairing) = result["pairing"].as_str() {
+                    out.push_str(&format!("{pairing}\n"));
+                    out.push_str(remote_qr(pairing).as_str());
+                }
+            }
+            "status" => {
+                let result = client.call("remote.status", json!({}))?;
+                out.push_str(&format!("{result}\n"));
+            }
+            "revoke" => {
+                let result = client.call("remote.revoke", json!({}))?;
+                out.push_str(&format!("{result}\n"));
+            }
+            other => {
+                return Err(ClientError::Usage(format!(
+                    "unknown remote action `{other}`; use pair, status or revoke"
+                )))
+            }
+        },
         Command::Hello => {
             let result = client.call("system.hello", json!({}))?;
             if json_out {
@@ -1218,4 +1261,32 @@ fn run(cli: Cli, locale: Locale) -> Result<String, ClientError> {
         },
     }
     Ok(out)
+}
+
+/// Render `payload` as a terminal QR when `qrencode` is installed.
+///
+/// The QR is a convenience: the pairing URL above it is the source of truth, so a host
+/// without the tool still pairs by typing the URL.
+fn remote_qr(payload: &str) -> String {
+    use std::process::{Command, Stdio};
+    let rendered = Command::new("qrencode")
+        .args(["-t", "ansiutf8", "-o", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            if let Some(stdin) = child.stdin.as_mut() {
+                stdin.write_all(payload.as_bytes())?;
+            }
+            child.wait_with_output()
+        });
+    match rendered {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).into_owned()
+        }
+        _ => "instala `qrencode` para dibujar el código; la URL de arriba alcanza para emparejar\n"
+            .to_string(),
+    }
 }
