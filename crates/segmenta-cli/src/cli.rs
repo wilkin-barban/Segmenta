@@ -488,6 +488,12 @@ const HELP_TEXT: &[(&str, &str, &str, &str)] = &[
         "Abre a página de extensões do navegador.",
     ),
     (
+        "remote",
+        "Remote control: pair a device, then show or revoke the session.",
+        "Control remoto: emparejá un dispositivo y después consultá o revocá la sesión.",
+        "Controle remoto: emparelhe um dispositivo e depois consulte ou revogue a sessão.",
+    ),
+    (
         "hello",
         "Ask the daemon for its protocol and version.",
         "Consulta al daemon su protocolo y versión.",
