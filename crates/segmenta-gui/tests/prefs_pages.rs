@@ -31,6 +31,9 @@ fn harness() -> &'static Harness {
         std::thread::Builder::new()
             .name("gtk-harness".to_string())
             .spawn(move || {
+                // Any accidental production client resolves to a dead socket instead of
+                // the daemon of whoever runs the suite.
+                std::env::set_var(segmenta_gui::client::TEST_GUARD_ENV, "1");
                 let init = gtk::init()
                     .map_err(|err| err.to_string())
                     .and_then(|()| adw::init().map_err(|err| err.to_string()));
@@ -77,8 +80,13 @@ where
     }
 }
 
+/// The application of this binary: a test id and `NON_UNIQUE`, so it never collides on
+/// D-Bus with a `segmenta-gui` the user has open on the desktop.
 fn app() -> adw::Application {
-    app::build()
+    adw::Application::builder()
+        .application_id("io.github.wilkin.Segmenta.TestPrefs")
+        .flags(segmenta_gui::gtk::gio::ApplicationFlags::NON_UNIQUE)
+        .build()
 }
 
 fn window_prefs_parent(application: &adw::Application) -> adw::ApplicationWindow {
@@ -118,10 +126,12 @@ fn group_titles(root: &gtk::Widget, out: &mut Vec<String>) {
     }
 }
 
-// Known breakage, not introduced here: creating an `AdwApplicationWindow` with
-// `gtk_window_set_application` segfaults in this binary (also on the v0.7.0 tag). The test
-// stays disabled with an explicit reason instead of crashing the suite; the debt is tracked
-// in odd/tasks/segmenta-v0.7.0-remediacion-gui.md.
+// Root cause of the old segfault, kept so nobody reintroduces it: the test used to call
+// `application.activate()` on an `AdwApplication` that had no window yet. GTK refuses to
+// attach a window before the `GApplication::startup` signal has been emitted, and here it
+// died inside `gtk_window_set_application`. `register()` emits startup, which is what makes
+// adding the parent window legal; `activate()` is unnecessary for building a dialog and is
+// what crashed.
 #[test]
 fn preferences_open_with_every_real_page_and_controls() {
     run_gui("prefs_pages", || {
