@@ -1,5 +1,7 @@
 //! Remote control: token pairing, authenticated reads, actions and revocation.
 
+mod common;
+
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -18,6 +20,7 @@ impl Daemon {
         let child = Command::new(env!("CARGO_BIN_EXE_segmenta-daemon"))
             .env("SEGMENTA_SOCKET", dir.path().join("daemon.sock"))
             .env("XDG_RUNTIME_DIR", dir.path())
+            .env("SEGMENTA_SECRET_TOOL", common::fake_secret_tool(dir.path()))
             .env("XDG_DATA_HOME", dir.path().join("data"))
             .env("XDG_CONFIG_HOME", dir.path().join("config"))
             .env("XDG_STATE_HOME", dir.path().join("state"))

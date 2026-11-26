@@ -193,6 +193,11 @@ impl Daemon {
         let log = sandbox.root.path().join("daemon.log");
         let file = std::fs::File::create(&log).unwrap();
         let child = Command::new(binary("segmenta-daemon"))
+            // Never probe the host keyring from a test daemon.
+            .env(
+                "SEGMENTA_SECRET_TOOL",
+                fake_secret_tool(sandbox.root.path()),
+            )
             .env("XDG_DATA_HOME", sandbox.root.path().join("data"))
             .env("XDG_RUNTIME_DIR", sandbox.root.path().join("run"))
             .env("HOME", sandbox.root.path().join("home"))
@@ -545,4 +550,52 @@ fn a_private_target_is_refused_unless_local_downloads_are_enabled() {
         (task["status"] == "failed").then_some(task)
     });
     assert_eq!(task["error_code"].as_i64(), Some(1007));
+}
+
+/// A `secret-tool` stand-in that keeps its data inside the sandbox.
+///
+/// A missing binary leaves the daemon without any secret backend, so token writes fail;
+/// this fake behaves like the real CLI without ever reaching the user's keyring.
+fn fake_secret_tool(dir: &std::path::Path) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let script = dir.join("secret-tool");
+    let state = dir.join("secret-state");
+    let body = format!(
+        r#"#!/bin/sh
+state="{state}"
+cmd="$1"; shift || true
+case "$cmd" in
+  --version) exit 2 ;;
+  lookup)
+    key=""
+    while [ $# -gt 0 ]; do
+      case "$1" in key) key=$(printf %s "$2" | tr "/" "_"); shift 2 ;; *) shift ;; esac
+    done
+    if [ -f "$state/$key" ]; then cat "$state/$key"; exit 0; fi
+    exit 1 ;;
+  store)
+    key=""
+    while [ $# -gt 0 ]; do
+      case "$1" in key) key=$(printf %s "$2" | tr "/" "_"); shift 2 ;; *) shift ;; esac
+    done
+    mkdir -p "$state"
+    cat > "$state/$key"
+    exit 0 ;;
+  clear)
+    key=""
+    while [ $# -gt 0 ]; do
+      case "$1" in key) key=$(printf %s "$2" | tr "/" "_"); shift 2 ;; *) shift ;; esac
+    done
+    rm -f "$state/$key"
+    exit 0 ;;
+esac
+exit 1
+"#,
+        state = state.display()
+    );
+    std::fs::write(&script, body).unwrap();
+    let mut permissions = std::fs::metadata(&script).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&script, permissions).unwrap();
+    script
 }

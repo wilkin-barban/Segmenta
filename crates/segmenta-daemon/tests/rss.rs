@@ -1,5 +1,7 @@
 //! RSS feeds: filters, deduplication and survival across restarts.
 
+mod common;
+
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -73,6 +75,7 @@ impl Daemon {
         let child = Command::new(env!("CARGO_BIN_EXE_segmenta-daemon"))
             .env("SEGMENTA_SOCKET", base.join("daemon.sock"))
             .env("XDG_RUNTIME_DIR", base)
+            .env("SEGMENTA_SECRET_TOOL", common::fake_secret_tool(base))
             .env("XDG_DATA_HOME", base.join("data"))
             .env("XDG_CONFIG_HOME", base.join("config"))
             .env("XDG_STATE_HOME", base.join("state"))
@@ -154,8 +157,17 @@ fn feed_body() -> String {
     )
 }
 
+/// Tests in one binary run in parallel and can be handed the same free port by the kernel;
+/// serializing them removes the cross-talk instead of chasing a flaky failure.
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    SERIAL.lock().unwrap_or_else(|err| err.into_inner())
+}
+
 #[test]
 fn imports_once_filters_and_survives_a_restart() {
+    let _guard = serial();
     let server = FeedServer::start(&feed_body());
     let daemon = Daemon::fresh();
     let feed = daemon.call(
@@ -181,6 +193,7 @@ fn imports_once_filters_and_survives_a_restart() {
 
 #[test]
 fn a_restart_does_not_duplicate_what_was_already_imported() {
+    let _guard = serial();
     let server = FeedServer::start(&feed_body());
     let dir = tempfile::tempdir().unwrap();
     let base = dir.path().to_path_buf();
@@ -208,6 +221,7 @@ fn a_restart_does_not_duplicate_what_was_already_imported() {
 
 #[test]
 fn an_unsafe_or_unknown_feed_is_rejected() {
+    let _guard = serial();
     let daemon = Daemon::fresh();
     let refused = daemon.request("rss.feed.add", json!({ "url": "file:///etc/passwd" }));
     assert_eq!(refused["error"]["code"], 1085, "{refused}");
@@ -217,6 +231,7 @@ fn an_unsafe_or_unknown_feed_is_rejected() {
 
 #[test]
 fn a_failing_feed_is_reported_instead_of_looking_empty() {
+    let _guard = serial();
     // A server that answers 404 for the feed: the check must report the failure.
     let server = FeedServer::start("not a feed");
     let daemon = Daemon::fresh();
