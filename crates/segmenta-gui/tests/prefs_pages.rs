@@ -123,12 +123,12 @@ fn group_titles(root: &gtk::Widget, out: &mut Vec<String>) {
 // stays disabled with an explicit reason instead of crashing the suite; the debt is tracked
 // in odd/tasks/segmenta-v0.7.0-remediacion-gui.md.
 #[test]
-#[ignore = "segfault in gtk_window_set_application; tracked in the ODD debt"]
 fn preferences_open_with_every_real_page_and_controls() {
     run_gui("prefs_pages", || {
+        // `register` emits the startup signal, which is what makes adding a window legal.
+        // `activate` is what used to crash `gtk_window_set_application`.
         let application = app();
         let _ = application.register(gtk::gio::Cancellable::NONE);
-        application.activate();
         let client: Arc<dyn Client> = Arc::new(DemoClient::empty());
         let dialog = prefs::present(
             // `open_preferences` uses the window itself as parent.
