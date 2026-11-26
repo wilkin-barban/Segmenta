@@ -34,6 +34,9 @@ fn harness() -> &'static Harness {
         std::thread::Builder::new()
             .name("gtk-actions-harness".to_string())
             .spawn(move || {
+                // Any accidental production client resolves to a dead socket instead
+                // of the live daemon of whoever runs the suite.
+                std::env::set_var(segmenta_gui::client::TEST_GUARD_ENV, "1");
                 let init = gtk::init().map_err(|err| err.to_string());
                 let usable = init.is_ok();
                 let _ = ready.send(init);
@@ -90,7 +93,11 @@ where
 }
 
 fn app(id: &str) -> adw::Application {
-    let app = adw::Application::builder().application_id(id).build();
+    let app = adw::Application::builder()
+        .application_id(id)
+        // A test must never claim the production single-instance name on the session bus.
+        .flags(segmenta_gui::gtk::gio::ApplicationFlags::NON_UNIQUE)
+        .build();
     let _ = app.register(None::<&gtk::gio::Cancellable>);
     app
 }
@@ -428,7 +435,14 @@ fn the_production_window_is_kept_alive_by_the_application() {
     run_gui("alive_window", || {
         let application = app("io.github.wilkin.Segmenta.ActionsAlive");
         let before = segmenta_gui::app::open_window_count();
-        segmenta_gui::app::build_window_for_client(&application);
+        // The production entry point is exercised with an injected client and no tray: the
+        // window lifecycle is what this test covers, not the user's daemon or session bus.
+        let fake = DemoClient::with_downloads(vec![row("a", "downloading", "ubuntu.iso")]);
+        let factory: segmenta_gui::app::ClientFactory = {
+            let fake = fake.clone();
+            std::rc::Rc::new(move || Arc::new(fake.clone()) as Arc<dyn Client>)
+        };
+        segmenta_gui::app::build_window(&application, factory, false);
         assert_eq!(
             segmenta_gui::app::open_window_count(),
             before + 1,
@@ -536,13 +550,18 @@ fn a_second_activation_reuses_the_existing_window() {
     run_gui("second_activation", || {
         let application = app("io.github.wilkin.Segmenta.SecondActivate");
         let before = segmenta_gui::app::open_window_count();
-        segmenta_gui::app::build_window_for_client(&application);
+        let fake = DemoClient::with_downloads(vec![row("a", "downloading", "ubuntu.iso")]);
+        let factory: segmenta_gui::app::ClientFactory = {
+            let fake = fake.clone();
+            std::rc::Rc::new(move || Arc::new(fake.clone()) as Arc<dyn Client>)
+        };
+        segmenta_gui::app::build_window(&application, factory.clone(), false);
         let after = segmenta_gui::app::open_window_count();
         assert!(
             after <= before + 1,
             "the factory created more than one window: {before} -> {after}"
         );
-        segmenta_gui::app::build_window_for_client(&application);
+        segmenta_gui::app::build_window(&application, factory, false);
         assert_eq!(
             segmenta_gui::app::open_window_count(),
             after,

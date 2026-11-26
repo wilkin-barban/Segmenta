@@ -240,3 +240,36 @@ fn demo_client_mirrors_the_daemon_shapes() {
         .expect("status");
     assert_eq!(status["segments"].as_array().map(Vec::len), Some(1));
 }
+
+#[test]
+fn the_test_guard_never_resolves_the_user_daemon() {
+    // The guard is read once per resolution; the harnesses of the other test binaries set
+    // it for the whole process, so this test asserts its effect explicitly.
+    let previous = std::env::var_os(segmenta_gui::client::TEST_GUARD_ENV);
+    let previous_socket = std::env::var_os("SEGMENTA_SOCKET");
+    std::env::set_var(segmenta_gui::client::TEST_GUARD_ENV, "1");
+    std::env::remove_var("SEGMENTA_SOCKET");
+
+    let guarded = segmenta_gui::client::socket_path();
+    assert_eq!(
+        guarded,
+        std::path::PathBuf::from("/nonexistent/segmenta-test-guard.sock"),
+        "with the guard on, the default socket must not be the user's"
+    );
+
+    // An explicitly isolated socket still wins: daemon-backed tests keep working.
+    std::env::set_var("SEGMENTA_SOCKET", "/tmp/isolated.sock");
+    assert_eq!(
+        segmenta_gui::client::socket_path(),
+        std::path::PathBuf::from("/tmp/isolated.sock")
+    );
+
+    match previous_socket {
+        Some(value) => std::env::set_var("SEGMENTA_SOCKET", value),
+        None => std::env::remove_var("SEGMENTA_SOCKET"),
+    }
+    match previous {
+        Some(value) => std::env::set_var(segmenta_gui::client::TEST_GUARD_ENV, value),
+        None => std::env::remove_var(segmenta_gui::client::TEST_GUARD_ENV),
+    }
+}

@@ -35,6 +35,9 @@ fn harness() -> &'static Harness {
         std::thread::Builder::new()
             .name("gtk-download-management-harness".to_string())
             .spawn(move || {
+                // Any accidental production client resolves to a dead socket instead
+                // of the live daemon of whoever runs the suite.
+                std::env::set_var(segmenta_gui::client::TEST_GUARD_ENV, "1");
                 let init = gtk::init().map_err(|err| err.to_string());
                 let usable = init.is_ok();
                 let _ = ready.send(init);
@@ -91,7 +94,11 @@ where
 }
 
 fn app(id: &str) -> adw::Application {
-    let app = adw::Application::builder().application_id(id).build();
+    let app = adw::Application::builder()
+        .application_id(id)
+        // A test must never claim the production single-instance name on the session bus.
+        .flags(segmenta_gui::gtk::gio::ApplicationFlags::NON_UNIQUE)
+        .build();
     let _ = app.register(None::<&gtk::gio::Cancellable>);
     app
 }

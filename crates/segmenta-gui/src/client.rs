@@ -792,7 +792,18 @@ const CONNECT_GRACE: std::time::Duration = std::time::Duration::from_millis(1500
 const PENDING_LIMIT: usize = 256;
 
 /// `$SEGMENTA_SOCKET`, else `$XDG_RUNTIME_DIR/segmenta/daemon.sock`.
+/// Set by the test harnesses: the default resolution must never reach the user's daemon.
+pub const TEST_GUARD_ENV: &str = "SEGMENTA_TEST_GUARD";
+
+/// Path the guard returns when a test forgot to inject a client: nothing listens there.
+const GUARDED_SOCKET: &str = "/nonexistent/segmenta-test-guard.sock";
+
 pub fn socket_path() -> std::path::PathBuf {
+    // A test that builds the production entry point by mistake would otherwise talk to the
+    // live daemon and could delete real tasks. With the guard the connection simply fails.
+    if std::env::var_os(TEST_GUARD_ENV).is_some() && std::env::var_os("SEGMENTA_SOCKET").is_none() {
+        return std::path::PathBuf::from(GUARDED_SOCKET);
+    }
     if let Some(path) = std::env::var_os(SOCKET_ENV) {
         return std::path::PathBuf::from(path);
     }
