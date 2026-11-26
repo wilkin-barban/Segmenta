@@ -5,6 +5,7 @@
 //! `$XDG_RUNTIME_DIR/segmenta/daemon.sock` (or `$SEGMENTA_SOCKET`) over NDJSON
 //! JSON-RPC 2.0.
 
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -123,8 +124,25 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+/// How the entry point builds the client for a new window.
+///
+/// Production resolves the daemon socket; tests pass a fake and never touch the user's
+/// daemon. The factory is the only place that decides, so a test cannot fall through to
+/// the real socket by forgetting an environment variable.
+pub type ClientFactory = Rc<dyn Fn() -> Arc<dyn Client>>;
+
+/// The production factory: the Unix socket the CLI and the GUI always used.
+pub fn production_client_factory() -> ClientFactory {
+    Rc::new(|| Arc::new(UnixClient::from_env()) as Arc<dyn Client>)
+}
+
 /// Creates the main window for the default (socket) client and keeps it alive.
 pub fn build_window_for_client(app: &adw::Application) {
+    build_window(app, production_client_factory(), true)
+}
+
+/// Testable entry point: the caller decides the client and whether the tray starts.
+pub fn build_window(app: &adw::Application, make_client: ClientFactory, with_tray: bool) {
     // `activate` can fire more than once (a desktop launch plus a second request). A new
     // window per activation leaves a second, still-loading window stacked on the first:
     // its spinner paints over the list of the one the user is looking at.
@@ -146,14 +164,18 @@ pub fn build_window_for_client(app: &adw::Application) {
         existing.window().present();
         return;
     }
-    let client: Arc<dyn Client> = Arc::new(UnixClient::from_env());
+    let client = make_client();
     let window = build_window_with_client(app, client);
     if let Some(task_id) = take_pending_show_task() {
         focus_when_ready(window.clone(), task_id);
     }
     OPEN_WINDOWS.with(|windows| windows.borrow_mut().push(window.clone()));
 
-    // Start the system tray integration once the window exists (S2, S6).
+    // Start the system tray integration once the window exists (S2, S6). A headless test
+    // asks for a window without the tray, which is the only piece that needs D-Bus.
+    if !with_tray {
+        return;
+    }
     let tray_started = TRAY_HANDLE.with(|tray| tray.borrow().is_some());
     if !tray_started {
         let (sender, receiver) = std::sync::mpsc::channel();
