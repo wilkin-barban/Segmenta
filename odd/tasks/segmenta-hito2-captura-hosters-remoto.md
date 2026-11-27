@@ -31,7 +31,7 @@ Versión: **0.7.0**, sin tag ni release hasta cerrar el hito.
 ## Tareas
 
 - [x] T1 — Andamiaje de `sites/`: tipo `Resolved` (url, headers, nombre sugerido, sha256 opcional), registro por host, y los dos primeros extractores puros con servidor de prueba local (MediaFire e Internet Archive) (S1) — ruta: `segmenta-core` — commit: `8d2db7d` + `ce9993f`.
-- [ ] T2 — GDrive (confirmación de análisis de virus y exportación de Docs/Sheets/Slides), Gofile y Rapidgator, con reenvío acotado de formularios y enlaces caducados (S1) — ruta: `segmenta-core` — commit: pendiente.
+- [x] T2 — GDrive (confirmación de análisis de virus y exportación de Docs/Sheets/Slides), Gofile y Rapidgator, con reenvío acotado de formularios y enlaces caducados (S1) — ruta: `segmenta-core` — commit: `d1893fa` + `dbcf591`.
 - [ ] T3 — `hub.rs`: GitHub releases con paginación `Link: rel="next"`, Hugging Face (modelo/dataset) con rutas validadas contra traversal, SHA-256 publicado y token desde Site Logins (S1) — ruta: `segmenta-core` + daemon — commit: pendiente.
 - [ ] T4 — `ftp.rs` sin TLS: sondeo `SIZE`/`MDTM`, `REST`/`RETR` pasivo segmentado, reutilizando planner, DiskWriter y HostLimits, con servidor FTP de prueba (S2) — ruta: `segmenta-core` — commit: pendiente.
 - [ ] T5 — FTPS, reanudación por `MDTM` y bind a `vpn_interface`, sobre el mismo cliente (S2) — ruta: `segmenta-core` — commit: pendiente.
@@ -86,3 +86,9 @@ Versión: **0.7.0**, sin tag ni release hasta cerrar el hito.
   - **Bug corregido en el camino**: `encode_segment` escapaba cada punto (`%2E`), lo que rompe servidores que comparan el nombre literal; ahora conserva `.`, `-`, `_`, `~` y escapa solo lo que cambia la ruta.
   - **Dependencia nueva**: `async-trait` (solo en `segmenta-core`) para el trait `Extractor`. Es la primera del hito y está aislada.
   - Corte de commits: el primer intento quedó en 649 líneas, por encima del tope de 400. Se rehizo en dos unidades (`8d2db7d` registro + MediaFire; `ce9993f` Internet Archive).
+
+- L6 — T2 cerrado. **GDrive** no lee ninguna página: el id del enlace basta. Un archivo va a `drive.usercontent.google.com/download?...&confirm=t` (el parámetro que responde al intersticial de análisis de virus) y un Docs/Sheets/Slides va a su `export?format=docx|xlsx|pptx`, que es lo que evita bajar un `.gdoc` inservible. **Rapidgator** lee el `location.href` que la página anuncia, con cualquiera de las dos comillas, y reporta `Changed` cuando no hay enlace (caducado, borrado o flujo cambiado).
+  - **Gofile** consulta `api.gofile.io/contents/<code>` y elige el archivo más grande del share. El servicio responde `401` sin cuenta: eso se informa como «necesita token de Site Logins», no como página rota. **No se hardcodea ningún token de terceros**; el token se toma de `SEGMENTA_GOFILE_TOKEN` y su cableado a Site Logins es parte de T3.
+  - `Fetcher::page_with` agregado para cabeceras por servicio, con implementación por defecto que las ignora: un fetcher de prueba solo implementa lo que necesita.
+  - Pruebas: seis nuevas de integración (Drive archivo, Drive Docs ×3, Rapidgator con y sin enlace, Gofile con y sin credenciales) más unitarias del parseo.
+  - Corte de commits: 549 líneas juntas se separaron en `d1893fa` (Drive + Rapidgator, 323) y `dbcf591` (Gofile, 226).
