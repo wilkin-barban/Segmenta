@@ -71,13 +71,18 @@ pub trait Fetcher: Send + Sync {
 pub struct HttpFetcher {
     service: &'static str,
     client: reqwest::Client,
+    /// Whether a private target is acceptable (the user's local-downloads switch).
+    allow_local: bool,
 }
 
 impl HttpFetcher {
     /// Build it from the engine's HTTP configuration.
     pub fn new(http: &HttpConfig) -> Result<HttpFetcher, SiteError> {
+        // Redirects are followed by hand: each hop goes through `urlssrf` first. Letting
+        // reqwest follow them would let a hoster page point this fetch at loopback, which
+        // is exactly the guard the engine applies to every other request.
         let mut builder = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::limited(5))
+            .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(http.connect_timeout)
             .timeout(http.read_timeout)
             .user_agent(http.user_agent.clone());
@@ -90,6 +95,7 @@ impl HttpFetcher {
         }
         Ok(HttpFetcher {
             service: "http",
+            allow_local: http.allow_local,
             client: builder.build().map_err(|err| SiteError::Network {
                 service: "client",
                 source: err,
@@ -98,24 +104,54 @@ impl HttpFetcher {
     }
 }
 
+/// How many redirects a page may cost before the extractor gives up.
+const MAX_HOPS: usize = 5;
+
 #[async_trait::async_trait]
 impl Fetcher for HttpFetcher {
     async fn page(&self, url: &Url) -> Result<(u16, String), SiteError> {
-        let response = self
-            .client
-            .get(url.clone())
-            .send()
-            .await
-            .map_err(|source| SiteError::Network {
+        let mut current = url.clone();
+        for _ in 0..=MAX_HOPS {
+            // The guard runs before the socket, on every hop: a page that answers 302 to
+            // `http://127.0.0.1:9/` never gets that request made.
+            crate::urlssrf::resolve_checked(&current, self.allow_local)
+                .await
+                .map_err(|err| SiteError::Config {
+                    service: self.service,
+                    detail: err.to_string(),
+                })?;
+            let response = self
+                .client
+                .get(current.clone())
+                .send()
+                .await
+                .map_err(|source| SiteError::Network {
+                    service: self.service,
+                    source,
+                })?;
+            let status = response.status();
+            if status.is_redirection() {
+                let location = response
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .and_then(|value| value.to_str().ok())
+                    .map(str::to_string);
+                match location.as_deref().map(|next| current.join(next)) {
+                    Some(Ok(target)) => {
+                        current = target;
+                        continue;
+                    }
+                    _ => return Ok((status.as_u16(), String::new())),
+                }
+            }
+            let code = status.as_u16();
+            let body = response.text().await.map_err(|source| SiteError::Network {
                 service: self.service,
                 source,
             })?;
-        let status = response.status().as_u16();
-        let body = response.text().await.map_err(|source| SiteError::Network {
-            service: self.service,
-            source,
-        })?;
-        Ok((status, body))
+            return Ok((code, body));
+        }
+        Ok((508, String::new()))
     }
 }
 

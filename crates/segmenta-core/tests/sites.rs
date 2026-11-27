@@ -130,3 +130,63 @@ async fn a_resolved_host_is_never_arbitrary() {
         SiteOutcome::Changed { .. }
     ));
 }
+
+#[tokio::test]
+async fn a_redirect_to_a_private_host_is_never_followed() {
+    use segmenta_core::sites::Fetcher;
+
+    // The production fetcher must guard every hop, not just the first URL: a hoster page
+    // that answers 302 to loopback would otherwise make this process connect to itself.
+    let http = segmenta_core::probe::HttpConfig {
+        allow_local: false,
+        ..segmenta_core::probe::HttpConfig::default()
+    };
+    let fetcher = segmenta_core::sites::HttpFetcher::new(&http).unwrap();
+    let refused = fetcher
+        .page(&Url::parse("http://127.0.0.1:9/private").unwrap())
+        .await;
+    assert!(
+        refused.is_err(),
+        "a private target must be refused before the socket: {refused:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_redirect_is_followed_when_local_downloads_are_allowed() {
+    use segmenta_core::sites::Fetcher;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // Two hops on loopback: the first answers 302 to the second. With the switch on, the
+    // guard must allow both; without it the same chain is refused (previous test).
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let mut chunk = [0u8; 1024];
+            let _ = stream.read(&mut chunk).await;
+            let request = String::from_utf8_lossy(&chunk).to_string();
+            let response = if request.contains("GET /hop ") {
+                "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_string()
+            } else {
+                format!(
+                    "HTTP/1.1 302 Found\r\nLocation: http://{addr}/hop\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+            };
+            let _ = stream.write_all(response.as_bytes()).await;
+        }
+    });
+
+    let http = segmenta_core::probe::HttpConfig {
+        allow_local: true,
+        ..segmenta_core::probe::HttpConfig::default()
+    };
+    let fetcher = segmenta_core::sites::HttpFetcher::new(&http).unwrap();
+    let (status, body) = fetcher
+        .page(&Url::parse(&format!("http://{addr}/start")).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(status, 200, "the redirect must be followed by hand");
+    assert_eq!(body, "ok");
+}
