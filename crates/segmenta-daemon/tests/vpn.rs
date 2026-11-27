@@ -196,3 +196,18 @@ fn the_dns_settings_are_validated_before_they_are_stored() {
     assert_eq!(stored["dns_mode"], "doh");
     assert_eq!(stored["dns_provider"], "quad9");
 }
+
+#[test]
+fn the_settings_accept_the_engine_connection_ceiling() {
+    let daemon = Daemon::start();
+    // The engine opens up to 128 connections and planner clamps there; the settings must
+    // not keep the old 32 or a user could never reach what the engine supports.
+    let wide = daemon.call("settings.update", json!({"max_connections": 128}));
+    assert_eq!(wide["max_connections"], 128);
+    let refused = daemon.request("settings.update", json!({"max_connections": 129}));
+    assert_eq!(refused["error"]["code"], -32602, "{refused}");
+    assert_eq!(
+        daemon.call("settings.get", json!({}))["max_connections"],
+        128
+    );
+}

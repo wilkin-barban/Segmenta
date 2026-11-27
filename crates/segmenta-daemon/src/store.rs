@@ -804,10 +804,14 @@ impl Settings {
 
     /// Range and format validation shared by `settings.update`.
     pub fn validate(&self) -> Result<()> {
-        if !(1..=32).contains(&self.max_connections) {
-            return Err(StoreError::Invalid(
-                "max_connections must be between 1 and 32".to_string(),
-            ));
+        // The engine and the planner both cap at `MAX_CONNECTIONS`; the settings must
+        // accept exactly that ceiling and reject one byte past it.
+        if !(1..=segmenta_core::hostlimits::MAX_CONNECTIONS as u32).contains(&self.max_connections)
+        {
+            return Err(StoreError::Invalid(format!(
+                "max_connections must be between 1 and {}",
+                segmenta_core::hostlimits::MAX_CONNECTIONS
+            )));
         }
         if let Some(limit) = self.global_speed_limit_bps {
             if limit > 1024 * 1024 * 1024 {
