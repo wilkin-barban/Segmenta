@@ -7,19 +7,31 @@ use segmenta_daemon::extract::{extract, is_archive, Extraction};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
+/// Tests that exec a freshly written script must not overlap: a concurrent `fork` in another
+/// thread inherits the open write descriptor and the exec fails with ETXTBSY.
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    SERIAL.lock().unwrap_or_else(|err| err.into_inner())
+}
+
 /// Write an executable stub that appends its argv to `log` and then runs `body`.
 fn stub(dir: &Path, name: &str, body: &str) -> PathBuf {
     let path = dir.join(name);
+    let staging = dir.join(format!("{name}.tmp"));
     let log = dir.join(format!("{name}.argv"));
+    // Written aside and renamed into place: executing a file that the same process just
+    // opened for writing fails with ETXTBSY, which made this suite flaky.
     std::fs::write(
-        &path,
+        &staging,
         format!(
             "#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{log}'\n{body}\n",
             log = log.display()
         ),
     )
     .unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::rename(&staging, &path).unwrap();
     path
 }
 
@@ -48,6 +60,7 @@ fn extracting_stub(dir: &Path, listing: &str, payload: &[&str]) -> PathBuf {
 
 #[test]
 fn recognises_archive_names_only() {
+    let _guard = serial();
     assert!(is_archive(Path::new("/tmp/a.zip")));
     assert!(is_archive(Path::new("/tmp/a.7z")));
     assert!(is_archive(Path::new("/tmp/a.part1.rar")));
@@ -57,6 +70,7 @@ fn recognises_archive_names_only() {
 
 #[test]
 fn extracts_into_the_destination_and_preserves_the_source() {
+    let _guard = serial();
     let dir = tempfile::tempdir().unwrap();
     let staging = dir.path().join("downloads");
     std::fs::create_dir(&staging).unwrap();
@@ -82,6 +96,7 @@ fn extracts_into_the_destination_and_preserves_the_source() {
 
 #[test]
 fn rejects_parent_traversal_before_extracting_anything() {
+    let _guard = serial();
     let dir = tempfile::tempdir().unwrap();
     let archive = dir.path().join("evil.zip");
     std::fs::write(&archive, b"archive").unwrap();
@@ -101,6 +116,7 @@ fn rejects_parent_traversal_before_extracting_anything() {
 
 #[test]
 fn rejects_absolute_entries() {
+    let _guard = serial();
     let dir = tempfile::tempdir().unwrap();
     let archive = dir.path().join("absolute.zip");
     std::fs::write(&archive, b"archive").unwrap();
@@ -117,6 +133,7 @@ fn rejects_absolute_entries() {
 
 #[test]
 fn degrades_without_an_available_tool() {
+    let _guard = serial();
     let dir = tempfile::tempdir().unwrap();
     let archive = dir.path().join("bundle.zip");
     std::fs::write(&archive, b"archive").unwrap();
@@ -136,6 +153,7 @@ fn degrades_without_an_available_tool() {
 
 #[test]
 fn removes_the_source_only_when_asked_and_successful() {
+    let _guard = serial();
     let dir = tempfile::tempdir().unwrap();
     let archive = dir.path().join("bundle.zip");
     std::fs::write(&archive, b"archive").unwrap();
@@ -174,6 +192,7 @@ fn removes_the_source_only_when_asked_and_successful() {
 
 #[test]
 fn rejects_a_staged_symlink() {
+    let _guard = serial();
     let dir = tempfile::tempdir().unwrap();
     let archive = dir.path().join("link.zip");
     std::fs::write(&archive, b"archive").unwrap();
