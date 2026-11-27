@@ -14,11 +14,42 @@ comprueba la interfaz **antes** de crear el socket:
 | 1080 | `ERR_VPN_INTERFACE_INVALID` — nombre que el kernel no acepta |
 | 1081 | `ERR_VPN_INTERFACE_MISSING` — la interfaz no existe |
 | 1082 | `ERR_VPN_INTERFACE_DOWN` — existe pero está caída |
-| 1083 | `ERR_VPN_TORRENT_UNSUPPORTED` — torrentes bajo VPN |
+| 1083 | `ERR_VPN_TORRENT_UNSUPPORTED` — retirado en 0.7.x; los torrentes ahora se atan (ver abajo) |
 
-La idea es fail-closed: si el túnel no está, la descarga no sale por la ruta por defecto. Los
-torrentes se rechazan porque librqbit abre sus propios sockets y no permiten atarlos: dejarlos
-correr filtraría la IP real.
+La idea es fail-closed: si el túnel no está, la descarga no sale por la ruta por defecto.
+
+Los torrentes **no** se rechazan: `torrent::session_options` construye `SessionOptions` con
+`bind_device_name`, apaga LSD y deja `listen = None` (sin puerto entrante ni UPnP), y el
+scheduler pausa las tareas `torrent`/`magnet` en vuelo si la interfaz deja de estar arriba.
+`bind_device_name` cubre los sockets que librqbit crea, no los que ya estaban abiertos cuando
+el túnel cae: por eso existe la pausa activa. La sesión es un `OnceCell` por proceso, así que
+cambiar `vpn_interface` exige reiniciar el daemon.
+
+## Herramientas externas y DNS
+
+Todo binario externo (`yt-dlp`, `gallery-dl`, hooks, antivirus) hereda un entorno **sin**
+proxies previos y con la URL del relay loopback; `yt-dlp` y `gallery-dl` además reciben
+`--proxy`. `ffmpeg` no se enruta porque en Segmenta solo concatena archivos locales.
+
+`dns_mode` acepta `system`, `doh` y `dot`. DoH (RFC 8484) habla con Cloudflare, Quad9, Google
+o una URL propia y sus respuestas pasan por las mismas guardas SSRF que el resolvedor del
+sistema. **DoT no está en este build**: devuelve `ERR_DNS_UNSUPPORTED` en vez de simular que
+resuelve. PAC no aplica: evaluarlo requiere un intérprete de JavaScript que el proyecto no
+incorpora.
+
+## SiteRules y motor adaptativo
+
+`site_rules` (esquema v9) aplica por host user agent, tope de conexiones y headers; los
+headers sensibles viven en el almacén de secretos y en SQLite queda solo el alias.
+
+`HostLimits` mantiene un límite por host que **baja a la mitad** ante 429/503 (nunca por
+debajo de 1) y **recupera un slot** por período de calma. El tope global es 128 conexiones y
+ninguna regla ni ajuste puede ampliarlo. Un worker que va por debajo del 25 % del más rápido,
+con al menos `MIN_SPLIT_SIZE` pendiente, se aborta y se reemplaza por una conexión nueva sin
+tocar los offsets del disco.
+
+`download.keep` publica un stream parcial con los bytes que llegaron al disco. Existe porque
+un stream sin `Content-Length` no se puede reanudar, y descartarlo tiraba lo ya transferido.
 
 Requiere `CAP_NET_RAW` o root; sin ese permiso las conexiones fallan, que es el comportamiento
 buscado. Con la interfaz arriba pero sin ruta al destino, la conexión se agota por timeout
