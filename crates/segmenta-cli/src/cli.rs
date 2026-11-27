@@ -49,7 +49,7 @@ enum Command {
         /// File name to use instead of the server's.
         #[arg(short, long)]
         name: Option<String>,
-        /// Connections, 1-32.
+        /// Connections, 1-128.
         #[arg(short = 'c', long)]
         connections: Option<u32>,
         /// Extra header, "Name: value". Repeatable.

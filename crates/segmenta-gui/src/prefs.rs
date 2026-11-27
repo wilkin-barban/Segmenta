@@ -81,10 +81,10 @@ pub fn present(
         .description(tr(locale(), Msg::RetriesHint))
         .build();
 
-    let max_connections = adw::SpinRow::with_range(1.0, 32.0, 1.0);
+    let max_connections = adw::SpinRow::with_range(1.0, 128.0, 1.0);
     max_connections.set_title(tr(locale(), Msg::ConnectionsPerDownload));
     max_connections.set_subtitle(tr(locale(), Msg::ConnectionsRangeHint));
-    max_connections.set_value(f64::from(settings.max_connections.clamp(1, 32)));
+    max_connections.set_value(f64::from(settings.max_connections.clamp(1, 128)));
     limits.add(&max_connections);
 
     let speed_limit = adw::SpinRow::with_range(0.0, 1_000_000.0, 128.0);

@@ -459,7 +459,7 @@ pub struct QueueRow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    /// Maximum connections per download (1-32).
+    /// Maximum connections per download (1-128).
     pub max_connections: u32,
     /// Global speed limit in bytes per second; `None` is unlimited.
     pub global_speed_limit_bps: Option<u64>,

@@ -293,8 +293,9 @@ fn settings_round_trip_and_validation_errors_exit_one() {
     assert_eq!(settings["max_connections"], 4);
     assert_eq!(settings["allow_local_downloads"], true);
 
-    // Out of range and unknown keys are rejected with a usage-level failure.
-    let bad = sandbox.cli_one(&["settings", "set", "max_connections", "99"]);
+    // Out of range and unknown keys are rejected with a usage-level failure. The ceiling
+    // is 128 since the adaptive engine landed; 129 is the first value past it.
+    let bad = sandbox.cli_one(&["settings", "set", "max_connections", "129"]);
     assert_eq!(bad.code, 1, "stdout: {}", bad.stdout);
     assert!(
         bad.stderr.contains("max_connections"),
