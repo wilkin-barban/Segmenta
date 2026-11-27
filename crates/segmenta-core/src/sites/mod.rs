@@ -23,6 +23,7 @@ use crate::probe::HttpConfig;
 pub mod gofile;
 pub mod google_drive;
 pub mod hub;
+pub mod hugging_face;
 pub mod internet_archive;
 pub mod mediafire;
 pub mod rapidgator;
@@ -314,6 +315,7 @@ fn registry() -> Vec<Box<dyn Extractor>> {
         Box::new(rapidgator::Rapidgator),
         Box::new(gofile::Gofile),
         Box::new(hub::GitHub),
+        Box::new(hugging_face::HuggingFace),
         Box::new(internet_archive::InternetArchive),
     ]
 }

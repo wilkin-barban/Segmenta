@@ -384,3 +384,50 @@ async fn a_release_listing_follows_the_next_link_until_an_asset_appears() {
         ]
     );
 }
+
+#[tokio::test]
+async fn a_hugging_face_repo_resolves_the_biggest_file_with_its_lfs_digest() {
+    let fetcher = Canned::new(&[(
+        "/api/models/org/model/tree/main",
+        200,
+        r#"[
+             {"type":"file","path":"config.json","size":512},
+             {"type":"file","path":"model.safetensors","size":9000,"lfs":{"oid":"DEADBEEF"}}
+           ]"#,
+    )]);
+    let url = Url::parse("https://huggingface.co/org/model").unwrap();
+    match resolve_with(&fetcher, &url).await.unwrap() {
+        SiteOutcome::Resolved(resolved) => {
+            assert_eq!(
+                resolved.url.as_str(),
+                "https://huggingface.co/org/model/resolve/main/model.safetensors"
+            );
+            assert_eq!(resolved.sha256.as_deref(), Some("deadbeef"));
+        }
+        other => panic!("the repo must resolve, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_dataset_keeps_its_datasets_prefix_and_a_private_repo_names_the_token() {
+    let fetcher = Canned::new(&[(
+        "/api/datasets/org/data/tree/main",
+        200,
+        r#"[{"type":"file","path":"set.parquet","size":10}]"#,
+    )]);
+    let url = Url::parse("https://huggingface.co/datasets/org/data").unwrap();
+    match resolve_with(&fetcher, &url).await.unwrap() {
+        SiteOutcome::Resolved(resolved) => assert_eq!(
+            resolved.url.as_str(),
+            "https://huggingface.co/datasets/org/data/resolve/main/set.parquet"
+        ),
+        other => panic!("the dataset must resolve, got {other:?}"),
+    }
+
+    let gated = Canned::new(&[("/api/models/org/private/tree/main", 401, "")]);
+    let url = Url::parse("https://huggingface.co/org/private").unwrap();
+    match resolve_with(&gated, &url).await.unwrap() {
+        SiteOutcome::Changed { reason, .. } => assert!(reason.contains("Site Logins"), "{reason}"),
+        other => panic!("expected a credential message, got {other:?}"),
+    }
+}
