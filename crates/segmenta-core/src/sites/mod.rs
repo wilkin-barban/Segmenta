@@ -22,6 +22,7 @@ use crate::probe::HttpConfig;
 
 pub mod gofile;
 pub mod google_drive;
+pub mod hub;
 pub mod internet_archive;
 pub mod mediafire;
 pub mod rapidgator;
@@ -62,8 +63,32 @@ impl SiteOutcome {
     }
 }
 
-/// How an extractor reads a page. Production uses HTTP; tests use a canned answer, which
-/// keeps the host matching real while nothing leaves the machine.
+/// One HTTP answer, with the headers a paginated API needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fetched {
+    /// Status code.
+    pub status: u16,
+    /// Response headers, lowercased names.
+    pub headers: Vec<(String, String)>,
+    /// Response body.
+    pub body: String,
+}
+
+impl Fetched {
+    /// First value of a header, case-insensitively.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.as_str())
+    }
+
+    /// Successful status.
+    pub fn is_success(&self) -> bool {
+        (200..300).contains(&self.status)
+    }
+}
+
 #[async_trait::async_trait]
 pub trait Fetcher: Send + Sync {
     /// GET `url` and return its status and body.
@@ -79,6 +104,38 @@ pub trait Fetcher: Send + Sync {
     ) -> Result<(u16, String), SiteError> {
         self.page(url).await
     }
+
+    /// Full answer, headers included. Defaults to [`Fetcher::page_with`] without headers,
+    /// which is enough for a service that does not paginate.
+    async fn fetch(&self, url: &Url, headers: &[(String, String)]) -> Result<Fetched, SiteError> {
+        let (status, body) = self.page_with(url, headers).await?;
+        Ok(Fetched {
+            status,
+            headers: Vec::new(),
+            body,
+        })
+    }
+}
+
+/// Marker a `Link` header uses for the following page.
+const REL_NEXT: &str = "rel=\"next\"";
+
+/// Next page URL from a `Link: <...>; rel="next"` header.
+pub fn next_link(headers: &[(String, String)]) -> Option<Url> {
+    let value = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("link"))
+        .map(|(_, value)| value.as_str())?;
+    for part in value.split(',') {
+        let part = part.trim();
+        let end = part.find('>')?;
+        let target = part.strip_prefix('<')?.get(..end - 1)?;
+        let rest = &part[end + 1..];
+        if rest.contains(REL_NEXT) {
+            return Url::parse(target).ok();
+        }
+    }
+    None
 }
 
 /// HTTP fetcher shared by every extractor: same network rules as the engine.
@@ -124,7 +181,8 @@ const MAX_HOPS: usize = 5;
 #[async_trait::async_trait]
 impl Fetcher for HttpFetcher {
     async fn page(&self, url: &Url) -> Result<(u16, String), SiteError> {
-        self.page_with(url, &[]).await
+        let answer = self.fetch(url, &[]).await?;
+        Ok((answer.status, answer.body))
     }
 
     async fn page_with(
@@ -132,6 +190,11 @@ impl Fetcher for HttpFetcher {
         url: &Url,
         headers: &[(String, String)],
     ) -> Result<(u16, String), SiteError> {
+        let answer = self.fetch(url, headers).await?;
+        Ok((answer.status, answer.body))
+    }
+
+    async fn fetch(&self, url: &Url, headers: &[(String, String)]) -> Result<Fetched, SiteError> {
         let mut current = url.clone();
         for _ in 0..=MAX_HOPS {
             // The guard runs before the socket, on every hop: a page that answers 302 to
@@ -162,17 +225,41 @@ impl Fetcher for HttpFetcher {
                         current = target;
                         continue;
                     }
-                    _ => return Ok((status.as_u16(), String::new())),
+                    _ => {
+                        return Ok(Fetched {
+                            status: status.as_u16(),
+                            headers: Vec::new(),
+                            body: String::new(),
+                        })
+                    }
                 }
             }
             let code = status.as_u16();
+            let headers = response
+                .headers()
+                .iter()
+                .map(|(name, value)| {
+                    (
+                        name.as_str().to_ascii_lowercase(),
+                        value.to_str().unwrap_or_default().to_string(),
+                    )
+                })
+                .collect();
             let body = response.text().await.map_err(|source| SiteError::Network {
                 service: self.service,
                 source,
             })?;
-            return Ok((code, body));
+            return Ok(Fetched {
+                status: code,
+                headers,
+                body,
+            });
         }
-        Ok((508, String::new()))
+        Ok(Fetched {
+            status: 508,
+            headers: Vec::new(),
+            body: String::new(),
+        })
     }
 }
 
@@ -226,6 +313,7 @@ fn registry() -> Vec<Box<dyn Extractor>> {
         Box::new(google_drive::GoogleDrive),
         Box::new(rapidgator::Rapidgator),
         Box::new(gofile::Gofile),
+        Box::new(hub::GitHub),
         Box::new(internet_archive::InternetArchive),
     ]
 }

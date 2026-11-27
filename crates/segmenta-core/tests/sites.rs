@@ -13,6 +13,7 @@ use url::Url;
 struct Canned {
     answers: std::collections::HashMap<String, (u16, String)>,
     asked: std::sync::Mutex<Vec<String>>,
+    links: std::sync::Mutex<std::collections::HashMap<String, String>>,
 }
 
 impl Canned {
@@ -23,11 +24,24 @@ impl Canned {
                 .map(|(path, status, body)| (path.to_string(), (*status, body.to_string())))
                 .collect(),
             asked: std::sync::Mutex::new(Vec::new()),
+            links: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
     fn asked(&self) -> Vec<String> {
         self.asked.lock().unwrap().clone()
+    }
+}
+
+impl Canned {
+    fn with_links(answers: &[(&str, u16, &str)], links: &[(&str, &str)]) -> Canned {
+        let canned = Canned::new(answers);
+        let mut map = canned.links.lock().unwrap();
+        for (path, link) in links {
+            map.insert(path.to_string(), link.to_string());
+        }
+        drop(map);
+        canned
     }
 }
 
@@ -40,6 +54,28 @@ impl segmenta_core::sites::Fetcher for Canned {
             .get(url.path())
             .cloned()
             .unwrap_or((404, String::new())))
+    }
+
+    async fn fetch(
+        &self,
+        url: &Url,
+        _headers: &[(String, String)],
+    ) -> Result<segmenta_core::sites::Fetched, segmenta_core::sites::SiteError> {
+        self.asked.lock().unwrap().push(url.path().to_string());
+        let (status, body) = self
+            .answers
+            .get(url.path())
+            .cloned()
+            .unwrap_or((404, String::new()));
+        let mut headers = Vec::new();
+        if let Some(link) = self.links.lock().unwrap().get(url.path()) {
+            headers.push(("link".to_string(), link.clone()));
+        }
+        Ok(segmenta_core::sites::Fetched {
+            status,
+            headers,
+            body,
+        })
     }
 }
 
@@ -292,4 +328,59 @@ async fn a_gofile_share_that_needs_an_account_says_so() {
         }
         other => panic!("expected a credential message, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn a_github_release_resolves_to_its_asset_and_digest() {
+    let fetcher = Canned::new(&[(
+        "/repos/o/r/releases/tags/v1.2.3",
+        200,
+        r#"{"assets":[
+             {"name":"tool-linux.tar.gz","browser_download_url":"https://github.com/o/r/releases/download/v1.2.3/tool-linux.tar.gz","size":4096,"digest":"sha256:00112233"},
+             {"name":"notes.txt","browser_download_url":"https://github.com/o/r/releases/download/v1.2.3/notes.txt","size":12}
+           ]}"#,
+    )]);
+    let url = Url::parse("https://github.com/o/r/releases/tag/v1.2.3").unwrap();
+    match resolve_with(&fetcher, &url).await.unwrap() {
+        SiteOutcome::Resolved(resolved) => {
+            assert_eq!(resolved.filename.as_deref(), Some("tool-linux.tar.gz"));
+            assert_eq!(resolved.sha256.as_deref(), Some("00112233"));
+            assert!(resolved.url.as_str().ends_with("tool-linux.tar.gz"));
+        }
+        other => panic!("the release must resolve, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_release_listing_follows_the_next_link_until_an_asset_appears() {
+    // The first page is empty and points at the second: that is the shape GitHub uses when
+    // a listing is paginated, and stopping at page one would report a missing asset.
+    let fetcher = Canned::with_links(
+        &[
+            ("/repos/o/r/releases/latest", 200, r#"{"assets":[]}"#),
+            (
+                "/next-page",
+                200,
+                r#"{"assets":[{"name":"built.zip","browser_download_url":"https://github.com/o/r/releases/download/v9/built.zip","size":10}]}"#,
+            ),
+        ],
+        &[(
+            "/repos/o/r/releases/latest",
+            "<https://api.github.com/next-page>; rel=\"next\"",
+        )],
+    );
+    let url = Url::parse("https://github.com/o/r/releases/latest").unwrap();
+    match resolve_with(&fetcher, &url).await.unwrap() {
+        SiteOutcome::Resolved(resolved) => {
+            assert_eq!(resolved.filename.as_deref(), Some("built.zip"))
+        }
+        other => panic!("the paginated listing must resolve, got {other:?}"),
+    }
+    assert_eq!(
+        fetcher.asked(),
+        vec![
+            "/repos/o/r/releases/latest".to_string(),
+            "/next-page".to_string()
+        ]
+    );
 }
