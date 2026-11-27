@@ -32,7 +32,7 @@ Versión: **0.7.0**, sin tag ni release hasta cerrar el hito.
 
 - [x] T1 — Andamiaje de `sites/`: tipo `Resolved` (url, headers, nombre sugerido, sha256 opcional), registro por host, y los dos primeros extractores puros con servidor de prueba local (MediaFire e Internet Archive) (S1) — ruta: `segmenta-core` — commit: `8d2db7d` + `ce9993f`.
 - [x] T2 — GDrive (confirmación de análisis de virus y exportación de Docs/Sheets/Slides), Gofile y Rapidgator, con reenvío acotado de formularios y enlaces caducados (S1) — ruta: `segmenta-core` — commit: `d1893fa` + `dbcf591`.
-- [ ] T3 — `hub.rs`: GitHub releases con paginación `Link: rel="next"`, Hugging Face (modelo/dataset) con rutas validadas contra traversal, SHA-256 publicado y token desde Site Logins (S1) — ruta: `segmenta-core` + daemon — commit: pendiente.
+- [x] T3 — `hub.rs`: GitHub releases con paginación `Link: rel="next"`, Hugging Face (modelo/dataset) con rutas validadas contra traversal, SHA-256 publicado y token desde Site Logins (S1) — ruta: `segmenta-core` + daemon — commit: `d7047c7` + `3411ff4`.
 - [ ] T4 — `ftp.rs` sin TLS: sondeo `SIZE`/`MDTM`, `REST`/`RETR` pasivo segmentado, reutilizando planner, DiskWriter y HostLimits, con servidor FTP de prueba (S2) — ruta: `segmenta-core` — commit: pendiente.
 - [ ] T5 — FTPS, reanudación por `MDTM` y bind a `vpn_interface`, sobre el mismo cliente (S2) — ruta: `segmenta-core` — commit: pendiente.
 - [ ] T6 — `batch.rs` (patrones `archivo_[01-25].jpg`) y `folder.rs` (BFS acotado de `Index of` y FTP, filtrado de hosts externos y carpetas padre) (S3) — ruta: `segmenta-core` — commit: pendiente.
@@ -92,3 +92,10 @@ Versión: **0.7.0**, sin tag ni release hasta cerrar el hito.
   - `Fetcher::page_with` agregado para cabeceras por servicio, con implementación por defecto que las ignora: un fetcher de prueba solo implementa lo que necesita.
   - Pruebas: seis nuevas de integración (Drive archivo, Drive Docs ×3, Rapidgator con y sin enlace, Gofile con y sin credenciales) más unitarias del parseo.
   - Corte de commits: 549 líneas juntas se separaron en `d1893fa` (Drive + Rapidgator, 323) y `dbcf591` (Gofile, 226).
+
+- L7 — T3 cerrado: `sites/hub.rs` (GitHub) y `sites/hugging_face.rs`. **GitHub**: `releases/tag/<t>` y `releases/latest` van por la API pública; se elige el asset más grande y se toma `digest: "sha256:…"` cuando el servicio lo publica, que es lo que permite verificar contra la fuente y no solo contra la transferencia. **Paginación** real con `Link: rel="next"`, máximo cinco páginas, con prueba de una primera página vacía que apunta a la segunda.
+  - **Hugging Face**: modelos y datasets (`/datasets/…` conserva el prefijo), árbol por API `tree/main?recursive=true`, y el SHA-256 sale de `lfs.oid` — el digest real de los pesos. Las páginas se acumulan antes de elegir, porque el archivo más grande puede estar en la segunda.
+  - `Fetcher::fetch` devuelve estado, **cabeceras** y cuerpo; sin eso la paginación era imposible. `page`/`page_with` se mantienen encima, así los extractores anteriores no cambiaron de contrato.
+  - Tokens: `SEGMENTA_GITHUB_TOKEN` y `SEGMENTA_HF_TOKEN`. Un repo privado o gated responde `401`/`403` y el mensaje **nombra Site Logins**; el cableado definitivo al almacén de secretos llega con la unidad de la GUI.
+  - Pruebas: cuatro de integración nuevas (release con digest, paginación, repo HF con LFS, dataset y repo privado) más unitarias del parseo.
+  - Corte: 639 líneas juntas se separaron en `d7047c7` (GitHub, 386) y `3411ff4` (Hugging Face, 253).
