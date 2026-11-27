@@ -1136,3 +1136,84 @@ async fn scheduled_at_with_hh_mm_normalizes_to_utc_rfc3339() {
         "RFC-3339 format YYYY-MM-DDTHH:MM:SSZ: {scheduled_at}"
     );
 }
+
+#[tokio::test]
+async fn manager_host_limits_shared_and_defaults_for_unseen_host() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+
+    let limits_a = h.manager.host_limits();
+    let limits_b = h.manager.host_limits();
+    assert!(
+        Arc::ptr_eq(&limits_a, &limits_b),
+        "host_limits() must return the same Arc instance across calls"
+    );
+    assert_eq!(limits_a.limit("unseen-host.example"), 8);
+    assert_eq!(limits_a.tracked(), 0);
+
+    // Triangulate: mutating through limits_a affects limits_b and later manager.host_limits() calls
+    limits_a.on_throttled("throttled.example");
+    assert_eq!(limits_b.limit("throttled.example"), 4);
+    assert_eq!(h.manager.host_limits().limit("throttled.example"), 4);
+    assert_eq!(h.manager.host_limits().tracked(), 1);
+    // Unseen host still yields default 8
+    assert_eq!(h.manager.host_limits().limit("other.example"), 8);
+}
+
+#[tokio::test]
+async fn download_path_passes_manager_host_limits_to_engine() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+    let server = RangeServer::start(ServerConfig {
+        force_status: Some(429),
+        retry_after: Some("60".to_string()),
+        ..ServerConfig::default()
+    })
+    .await;
+
+    let mut settings = Settings {
+        allow_local_downloads: true,
+        max_retries: 0,
+        ..Settings::default()
+    };
+    settings.download_dir = dir.path().join("downloads").display().to_string();
+    call(
+        &h.manager,
+        "settings.update",
+        serde_json::to_value(&settings).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let url = server.url();
+    let host = url.host_str().unwrap();
+    assert_eq!(h.manager.host_limits().limit(host), 8);
+    assert_eq!(h.manager.host_limits().tracked(), 0);
+
+    let added = call(
+        &h.manager,
+        "download.add",
+        json!({ "url": server.url().to_string() }),
+    )
+    .await
+    .unwrap();
+    let task_id = added["task_id"].as_str().unwrap();
+
+    for _ in 0..100 {
+        let status = h.store.get(task_id).unwrap().unwrap().status;
+        if status == DownloadStatus::Failed || status == DownloadStatus::Completed {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    assert_eq!(
+        h.manager.host_limits().limit(host),
+        4,
+        "server 429 must throttle the host in the manager's shared registry"
+    );
+    assert_eq!(h.manager.host_limits().tracked(), 1);
+    // Other hosts are unaffected by this task's throttle
+    assert_eq!(h.manager.host_limits().limit("unrelated.example"), 8);
+    server.shutdown().await;
+}

@@ -15,6 +15,7 @@ use segmenta_core::engine::{
     SegmentStateRecord, TaskOutcome,
 };
 use segmenta_core::filename::{resolve_unique_path, sanitize_filename, suggest_filename};
+use segmenta_core::hostlimits::{HostLimitPolicy, HostLimits, MonotonicClock};
 use segmenta_core::probe::HttpConfig;
 use segmenta_core::ratelimit::TokenBucket;
 use segmenta_core::{planner, CoreError};
@@ -203,6 +204,7 @@ pub struct Manager {
     bus: Arc<EventBus>,
     settings: Mutex<Settings>,
     http_bucket: Arc<TokenBucket>,
+    host_limits: Arc<HostLimits>,
     #[cfg(test)]
     after_settings_persist: Option<Arc<dyn Fn() + Send + Sync>>,
     progress: Arc<Mutex<HashMap<String, ProgressSnapshot>>>,
@@ -228,12 +230,17 @@ impl Manager {
     ) -> Manager {
         let settings = store.settings().unwrap_or_default();
         let http_bucket = Arc::new(TokenBucket::new(settings.global_speed_limit_bps));
+        let host_limits = Arc::new(HostLimits::new(
+            HostLimitPolicy::default(),
+            Arc::new(MonotonicClock::default()),
+        ));
         Manager {
             store,
             secrets,
             bus,
             settings: Mutex::new(settings),
             http_bucket,
+            host_limits,
             #[cfg(test)]
             after_settings_persist: None,
             progress: Arc::new(Mutex::new(HashMap::new())),
@@ -244,6 +251,11 @@ impl Manager {
             scheduler_wake: Arc::new(Notify::new()),
             started: std::time::Instant::now(),
         }
+    }
+
+    /// Adaptive per-host connection limits shared across tasks.
+    pub fn host_limits(&self) -> Arc<HostLimits> {
+        Arc::clone(&self.host_limits)
     }
 
     /// Reconcile tasks that were in flight when the daemon died.
@@ -846,6 +858,7 @@ impl Manager {
             http,
             speed_limit_bps: settings.global_speed_limit_bps.filter(|limit| *limit > 0),
             chunk_size: 64 * 1024,
+            host_limits: Some(Arc::clone(&self.host_limits)),
         };
         let spec = DownloadSpec {
             url: url::Url::parse(&record.url)
