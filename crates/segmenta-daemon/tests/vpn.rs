@@ -107,15 +107,15 @@ fn an_invalid_name_is_rejected_by_the_settings() {
 }
 
 #[test]
-fn torrents_are_refused_under_a_vpn_interface() {
+fn a_torrent_under_a_dead_interface_is_refused_before_it_starts() {
     let daemon = Daemon::start();
-    // `lo` exists, so the guard passes and the torrent rule is what answers.
-    daemon.call("settings.update", json!({"vpn_interface": "lo"}));
+    daemon.call("settings.update", json!({"vpn_interface": "vpnx0"}));
     let refused = daemon.request(
         "torrent.add",
         json!({"url": "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"}),
     );
-    assert_eq!(refused["error"]["code"], 1083, "{refused}");
+    // 1081: the interface is missing, so no session is built at all.
+    assert_eq!(refused["error"]["code"], 1081, "{refused}");
 }
 
 #[test]
@@ -150,4 +150,29 @@ fn the_daemon_reports_the_interface_state_for_the_window() {
     let missing = daemon.call("vpn.status", json!({}));
     assert_eq!(missing["state"], "missing");
     assert_eq!(missing["configured"], true);
+}
+
+#[test]
+fn torrent_sessions_bind_to_the_interface_and_hide_from_the_lan() {
+    // The effective options are what librqbit will apply to DHT, BT-UDP, BT-TCP, trackers
+    // and LSD; this test pins the three decisions T3 depends on.
+    let plain = segmenta_daemon::torrent::session_options(None);
+    assert_eq!(plain.bind_device_name, None);
+    // Without a VPN the options are untouched, whatever librqbit's own defaults are.
+    assert!(!plain.disable_local_service_discovery);
+
+    let bound = segmenta_daemon::torrent::session_options(Some("wg0"));
+    assert_eq!(bound.bind_device_name.as_deref(), Some("wg0"));
+    assert!(
+        bound.disable_local_service_discovery,
+        "LSD multicast must not escape the tunnel"
+    );
+    assert!(
+        bound.listen.is_none(),
+        "no inbound listener and no UPnP request under a VPN"
+    );
+
+    // An empty setting means "no VPN", not "bind to the empty name".
+    let empty = segmenta_daemon::torrent::session_options(Some("   "));
+    assert_eq!(empty.bind_device_name, None);
 }

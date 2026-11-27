@@ -295,6 +295,8 @@ impl QueueScheduler {
             // The inhibitor is cheap to poll and must follow a pause or a completion
             // quickly, so it runs on its own short pulse instead of waiting a full tick.
             self.sync_inhibitor();
+            // A tunnel that fell mid-transfer must stop the torrents, not just their bind.
+            self.manager.pause_torrents_if_vpn_down().await;
             if tokio::time::Instant::now() >= next_tick {
                 self.tick();
                 next_tick = tokio::time::Instant::now() + self.interval;

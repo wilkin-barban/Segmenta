@@ -1298,6 +1298,38 @@ impl Manager {
         Ok(json!({ "feed_id": feed_id }))
     }
 
+    /// Pause every torrent in flight when the VPN interface stopped being usable.
+    ///
+    /// `bind_device_name` covers the sockets librqbit creates, but a connection opened
+    /// before the tunnel fell can still be alive. Pausing the tasks closes that window
+    /// instead of trusting the bind alone.
+    pub async fn pause_torrents_if_vpn_down(&self) -> usize {
+        let Some(interface) = vpn_interface(&self.settings()) else {
+            return 0;
+        };
+        if segmenta_core::netguard::ensure_up(&interface).is_ok() {
+            return 0;
+        }
+        let rows = self.store.list(None, 200, 0).unwrap_or_default();
+        let mut paused = 0;
+        for row in rows {
+            if !matches!(row.download_type.as_str(), "torrent" | "magnet") {
+                continue;
+            }
+            if self.pause_task(&row.id).await.is_ok() {
+                paused += 1;
+            }
+        }
+        if paused > 0 {
+            tracing::warn!(
+                interface = %interface,
+                paused,
+                "the vpn interface is down; torrents were paused instead of leaking"
+            );
+        }
+        paused
+    }
+
     /// Poll the feeds whose interval has elapsed.
     pub async fn rss_check_due(&self) -> Value {
         let now = chrono_like_now();
@@ -3735,19 +3767,10 @@ impl Manager {
     }
 
     async fn torrent_add(&self, params: Value) -> Result<Value, RpcError> {
-        // librqbit opens its own sockets and exposes no way to bind them to a device, so a
-        // torrent under a VPN setting is refused: it either stays inside the tunnel or does
-        // not run. Allowing it would leak the real address.
-        if let Some(interface) = vpn_interface(&self.settings()) {
-            return Err(RpcError::new(
-                1083,
-                "ERR_VPN_TORRENT_UNSUPPORTED",
-                format!(
-                    "torrents cannot be bound to `{interface}`; disable the vpn interface \
-                     or download over HTTP"
-                ),
-            ));
-        }
+        // Torrents are bound to the interface like every other socket (see
+        // `torrent::session_options`), so the kill switch only has to refuse when the
+        // interface is not usable: a bound socket on a dead device must never fall back.
+        vpn_guard(&self.settings())?;
         let url = params
             .get("url")
             .and_then(|v| v.as_str())
@@ -3923,7 +3946,9 @@ impl Manager {
         let id = task_id.clone();
         let path = record.final_path.clone();
         let task_cancel = cancel.clone();
-        let sequential = self.settings().torrent_sequential;
+        let settings = self.settings();
+        let sequential = settings.torrent_sequential;
+        let vpn = vpn_interface(&settings);
         let wake = Arc::clone(&self.scheduler_wake);
         let handle = tokio::spawn(async move {
             let mut pipeline = ProgressPipeline::new(
@@ -3933,7 +3958,7 @@ impl Manager {
                 id.clone(),
             );
             let result = async {
-                let session = crate::torrent::shared_session(&session_dir)
+                let session = crate::torrent::shared_session(&session_dir, vpn.as_deref())
                     .await
                     .map_err(|err| (1044, err))?;
                 let _ = store.set_status(&id, DownloadStatus::Downloading, None);

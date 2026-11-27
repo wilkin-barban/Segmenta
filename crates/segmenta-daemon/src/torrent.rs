@@ -226,15 +226,39 @@ pub struct TorrentProgress {
 static SESSION: tokio::sync::OnceCell<std::sync::Arc<librqbit::Session>> =
     tokio::sync::OnceCell::const_new();
 
+/// Build the session options, binding every socket to `vpn_interface` when it is set.
+///
+/// librqbit documents `bind_device_name` as covering DHT, BT-UDP, BT-TCP, trackers and LSD
+/// with `SO_BINDTODEVICE` on Linux. With a tunnel we also turn off the two things that could
+/// talk outside it by design: LSD multicast and the inbound listener (no port is exposed
+/// and no UPnP request is made). DHT stays enabled but bound, so discovery never leaves the
+/// device either.
+pub fn session_options(vpn_interface: Option<&str>) -> librqbit::SessionOptions {
+    let mut options = librqbit::SessionOptions::default();
+    let Some(interface) = vpn_interface.filter(|name| !name.trim().is_empty()) else {
+        return options;
+    };
+    options.bind_device_name = Some(interface.to_string());
+    options.disable_local_service_discovery = true;
+    // Without a listener nothing can arrive from outside the tunnel, and no UPnP mapping
+    // is requested; outgoing peers and trackers still work.
+    options.listen = None;
+    options
+}
+
 /// Returns the shared session, creating it on first use.
 pub async fn shared_session(
     output_dir: &Path,
+    vpn_interface: Option<&str>,
 ) -> Result<std::sync::Arc<librqbit::Session>, String> {
     SESSION
         .get_or_try_init(|| async {
-            librqbit::Session::new(output_dir.to_path_buf())
-                .await
-                .map_err(|err| err.to_string())
+            librqbit::Session::new_with_opts(
+                output_dir.to_path_buf(),
+                session_options(vpn_interface),
+            )
+            .await
+            .map_err(|err| err.to_string())
         })
         .await
         .cloned()
