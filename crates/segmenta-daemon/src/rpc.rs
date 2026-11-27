@@ -424,6 +424,13 @@ pub struct TaskIdParams {
     pub task_id: String,
 }
 
+/// Parameters of `site_rule.remove`: the rule's id, the same field the UI holds.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SiteRuleIdParams {
+    /// Rule identifier.
+    pub id: String,
+}
+
 /// Parameters of `site_rule.upsert`: one override for the hosts a pattern covers.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SiteRuleParams {

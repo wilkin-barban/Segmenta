@@ -435,7 +435,12 @@ fn site_rules_page_lists_daemon_rules_and_shows_no_header_value() {
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].0, "site_rule.remove");
         assert_eq!(sent[0].1["id"], "rule-1");
-        assert_eq!(sent[0].1["domain_pattern"], "files.example.com");
+        // Only the id: the daemon's `site_rule.remove` takes exactly this field.
+        assert!(
+            sent[0].1.get("domain_pattern").is_none(),
+            "the remove payload must match the daemon params: {:?}",
+            sent[0].1
+        );
 
         // Add affordance validation
         page.domain_pattern.set_text("");
@@ -457,7 +462,7 @@ fn site_rules_page_lists_daemon_rules_and_shows_no_header_value() {
         assert!(!page.error.is_visible(), "valid addition must hide error");
         let sent = calls.borrow().clone();
         assert_eq!(sent.len(), 2);
-        assert_eq!(sent[1].0, "site_rule.set");
+        assert_eq!(sent[1].0, "site_rule.upsert");
         assert_eq!(sent[1].1["domain_pattern"], "api.example.com");
         assert_eq!(sent[1].1["user_agent"], "Custom/3.0");
         assert_eq!(sent[1].1["max_connections"], 16);

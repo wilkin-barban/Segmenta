@@ -29,7 +29,7 @@ use crate::rpc::{
     MediaProbeParams, MediaStatusParams, PackageAssignParams, PackageCreateParams, PackageIdParams,
     PackageRenameParams, QueueCreateParams, QueueRemoveParams, QueueScheduleParams,
     RemoteEnableParams, RpcError, RssCheckParams, RssFeedAddParams, RssFeedIdParams, SegmentView,
-    SiteLoginOriginParams, SiteLoginSetParams, SiteRuleParams, TaskIdParams,
+    SiteLoginOriginParams, SiteLoginSetParams, SiteRuleIdParams, SiteRuleParams, TaskIdParams,
 };
 use crate::scheduler::{resolve_schedule, Clock, LocalClock, QueueSchedule};
 use crate::secrets::SecretStore;
@@ -4469,9 +4469,9 @@ impl RpcHandler for Manager {
                     self.site_rule_upsert(parsed)
                 }
                 "site_rule.remove" => {
-                    let parsed: TaskIdParams = serde_json::from_value(parse(params)?)
+                    let parsed: SiteRuleIdParams = serde_json::from_value(parse(params)?)
                         .map_err(|err| RpcError::invalid_params(err.to_string()))?;
-                    self.site_rule_remove(&parsed.task_id)
+                    self.site_rule_remove(&parsed.id)
                 }
                 "download.keep" => {
                     let parsed: TaskIdParams = serde_json::from_value(parse(params)?)

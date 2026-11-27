@@ -2011,7 +2011,7 @@ pub fn site_rules_page(entries: &[SiteRuleEntry], call: RpcCall) -> SiteRulesPag
                 params["max_connections"] = serde_json::Value::Number(c.into());
             }
 
-            call("site_rule.set", params);
+            call("site_rule.upsert", params);
             domain_row.set_text("");
             ua_row.set_text("");
             conns_row.set_value(0.0);
@@ -2046,13 +2046,9 @@ fn render_site_rule_rows(
         let remove = gtk::Button::with_label("Eliminar");
         remove.add_css_class("destructive-action");
         let id = entry.id.clone();
-        let pattern = entry.domain_pattern.clone();
         let call = std::rc::Rc::clone(&call);
         remove.connect_clicked(move |_| {
-            call(
-                "site_rule.remove",
-                serde_json::json!({ "id": id.clone(), "domain_pattern": pattern.clone() }),
-            );
+            call("site_rule.remove", serde_json::json!({ "id": id.clone() }));
         });
         row.add_suffix(&remove);
         removals.push(remove);

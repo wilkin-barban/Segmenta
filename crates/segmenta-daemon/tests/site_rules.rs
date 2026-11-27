@@ -226,10 +226,7 @@ async fn the_rpc_surface_manages_rules_without_leaking_headers() {
     // And removing it takes the secret with it.
     harness
         .manager
-        .call(
-            "site_rule.remove",
-            Some(serde_json::json!({ "task_id": id })),
-        )
+        .call("site_rule.remove", Some(serde_json::json!({ "id": id })))
         .await
         .unwrap();
     assert!(harness.store.site_rules().unwrap().is_empty());
@@ -260,4 +257,36 @@ async fn an_invalid_rule_is_refused_before_it_is_stored() {
         assert!(refused.is_err(), "accepted an invalid rule: {payload}");
     }
     assert!(harness.store.site_rules().unwrap().is_empty());
+}
+
+/// The GUI speaks these exact payloads. A contract test lives here, next to the parser, so
+/// a rename on either side fails in one place instead of leaving a dead button.
+#[tokio::test]
+async fn the_payloads_the_gui_sends_are_the_ones_the_daemon_accepts() {
+    use segmenta_daemon::ipc::RpcHandler;
+
+    let dir = temp_dir("site-rules-contract");
+    let harness = harness(&dir);
+    // Mirrors `prefs.rs`: the add form builds exactly these keys.
+    let added = harness
+        .manager
+        .call(
+            "site_rule.upsert",
+            Some(serde_json::json!({
+                "domain_pattern": "example.com",
+                "user_agent": "custom/1",
+                "max_connections": 3,
+            })),
+        )
+        .await
+        .expect("the daemon must accept the payload the add form sends");
+    let id = added["id"].as_str().unwrap();
+
+    // Mirrors the remove button: only the id.
+    let removed = harness
+        .manager
+        .call("site_rule.remove", Some(serde_json::json!({ "id": id })))
+        .await
+        .expect("the daemon must accept the payload the remove button sends");
+    assert_eq!(removed["removed"], true);
 }
