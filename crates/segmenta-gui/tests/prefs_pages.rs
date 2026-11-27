@@ -10,7 +10,6 @@ use std::time::Duration;
 
 use segmenta_gui::adw;
 use segmenta_gui::adw::prelude::*;
-use segmenta_gui::app;
 use segmenta_gui::client::{Client, DemoClient};
 use segmenta_gui::gtk;
 use segmenta_gui::prefs;
