@@ -257,3 +257,39 @@ async fn a_rapidgator_page_without_a_download_link_is_reported() {
         SiteOutcome::Changed { .. }
     ));
 }
+
+#[tokio::test]
+async fn a_gofile_share_resolves_through_the_contents_api() {
+    let fetcher = Canned::new(&[(
+        "/contents/AbC123",
+        200,
+        r#"{"data":{"children":{
+             "a":{"type":"file","name":"clip.mp4","link":"https://store9.gofile.io/download/x/clip.mp4","size":2048}
+           }}}"#,
+    )]);
+    let url = Url::parse("https://gofile.io/d/AbC123").unwrap();
+    match resolve_with(&fetcher, &url).await.unwrap() {
+        SiteOutcome::Resolved(resolved) => {
+            assert_eq!(
+                resolved.url.as_str(),
+                "https://store9.gofile.io/download/x/clip.mp4"
+            );
+            assert_eq!(resolved.filename.as_deref(), Some("clip.mp4"));
+        }
+        other => panic!("gofile must resolve, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_gofile_share_that_needs_an_account_says_so() {
+    // 401 is not a broken extractor: it is a service asking for credentials, and the
+    // message has to name that instead of pretending the page changed.
+    let fetcher = Canned::new(&[("/contents/AbC123", 401, "")]);
+    let url = Url::parse("https://gofile.io/d/AbC123").unwrap();
+    match resolve_with(&fetcher, &url).await.unwrap() {
+        SiteOutcome::Changed { reason, .. } => {
+            assert!(reason.contains("Site Logins"), "{reason}")
+        }
+        other => panic!("expected a credential message, got {other:?}"),
+    }
+}

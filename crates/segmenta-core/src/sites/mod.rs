@@ -20,6 +20,7 @@ use url::Url;
 
 use crate::probe::HttpConfig;
 
+pub mod gofile;
 pub mod google_drive;
 pub mod internet_archive;
 pub mod mediafire;
@@ -67,6 +68,17 @@ impl SiteOutcome {
 pub trait Fetcher: Send + Sync {
     /// GET `url` and return its status and body.
     async fn page(&self, url: &Url) -> Result<(u16, String), SiteError>;
+
+    /// GET `url` with extra headers, used where a service wants an account token.
+    ///
+    /// The default ignores the headers so a test fetcher only implements what it needs.
+    async fn page_with(
+        &self,
+        url: &Url,
+        _headers: &[(String, String)],
+    ) -> Result<(u16, String), SiteError> {
+        self.page(url).await
+    }
 }
 
 /// HTTP fetcher shared by every extractor: same network rules as the engine.
@@ -112,6 +124,14 @@ const MAX_HOPS: usize = 5;
 #[async_trait::async_trait]
 impl Fetcher for HttpFetcher {
     async fn page(&self, url: &Url) -> Result<(u16, String), SiteError> {
+        self.page_with(url, &[]).await
+    }
+
+    async fn page_with(
+        &self,
+        url: &Url,
+        headers: &[(String, String)],
+    ) -> Result<(u16, String), SiteError> {
         let mut current = url.clone();
         for _ in 0..=MAX_HOPS {
             // The guard runs before the socket, on every hop: a page that answers 302 to
@@ -122,15 +142,14 @@ impl Fetcher for HttpFetcher {
                     service: self.service,
                     detail: err.to_string(),
                 })?;
-            let response = self
-                .client
-                .get(current.clone())
-                .send()
-                .await
-                .map_err(|source| SiteError::Network {
-                    service: self.service,
-                    source,
-                })?;
+            let mut request = self.client.get(current.clone());
+            for (name, value) in headers {
+                request = request.header(name, value);
+            }
+            let response = request.send().await.map_err(|source| SiteError::Network {
+                service: self.service,
+                source,
+            })?;
             let status = response.status();
             if status.is_redirection() {
                 let location = response
@@ -206,6 +225,7 @@ fn registry() -> Vec<Box<dyn Extractor>> {
         Box::new(mediafire::MediaFire),
         Box::new(google_drive::GoogleDrive),
         Box::new(rapidgator::Rapidgator),
+        Box::new(gofile::Gofile),
         Box::new(internet_archive::InternetArchive),
     ]
 }
