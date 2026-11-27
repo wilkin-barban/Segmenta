@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -36,6 +36,8 @@ pub struct ServerConfig {
     pub cut_after: Option<usize>,
     /// Delay between body chunks, to keep workers alive long enough to split.
     pub slow: Option<Duration>,
+    /// Delay only the first connection's body writes.
+    pub slow_first_connection: Option<Duration>,
     /// Bytes per write.
     pub chunk_size: usize,
     /// Answer `200` to any `If-Range`, even when it matches.
@@ -58,6 +60,7 @@ impl Default for ServerConfig {
             chunked: false,
             cut_after: None,
             slow: None,
+            slow_first_connection: None,
             chunk_size: 64 * 1024,
             ignore_if_range: false,
             redirect_to: None,
@@ -86,6 +89,7 @@ struct Shared {
     config: Mutex<ServerConfig>,
     requests: Mutex<Vec<RequestRecord>>,
     connections: AtomicUsize,
+    slow_connection_claimed: AtomicBool,
 }
 
 /// A running range server.
@@ -104,6 +108,7 @@ impl RangeServer {
             config: Mutex::new(config),
             requests: Mutex::new(Vec::new()),
             connections: AtomicUsize::new(0),
+            slow_connection_claimed: AtomicBool::new(false),
         });
         let (shutdown, mut shutdown_rx) = tokio::sync::watch::channel(false);
         let accept_shared = Arc::clone(&shared);
@@ -346,6 +351,14 @@ async fn serve_connection(mut stream: TcpStream, shared: Arc<Shared>) -> std::io
     }
 
     let slice = &config.body[body_start as usize..=body_end as usize];
+    let is_first_body = if requested == Some((0, Some(1))) && total > 2 {
+        false
+    } else {
+        shared
+            .slow_connection_claimed
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    };
     let mut sent = 0usize;
     let limit = config.cut_after.unwrap_or(usize::MAX);
     while sent < slice.len() && sent < limit {
@@ -361,6 +374,11 @@ async fn serve_connection(mut stream: TcpStream, shared: Arc<Shared>) -> std::io
         sent += take;
         if let Some(delay) = config.slow {
             tokio::time::sleep(delay).await;
+        }
+        if is_first_body {
+            if let Some(delay) = config.slow_first_connection {
+                tokio::time::sleep(delay).await;
+            }
         }
     }
     if config.chunked && sent == slice.len() {

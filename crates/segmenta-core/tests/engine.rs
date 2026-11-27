@@ -831,3 +831,52 @@ async fn a_lowered_host_limit_caps_the_workers_of_the_next_generation() {
         "a host limited to 2 started {started} segments with {splits} splits"
     );
 }
+
+/// Proactive eviction of a slow worker in a segmented download: the slow worker is evicted
+/// and replaced with a fresh connection for the same segment, allowing the download to finish
+/// quickly rather than lagging behind the slow connection.
+#[tokio::test]
+async fn slow_worker_is_proactively_evicted_and_replaced() {
+    let body = payload(8 * MB);
+    let server = RangeServer::start(ServerConfig {
+        body: body.clone(),
+        slow_first_connection: Some(Duration::from_millis(200)),
+        slow: Some(Duration::from_millis(5)),
+        ..ServerConfig::default()
+    })
+    .await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("evicted.bin");
+    let cfg = local_cfg(2);
+
+    let start = Instant::now();
+    let (outcome, events) = run_to_end(cfg, spec_for(server.url(), path.clone())).await;
+    let elapsed = start.elapsed();
+
+    let (total, checksum_ok) = expect_completed(outcome);
+    assert_eq!(total, body.len() as u64);
+    assert_eq!(checksum_ok, None);
+    assert_eq!(std::fs::read(&path).expect("read destination"), body);
+
+    // Eviction proof: at least one segment id was started twice (re-spawned).
+    let mut started_counts: HashMap<u32, usize> = HashMap::new();
+    for event in &events {
+        if let EngineEvent::SegmentStarted { id, .. } = event {
+            *started_counts.entry(*id).or_default() += 1;
+        }
+    }
+    let replaced = started_counts.values().any(|count| *count >= 2);
+    assert!(
+        replaced,
+        "expected at least one segment to start more than once due to eviction, got counts: {started_counts:?}"
+    );
+
+    // Wall time check: without eviction, the single slow connection would need
+    // at least ~12.8s (4 MB / 64 KiB = 64 chunks * 200ms). With proactive eviction
+    // replacing the slow connection, the whole download finishes well under that bound.
+    assert!(
+        elapsed < Duration::from_secs(8),
+        "download took {elapsed:?}, expected well under slow connection duration"
+    );
+    server.shutdown().await;
+}

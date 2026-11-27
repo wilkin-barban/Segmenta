@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 use futures_util::StreamExt;
 use reqwest::header::CONTENT_RANGE;
 use tokio::sync::{mpsc, oneshot, Notify};
-use tokio::task::JoinSet;
+use tokio::task::{AbortHandle, JoinSet};
 use url::Url;
 
 use crate::checksum;
@@ -774,10 +774,19 @@ struct SplitAck {
 /// A message from a worker to the coordinator.
 enum WorkerMsg {
     /// The worker wrote its last byte.
-    Completed { id: u32 },
+    Completed {
+        /// Segment identifier.
+        id: u32,
+        /// Which worker of that segment sent it; an evicted worker's stale message is
+        /// ignored by the coordinator.
+        generation: u32,
+    },
     /// The worker cannot continue.
     Stopped {
+        /// Segment identifier.
         id: u32,
+        /// Worker generation, as in `Completed`.
+        generation: u32,
         error: CoreError,
         /// `true` when the task should pause (and stay resumable) instead of failing.
         resumable: bool,
@@ -977,7 +986,13 @@ async fn coordinate(
 ) -> Cycle {
     let (msg_tx, mut msg_rx) = mpsc::unbounded_channel();
     let mut workers: JoinSet<()> = JoinSet::new();
+    let mut worker_tasks: HashMap<u32, AbortHandle> = HashMap::new();
+    let mut task_ids: HashMap<u32, tokio::task::Id> = HashMap::new();
     let mut live: HashMap<u32, mpsc::Sender<SplitRequest>> = HashMap::new();
+    let mut last_offsets: HashMap<u32, u64> = HashMap::new();
+    // Generation per segment: a message from an evicted worker carries the old number and
+    // is ignored, so a queued `Completed` can never remove the replacement's tracking.
+    let mut generations: HashMap<u32, u32> = HashMap::new();
     let mut next_id = 1u32;
 
     for record in &plan.records {
@@ -991,14 +1006,21 @@ async fn coordinate(
         }
         let (control, control_rx) = mpsc::channel(SPLIT_CHANNEL_CAPACITY);
         live.insert(record.id, control);
-        spawn_worker(
+        let generation = generations.entry(record.id).or_insert(0);
+        *generation += 1;
+        let generation_value = *generation;
+        let handle = spawn_worker(
             &mut workers,
             Arc::clone(&shared),
-            seg,
+            Arc::clone(&seg),
             control_rx,
             msg_tx.clone(),
             cancel.clone(),
+            generation_value,
         );
+        task_ids.insert(record.id, handle.id());
+        worker_tasks.insert(record.id, handle);
+        last_offsets.insert(record.id, seg.next());
     }
 
     let mut active = live.len();
@@ -1007,6 +1029,7 @@ async fn coordinate(
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // The first tick fires immediately: drop it so no zero-byte progress is emitted.
     ticker.tick().await;
+    let mut last_tick = Instant::now();
 
     let stop = loop {
         if active == 0 {
@@ -1016,8 +1039,15 @@ async fn coordinate(
             biased;
             _ = cancel.cancelled() => break Stop::Cancelled,
             message = msg_rx.recv() => match message {
-                Some(WorkerMsg::Completed { id }) => {
+                Some(WorkerMsg::Completed { id, generation }) => {
+                    if generations.get(&id) != Some(&generation) {
+                        // A message from a worker this segment no longer has.
+                        continue;
+                    }
                     live.remove(&id);
+                    worker_tasks.remove(&id);
+                    task_ids.remove(&id);
+                    last_offsets.remove(&id);
                     active = active.saturating_sub(1);
                     if let Some(seg) = shared.find(id) {
                         shared.emit(completed_event(&shared.env, &seg)).await;
@@ -1025,16 +1055,37 @@ async fn coordinate(
                     // The idle worker takes half of the largest donor, if any is worth it.
                     // The per-host limit is the ceiling for this generation: a throttled
                     // host keeps its finished worker instead of splitting a new one.
+                    let mut pool = WorkerPool {
+                        workers: &mut workers,
+                        worker_tasks: &mut worker_tasks,
+                        task_ids: &mut task_ids,
+                        last_offsets: &mut last_offsets,
+                        generations: &mut generations,
+                    };
                     if active > 0
                         && active < shared.env.max_workers
                         && plan.splits
-                        && try_split(&shared, &mut live, &mut workers, &mut next_id, &msg_tx, cancel).await
+                        && try_split(
+                            &shared,
+                            &mut live,
+                            &mut pool,
+                            &mut next_id,
+                            &msg_tx,
+                            cancel,
+                        )
+                        .await
                     {
                         active += 1;
                     }
                 }
-                Some(WorkerMsg::Stopped { id, error, resumable }) => {
+                Some(WorkerMsg::Stopped { id, generation, error, resumable }) => {
+                    if generations.get(&id) != Some(&generation) {
+                        continue;
+                    }
                     live.remove(&id);
+                    worker_tasks.remove(&id);
+                    task_ids.remove(&id);
+                    last_offsets.remove(&id);
                     break Stop::Worker { error, resumable };
                 }
                 Some(WorkerMsg::Restart { reason }) => break Stop::Restart(reason),
@@ -1043,13 +1094,110 @@ async fn coordinate(
             // A worker that died without a message (a panic) must never hang the task.
             finished = workers.join_next(), if !workers.is_empty() => {
                 if let Some(Err(error)) = finished {
-                    break Stop::Worker {
-                        error: CoreError::Unsupported(format!("worker task failed: {error}")),
-                        resumable: true,
-                    };
+                    if !error.is_cancelled() {
+                        break Stop::Worker {
+                            error: CoreError::Unsupported(format!("worker task failed: {error}")),
+                            resumable: true,
+                        };
+                    }
                 }
             }
-            _ = ticker.tick() => reporter.tick().await,
+            _ = ticker.tick() => {
+                reporter.tick().await;
+
+                let now = Instant::now();
+                let elapsed = now.duration_since(last_tick);
+                last_tick = now;
+                let elapsed_secs = elapsed.as_secs_f64();
+
+                last_offsets.retain(|id, _| live.contains_key(id));
+
+                if elapsed_secs > 0.0 && live.len() >= 2 && live.len() <= shared.env.max_workers {
+                    struct WorkerSample {
+                        id: u32,
+                        rate: f64,
+                        delta: u64,
+                        remaining: u64,
+                    }
+                    let mut samples = Vec::with_capacity(live.len());
+                    for &id in live.keys() {
+                        if let Some(seg) = shared.find(id) {
+                            let current_next = seg.next();
+                            let prev = last_offsets.get(&id).copied().unwrap_or(current_next);
+                            let delta = current_next.saturating_sub(prev);
+                            let rate = delta as f64 / elapsed_secs;
+                            let remaining = planner::remaining(seg.end(), current_next);
+                            samples.push(WorkerSample {
+                                id,
+                                rate,
+                                delta,
+                                remaining,
+                            });
+                        }
+                    }
+
+                    if let Some(fastest) = samples.iter().max_by(|a, b| a.rate.total_cmp(&b.rate)) {
+                        let fastest_rate = fastest.rate;
+                        let fastest_delta = fastest.delta;
+                        if fastest_delta >= 64 * 1024 {
+                            let threshold = fastest_rate * 0.25;
+                            let mut victims: Vec<&WorkerSample> = samples
+                                .iter()
+                                .filter(|s| {
+                                    s.id != fastest.id
+                                        && s.rate < threshold
+                                        && s.remaining >= planner::MIN_SPLIT_SIZE
+                                })
+                                .collect();
+
+                            victims.sort_by(|a, b| {
+                                a.rate
+                                    .total_cmp(&b.rate)
+                                    .then_with(|| a.id.cmp(&b.id))
+                            });
+
+                            if let Some(victim) = victims.first() {
+                                let victim_id = victim.id;
+                                task_ids.remove(&victim_id);
+                                if let Some(handle) = worker_tasks.remove(&victim_id) {
+                                    handle.abort();
+                                }
+                                live.remove(&victim_id);
+
+                                if let Some(seg) = shared.find(victim_id) {
+                                    shared.emit(started_event(&shared.env, &seg.record())).await;
+                                    let (control, control_rx) =
+                                        mpsc::channel(SPLIT_CHANNEL_CAPACITY);
+                                    live.insert(victim_id, control);
+                                    // Bump before spawning: the abort above may already
+                                    // have queued a message with the previous number.
+                                    let generation =
+                                        generations.entry(victim_id).or_insert(0);
+                                    *generation += 1;
+                                    let handle = spawn_worker(
+                                        &mut workers,
+                                        Arc::clone(&shared),
+                                        Arc::clone(&seg),
+                                        control_rx,
+                                        msg_tx.clone(),
+                                        cancel.clone(),
+                                        *generation,
+                                    );
+                                    task_ids.insert(victim_id, handle.id());
+                                    worker_tasks.insert(victim_id, handle);
+                                    last_offsets.insert(victim_id, seg.next());
+                                }
+                            }
+                        }
+                    }
+                }
+
+                for &id in live.keys() {
+                    if let Some(seg) = shared.find(id) {
+                        last_offsets.insert(id, seg.next());
+                    }
+                }
+            }
         }
     };
 
@@ -1089,6 +1237,14 @@ async fn coordinate(
     }
 }
 
+struct WorkerPool<'a> {
+    workers: &'a mut JoinSet<()>,
+    worker_tasks: &'a mut HashMap<u32, AbortHandle>,
+    task_ids: &'a mut HashMap<u32, tokio::task::Id>,
+    last_offsets: &'a mut HashMap<u32, u64>,
+    generations: &'a mut HashMap<u32, u32>,
+}
+
 fn spawn_worker(
     workers: &mut JoinSet<()>,
     shared: Arc<Shared>,
@@ -1096,7 +1252,8 @@ fn spawn_worker(
     control: mpsc::Receiver<SplitRequest>,
     msg_tx: mpsc::UnboundedSender<WorkerMsg>,
     cancel: Canceller,
-) {
+    generation: u32,
+) -> AbortHandle {
     let next = seg.next();
     workers.spawn(
         SegmentWorker {
@@ -1106,9 +1263,10 @@ fn spawn_worker(
             cancel,
             next,
             failures: 0,
+            generation,
         }
         .run(control),
-    );
+    )
 }
 
 /// Run the split handshake with the largest eligible donor.
@@ -1119,7 +1277,7 @@ fn spawn_worker(
 async fn try_split(
     shared: &Arc<Shared>,
     live: &mut HashMap<u32, mpsc::Sender<SplitRequest>>,
-    workers: &mut JoinSet<()>,
+    pool: &mut WorkerPool<'_>,
     next_id: &mut u32,
     msg_tx: &mpsc::UnboundedSender<WorkerMsg>,
     cancel: &Canceller,
@@ -1185,14 +1343,23 @@ async fn try_split(
         shared
             .emit(started_event(&shared.env, &fresh.record()))
             .await;
-        spawn_worker(
-            workers,
+        let generation = {
+            let entry = pool.generations.entry(id).or_insert(0);
+            *entry += 1;
+            *entry
+        };
+        let handle = spawn_worker(
+            pool.workers,
             Arc::clone(shared),
-            fresh,
+            Arc::clone(&fresh),
             control_rx,
             msg_tx.clone(),
             cancel.clone(),
+            generation,
         );
+        pool.task_ids.insert(id, handle.id());
+        pool.worker_tasks.insert(id, handle);
+        pool.last_offsets.insert(id, fresh.next());
         return true;
     }
     false
@@ -1385,6 +1552,10 @@ struct SegmentWorker {
     next: u64,
     /// Consecutive failed attempts on the current range.
     failures: u32,
+    /// Which worker of this segment this is: the first spawn is 1, and every eviction
+    /// bumps it so a stale message from the aborted worker cannot be mistaken for the
+    /// replacement's.
+    generation: u32,
 }
 
 impl SegmentWorker {
@@ -1753,12 +1924,16 @@ impl SegmentWorker {
     }
 
     fn complete(&self) {
-        let _ = self.msg_tx.send(WorkerMsg::Completed { id: self.seg.id });
+        let _ = self.msg_tx.send(WorkerMsg::Completed {
+            id: self.seg.id,
+            generation: self.generation,
+        });
     }
 
     fn stop(&self, error: CoreError, resumable: bool) {
         let _ = self.msg_tx.send(WorkerMsg::Stopped {
             id: self.seg.id,
+            generation: self.generation,
             error,
             resumable,
         });
