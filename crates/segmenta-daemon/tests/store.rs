@@ -364,7 +364,9 @@ fn settings_update_validates_types_ranges_and_unknown_keys() {
 
     for bad in [
         json!({ "max_connections": 0 }),
-        json!({ "max_connections": 33 }),
+        // The ceiling is 128 since the adaptive engine landed; 129 is past it. 33 is a
+        // valid value now, and a test that still rejected it would pin the old limit.
+        json!({ "max_connections": 129 }),
         json!({ "max_retries": 21 }),
         json!({ "unknown_key": true }),
         json!({ "proxy_mode": "often" }),
