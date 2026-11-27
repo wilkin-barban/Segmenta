@@ -320,6 +320,34 @@ pub fn present(
             }
         }),
     );
+    // DNS settings: persists immediately through `settings.update`.
+    let dns_save: Rc<dyn Fn(Value)> = Rc::new({
+        let bus = Rc::clone(&bus);
+        let client = Arc::clone(&client);
+        move |patch: Value| {
+            bus.spawn(&client, "settings.update", patch);
+        }
+    });
+    let dns = dns_page(&DnsSettings::default(), Rc::clone(&dns_save));
+    load_dns_settings(&dns, Arc::clone(&client));
+
+    // Site rules: per-domain overrides for user agent and connections.
+    let site_rule_bus = Rc::clone(&bus);
+    let site_rule_client = Arc::clone(&client);
+    let site_rule_call: RpcCall = Rc::new({
+        let bus = Rc::clone(&site_rule_bus);
+        let client = Arc::clone(&site_rule_client);
+        move |method: &str, params: Value| {
+            bus.spawn(&client, method, params);
+        }
+    });
+    let site_rules = site_rules_page(&[], Rc::clone(&site_rule_call));
+    load_site_rules(
+        &site_rules.list,
+        Arc::clone(&site_rule_client),
+        Rc::clone(&site_rule_call),
+    );
+
     // The stored logins are fetched when the dialog opens; a rejected call leaves the
     // empty state instead of pretending the list is authoritative.
     load_site_logins(
@@ -335,6 +363,8 @@ pub fn present(
     add_bottom_inset(&capture);
     add_bottom_inset(&browsers_page_widget);
     add_bottom_inset(&antivirus.page);
+    add_bottom_inset(&dns.page);
+    add_bottom_inset(&site_rules.page);
     add_bottom_inset(&site_logins.page);
     add_bottom_inset(&about);
 
@@ -343,6 +373,8 @@ pub fn present(
     dialog.add(&capture);
     dialog.add(&browsers_page_widget);
     dialog.add(&antivirus.page);
+    dialog.add(&dns.page);
+    dialog.add(&site_rules.page);
     dialog.add(&site_logins.page);
     dialog.add(&about);
 
@@ -1628,6 +1660,474 @@ fn site_login_subtitle(entry: &SiteLoginEntry) -> String {
         return tr(locale(), Msg::SiteLoginLegacyNoOrigin).to_string();
     }
     entry.username.clone()
+}
+
+/// Settings for the encrypted DNS resolver.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct DnsSettings {
+    #[serde(default = "default_dns_mode")]
+    pub dns_mode: String,
+    #[serde(default = "default_dns_provider")]
+    pub dns_provider: String,
+    #[serde(default)]
+    pub dns_custom_url: String,
+}
+
+fn default_dns_mode() -> String {
+    "system".to_string()
+}
+
+fn default_dns_provider() -> String {
+    "cloudflare".to_string()
+}
+
+impl Default for DnsSettings {
+    fn default() -> Self {
+        Self {
+            dns_mode: default_dns_mode(),
+            dns_provider: default_dns_provider(),
+            dns_custom_url: String::new(),
+        }
+    }
+}
+
+impl DnsSettings {
+    pub fn from_value(value: &serde_json::Value) -> Self {
+        serde_json::from_value(value.clone()).unwrap_or_default()
+    }
+}
+
+/// DNS preferences page (Hito 1 S3, T4, T8).
+pub struct DnsPage {
+    pub page: adw::PreferencesPage,
+    pub group: adw::PreferencesGroup,
+    pub mode: adw::ComboRow,
+    pub provider: adw::ComboRow,
+    pub custom_url: adw::EntryRow,
+    pub dot_note: adw::ActionRow,
+    loading: std::rc::Rc<std::cell::Cell<bool>>,
+}
+
+impl DnsPage {
+    pub fn dot_note(&self) -> &adw::ActionRow {
+        &self.dot_note
+    }
+
+    pub fn dot_warning(&self) -> &adw::ActionRow {
+        &self.dot_note
+    }
+}
+
+/// Builds the DNS configuration page.
+///
+/// `save` receives the `settings.update` patch for one control.
+pub fn dns_page(settings: &DnsSettings, save: std::rc::Rc<dyn Fn(serde_json::Value)>) -> DnsPage {
+    let page = adw::PreferencesPage::builder()
+        .title("DNS")
+        .icon_name("network-workgroup-symbolic")
+        .build();
+    let group = adw::PreferencesGroup::builder()
+        .title("DNS cifrado")
+        .description("Resolución de nombres mediante DNS sobre HTTPS o TLS")
+        .build();
+
+    let modes = gtk::StringList::new(&["system", "doh", "dot"]);
+    let current_mode = match settings.dns_mode.as_str() {
+        "doh" => 1,
+        "dot" => 2,
+        _ => 0,
+    };
+    let mode = adw::ComboRow::builder()
+        .title("Modo de DNS")
+        .model(&modes)
+        .selected(current_mode)
+        .build();
+    group.add(&mode);
+
+    let providers = gtk::StringList::new(&["cloudflare", "quad9", "google"]);
+    let current_provider = match settings.dns_provider.as_str() {
+        "quad9" => 1,
+        "google" => 2,
+        _ => 0,
+    };
+    let provider = adw::ComboRow::builder()
+        .title("Proveedor DoH")
+        .subtitle("Proveedor conocido para consultas DoH")
+        .model(&providers)
+        .selected(current_provider)
+        .sensitive(current_mode == 1)
+        .build();
+    group.add(&provider);
+
+    let custom_url = adw::EntryRow::builder()
+        .title("URL personalizada DoH")
+        .text(&settings.dns_custom_url)
+        .build();
+    group.add(&custom_url);
+
+    let dot_note = adw::ActionRow::builder()
+        .title("DoT no está disponible en esta compilación")
+        .subtitle("Esta versión no incluye el cliente TLS necesario para resolver DNS sobre TLS. Use DoH o el DNS del sistema.")
+        .visible(current_mode == 2)
+        .build();
+    dot_note.add_prefix(&gtk::Image::from_icon_name("dialog-warning-symbolic"));
+    dot_note.add_css_class("warning");
+    group.add(&dot_note);
+
+    page.add(&group);
+
+    let loading = std::rc::Rc::new(std::cell::Cell::new(false));
+
+    {
+        let save = std::rc::Rc::clone(&save);
+        let provider_row = provider.clone();
+        let dot_row = dot_note.clone();
+        let loading = std::rc::Rc::clone(&loading);
+        mode.connect_selected_notify(move |row| {
+            let is_doh = row.selected() == 1;
+            let is_dot = row.selected() == 2;
+            provider_row.set_sensitive(is_doh);
+            dot_row.set_visible(is_dot);
+            if loading.get() {
+                return;
+            }
+            let name = match row.selected() {
+                1 => "doh",
+                2 => "dot",
+                _ => "system",
+            };
+            save(serde_json::json!({ "dns_mode": name }));
+        });
+    }
+
+    {
+        let save = std::rc::Rc::clone(&save);
+        let loading = std::rc::Rc::clone(&loading);
+        provider.connect_selected_notify(move |row| {
+            if loading.get() {
+                return;
+            }
+            let name = match row.selected() {
+                1 => "quad9",
+                2 => "google",
+                _ => "cloudflare",
+            };
+            save(serde_json::json!({ "dns_provider": name }));
+        });
+    }
+
+    {
+        let save = std::rc::Rc::clone(&save);
+        let loading = std::rc::Rc::clone(&loading);
+        custom_url.connect_apply(move |row| {
+            if loading.get() {
+                return;
+            }
+            save(serde_json::json!({ "dns_custom_url": row.text().trim() }));
+        });
+    }
+
+    DnsPage {
+        page,
+        group,
+        mode,
+        provider,
+        custom_url,
+        dot_note,
+        loading,
+    }
+}
+
+/// Load the DNS settings from `settings.get` and paint the controls from the main loop.
+pub fn load_dns_settings(dns: &DnsPage, client: Arc<dyn Client>) {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let answer = client.request("settings.get", serde_json::json!({}));
+        let _ = sender.send(answer);
+    });
+    let mode_row = dns.mode.downgrade();
+    let provider_row = dns.provider.downgrade();
+    let custom_url_row = dns.custom_url.downgrade();
+    let dot_note = dns.dot_note.downgrade();
+    let loading = std::rc::Rc::clone(&dns.loading);
+    crate::glib::timeout_add_local(std::time::Duration::from_millis(50), move || match receiver
+        .try_recv()
+    {
+        Ok(Ok(value)) => {
+            let dns_settings = DnsSettings::from_value(&value);
+            if let (Some(mode_w), Some(prov_w), Some(url_w), Some(dot_w)) = (
+                mode_row.upgrade(),
+                provider_row.upgrade(),
+                custom_url_row.upgrade(),
+                dot_note.upgrade(),
+            ) {
+                loading.set(true);
+                let mode_idx = match dns_settings.dns_mode.as_str() {
+                    "doh" => 1,
+                    "dot" => 2,
+                    _ => 0,
+                };
+                mode_w.set_selected(mode_idx);
+                let prov_idx = match dns_settings.dns_provider.as_str() {
+                    "quad9" => 1,
+                    "google" => 2,
+                    _ => 0,
+                };
+                prov_w.set_selected(prov_idx);
+                prov_w.set_sensitive(mode_idx == 1);
+                url_w.set_text(&dns_settings.dns_custom_url);
+                dot_w.set_visible(mode_idx == 2);
+                loading.set(false);
+            }
+            crate::glib::ControlFlow::Break
+        }
+        Ok(Err(_)) => crate::glib::ControlFlow::Break,
+        Err(std::sync::mpsc::TryRecvError::Empty) => crate::glib::ControlFlow::Continue,
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => crate::glib::ControlFlow::Break,
+    });
+}
+
+/// One stored site rule as reported by the daemon.
+///
+/// Headers live in the secret store and are never exposed here or rendered in the GUI.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct SiteRuleEntry {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub domain_pattern: String,
+    #[serde(default)]
+    pub user_agent: Option<String>,
+    #[serde(default)]
+    pub max_connections: Option<i64>,
+}
+
+/// Site rules page (S4, T5, T8): per-domain overrides for user agent and connection limits.
+///
+/// Sensitive headers live in the secret store and are never displayed or edited here.
+pub struct SiteRulesPage {
+    pub page: adw::PreferencesPage,
+    pub group: adw::PreferencesGroup,
+    pub domain_pattern: adw::EntryRow,
+    pub user_agent: adw::EntryRow,
+    pub max_connections: adw::SpinRow,
+    pub add: gtk::Button,
+    pub list: gtk::ListBox,
+    pub error: gtk::Label,
+    pub removals: std::cell::RefCell<Vec<gtk::Button>>,
+}
+
+impl SiteRulesPage {
+    /// Replace the listed rules, keeping the same call sink.
+    pub fn set_entries(&self, entries: &[SiteRuleEntry], call: RpcCall) {
+        while let Some(child) = self.list.first_child() {
+            self.list.remove(&child);
+        }
+        *self.removals.borrow_mut() = render_site_rule_rows(&self.list, entries, call);
+    }
+}
+
+/// Builds the Site rules page.
+///
+/// `call` receives the JSON-RPC method and params; the caller decides how to send them, so
+/// the page stays testable without a daemon.
+pub fn site_rules_page(entries: &[SiteRuleEntry], call: RpcCall) -> SiteRulesPage {
+    let page = adw::PreferencesPage::builder()
+        .title("Reglas de sitios")
+        .icon_name("network-server-symbolic")
+        .build();
+    let group = adw::PreferencesGroup::builder()
+        .title("Reglas por sitio")
+        .description("Configuración personalizada de agente de usuario y conexiones por dominio")
+        .build();
+
+    let domain_pattern = adw::EntryRow::builder().title("Patrón de dominio").build();
+    domain_pattern.set_tooltip_text(Some("ej. example.com o *.example.com"));
+    group.add(&domain_pattern);
+
+    let user_agent = adw::EntryRow::builder()
+        .title("Agente de usuario (opcional)")
+        .build();
+    group.add(&user_agent);
+
+    let max_connections = adw::SpinRow::with_range(0.0, 128.0, 1.0);
+    max_connections.set_title("Tope de conexiones");
+    max_connections.set_subtitle("0 para usar el ajuste global (máximo 128)");
+    max_connections.set_value(0.0);
+    group.add(&max_connections);
+
+    let add = gtk::Button::with_label("Añadir regla");
+    add.add_css_class("suggested-action");
+    let actions = adw::ActionRow::builder().build();
+    actions.add_suffix(&add);
+    group.add(&actions);
+
+    let error = gtk::Label::new(None);
+    error.add_css_class("error");
+    error.set_visible(false);
+    error.set_wrap(true);
+    let error_row = adw::ActionRow::builder().build();
+    error_row.add_suffix(&error);
+    group.add(&error_row);
+
+    let list = gtk::ListBox::new();
+    list.set_selection_mode(gtk::SelectionMode::None);
+    let removals = render_site_rule_rows(&list, entries, std::rc::Rc::clone(&call));
+    let list_row = adw::ActionRow::builder().build();
+    list_row.add_suffix(&list);
+    group.add(&list_row);
+    page.add(&group);
+
+    {
+        let call = std::rc::Rc::clone(&call);
+        let domain_row = domain_pattern.clone();
+        let ua_row = user_agent.clone();
+        let conns_row = max_connections.clone();
+        let error_label = error.clone();
+        add.connect_clicked(move |_| {
+            let pattern = domain_row.text().trim().to_string();
+            if pattern.is_empty() {
+                error_label.set_text("El patrón de dominio es obligatorio");
+                error_label.set_visible(true);
+                return;
+            }
+            error_label.set_visible(false);
+            let ua_text = ua_row.text().trim().to_string();
+            let ua = if ua_text.is_empty() {
+                None
+            } else {
+                Some(ua_text)
+            };
+            let val = conns_row.value().round() as i64;
+            let conns = if val > 0 { Some(val) } else { None };
+
+            let mut params = serde_json::json!({
+                "domain_pattern": pattern,
+            });
+            if let Some(u) = ua {
+                params["user_agent"] = serde_json::Value::String(u);
+            }
+            if let Some(c) = conns {
+                params["max_connections"] = serde_json::Value::Number(c.into());
+            }
+
+            call("site_rule.set", params);
+            domain_row.set_text("");
+            ua_row.set_text("");
+            conns_row.set_value(0.0);
+        });
+    }
+
+    SiteRulesPage {
+        page,
+        group,
+        domain_pattern,
+        user_agent,
+        max_connections,
+        add,
+        list,
+        error,
+        removals: std::cell::RefCell::new(removals),
+    }
+}
+
+/// Fill the list box with one row per site rule and return the remove buttons.
+fn render_site_rule_rows(
+    list: &gtk::ListBox,
+    entries: &[SiteRuleEntry],
+    call: RpcCall,
+) -> Vec<gtk::Button> {
+    let mut removals = Vec::new();
+    for entry in entries {
+        let row = adw::ActionRow::builder()
+            .title(entry.domain_pattern.clone())
+            .subtitle(site_rule_subtitle(entry))
+            .build();
+        let remove = gtk::Button::with_label("Eliminar");
+        remove.add_css_class("destructive-action");
+        let id = entry.id.clone();
+        let pattern = entry.domain_pattern.clone();
+        let call = std::rc::Rc::clone(&call);
+        remove.connect_clicked(move |_| {
+            call(
+                "site_rule.remove",
+                serde_json::json!({ "id": id.clone(), "domain_pattern": pattern.clone() }),
+            );
+        });
+        row.add_suffix(&remove);
+        removals.push(remove);
+        list.append(&row);
+    }
+    if entries.is_empty() {
+        let empty = adw::ActionRow::builder()
+            .title("No hay reglas de sitios configuradas")
+            .build();
+        list.append(&empty);
+    }
+    removals
+}
+
+/// Subtitle for a site rule row: lists user agent and connection cap, never any header or secret.
+fn site_rule_subtitle(entry: &SiteRuleEntry) -> String {
+    let mut parts = Vec::new();
+    if let Some(ua) = &entry.user_agent {
+        if !ua.trim().is_empty() {
+            parts.push(format!("Agente: {ua}"));
+        }
+    }
+    if let Some(max_conn) = entry.max_connections {
+        if max_conn > 0 {
+            parts.push(format!("Conexiones: {max_conn}"));
+        }
+    }
+    if parts.is_empty() {
+        "Ajustes predeterminados".to_string()
+    } else {
+        parts.join(" • ")
+    }
+}
+
+/// Parse a `site_rule.list` answer into the page model, ignoring headers or aliases if present.
+pub fn site_rule_entries(value: &serde_json::Value) -> Vec<SiteRuleEntry> {
+    let array = value
+        .as_array()
+        .or_else(|| value.get("rules").and_then(|v| v.as_array()))
+        .or_else(|| value.get("site_rules").and_then(|v| v.as_array()));
+    array
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| serde_json::from_value::<SiteRuleEntry>(row.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Load the stored site rules and repaint the list from the main loop.
+pub fn load_site_rules(list: &gtk::ListBox, client: Arc<dyn Client>, call: RpcCall) {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        // One name, the one the daemon implements: a silent fallback to a second name
+        // would leave the page empty and the error unreadable.
+        let answer = client.request("site_rule.list", serde_json::json!({}));
+        let _ = sender.send(answer);
+    });
+    let weak = list.downgrade();
+    crate::glib::timeout_add_local(std::time::Duration::from_millis(50), move || match receiver
+        .try_recv()
+    {
+        Ok(Ok(value)) => {
+            if let Some(list) = weak.upgrade() {
+                while let Some(child) = list.first_child() {
+                    list.remove(&child);
+                }
+                render_site_rule_rows(&list, &site_rule_entries(&value), std::rc::Rc::clone(&call));
+            }
+            crate::glib::ControlFlow::Break
+        }
+        Ok(Err(_)) => crate::glib::ControlFlow::Break,
+        Err(std::sync::mpsc::TryRecvError::Empty) => crate::glib::ControlFlow::Continue,
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => crate::glib::ControlFlow::Break,
+    });
 }
 
 #[cfg(test)]
