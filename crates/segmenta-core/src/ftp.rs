@@ -17,13 +17,17 @@
 //! * A configured `vpn_interface` is honoured; a dead tunnel refuses the transfer.
 
 use std::net::SocketAddr;
+use std::path::Path;
 use std::time::Duration;
 
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use url::Url;
 
+use crate::disk::DiskWriter;
 use crate::error::{CoreError, Result};
+use crate::hostlimits::HostLimits;
+use crate::planner::{self, SegmentRange};
 
 /// What the server says about the object before any byte is transferred.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -328,6 +332,129 @@ pub async fn probe(url: &Url, cfg: &FtpConfig) -> Result<FtpProbe> {
     let modified = control.modified(&target.path).await?;
     control.quit().await;
     Ok(FtpProbe { size, modified })
+}
+
+/// Download `url` into `path`, segmented when the size is known.
+///
+/// Returns the bytes written. A server that refuses `SIZE` still transfers: the whole file
+/// is read in one stream and written sequentially.
+pub async fn download(
+    url: &Url,
+    path: &Path,
+    cfg: &FtpConfig,
+    limits: Option<&HostLimits>,
+    cancel: &crate::engine::Canceller,
+) -> Result<u64> {
+    let target = FtpTarget::parse(url).ok_or_else(|| CoreError::InvalidUrl(url.to_string()))?;
+    let probe = probe(url, cfg).await?;
+    let total = probe.size;
+    let (_writer, _outcome) = DiskWriter::create_new(path, total)?;
+    let writer = std::sync::Arc::new(_writer);
+    let ranges: Vec<SegmentRange> = match total {
+        Some(total) => planner::initial_segments(total, capped(cfg, limits, &target.host)),
+        None => vec![SegmentRange {
+            start: 0,
+            end: u64::MAX,
+        }],
+    };
+    let mut handles = Vec::new();
+    for range in ranges {
+        let target = target.clone();
+        let cfg = cfg.clone();
+        let writer = std::sync::Arc::clone(&writer);
+        let cancel = cancel.clone();
+        handles.push(tokio::spawn(async move {
+            transfer_segment(&target, range, &cfg, writer, &cancel).await
+        }));
+    }
+    let mut written = 0u64;
+    for handle in handles {
+        written += handle
+            .await
+            .map_err(|err| CoreError::Network(format!("ftp segment task: {err}")))??;
+    }
+    writer.sync_all()?;
+    Ok(written)
+}
+
+fn capped(cfg: &FtpConfig, limits: Option<&HostLimits>, host: &str) -> u32 {
+    let requested = cfg.connections.max(1);
+    match limits {
+        Some(limits) => requested.min(limits.limit(host).max(1) as u32),
+        None => requested,
+    }
+}
+
+/// Move one range: control → passive → data → REST → RETR → write at offsets.
+async fn transfer_segment(
+    target: &FtpTarget,
+    range: SegmentRange,
+    cfg: &FtpConfig,
+    writer: std::sync::Arc<DiskWriter>,
+    cancel: &crate::engine::Canceller,
+) -> Result<u64> {
+    let mut control = Control::open(target, cfg).await?;
+    let port = control.passive_port().await?;
+    let data_addr = resolve(&target.host, port, cfg).await?;
+    let mut data = connect(data_addr, cfg).await?;
+    if range.start > 0 {
+        let reply = control.command(&format!("REST {}", range.start)).await?;
+        if reply.code != 350 {
+            return Err(CoreError::Network(format!(
+                "ftp refused REST {}: {} {}",
+                range.start, reply.code, reply.message
+            )));
+        }
+    }
+    // `150` (or `125`) is the preliminary answer that opens the data connection; the final
+    // `226` only arrives once the stream ends. Requiring 2xx here would refuse every
+    // well-behaved server.
+    let reply = control.command(&format!("RETR {}", target.path)).await?;
+    if !(reply.code == 125 || reply.code == 150 || reply.is_success()) {
+        return Err(CoreError::Network(format!(
+            "ftp refused RETR: {} {}",
+            reply.code, reply.message
+        )));
+    }
+
+    let mut offset = range.start;
+    let mut buffer = vec![0u8; 64 * 1024];
+    let mut written = 0u64;
+    loop {
+        if cancel.is_cancelled() {
+            break;
+        }
+        let read = tokio::time::timeout(cfg.timeout, data.read(&mut buffer))
+            .await
+            .map_err(|_| CoreError::Network("ftp data read timed out".to_string()))?
+            .map_err(|err| CoreError::Network(err.to_string()))?;
+        if read == 0 {
+            break;
+        }
+        let chunk = &buffer[..read];
+        // A single range may be shorter than the stream when the server ignores REST.
+        let allowed = if range.end == u64::MAX {
+            chunk.len() as u64
+        } else {
+            (range.end.saturating_sub(offset) + 1).min(chunk.len() as u64)
+        };
+        if allowed == 0 {
+            break;
+        }
+        writer.pwrite_all(&chunk[..allowed as usize], offset)?;
+        offset += allowed;
+        written += allowed;
+        if range.end != u64::MAX && offset > range.end {
+            break;
+        }
+    }
+    // The data connection is closed before the control one: a server keeps sending the
+    // rest of the file into a socket nobody reads, and waiting for its `226` would block
+    // for the whole timeout. For a range, closing early is the point; the bytes counted
+    // above are what actually landed.
+    drop(data);
+    control.quit().await;
+    Ok(written)
 }
 
 /// Resolve and check the destination before any socket exists.

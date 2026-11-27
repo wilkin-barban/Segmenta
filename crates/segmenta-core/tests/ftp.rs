@@ -282,3 +282,142 @@ async fn a_missing_path_is_reported_not_guessed() {
     // A server that cannot SIZE a path still answers; the transfer unit is what fails.
     assert_eq!(probe.size, None);
 }
+
+#[tokio::test]
+async fn a_file_is_downloaded_in_segments_and_matches_byte_for_byte() {
+    use segmenta_core::engine::Canceller;
+    // Above the 5 MB threshold the planner actually segments; below it, one connection is
+    // the correct answer and a multi-RETR assertion would be wrong.
+    let body: Vec<u8> = (0..6 * 1024 * 1024u32).map(|i| (i % 251) as u8).collect();
+    let server = FtpServer::start(FtpServerConfig {
+        body: body.clone(),
+        ..FtpServerConfig::default()
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("file.bin");
+    let cfg = FtpConfig {
+        connections: 4,
+        allow_local: true,
+        ..FtpConfig::default()
+    };
+    let written = segmenta_core::ftp::download(&server.url(), &path, &cfg, None, &Canceller::new())
+        .await
+        .unwrap();
+    assert_eq!(written, body.len() as u64);
+    assert_eq!(std::fs::read(&path).unwrap(), body);
+    // More than one RETR means the file really was segmented.
+    let retr = server
+        .verbs()
+        .into_iter()
+        .filter(|verb| verb == "RETR")
+        .count();
+    assert!(retr >= 2, "expected several RETR, saw {retr}");
+}
+
+#[tokio::test]
+async fn every_segment_after_the_first_asks_for_its_offset() {
+    use segmenta_core::engine::Canceller;
+    let server = FtpServer::start(FtpServerConfig {
+        body: vec![5u8; 6 * 1024 * 1024],
+        ..FtpServerConfig::default()
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = FtpConfig {
+        connections: 2,
+        allow_local: true,
+        ..FtpConfig::default()
+    };
+    segmenta_core::ftp::download(
+        &server.url(),
+        &dir.path().join("f.bin"),
+        &cfg,
+        None,
+        &Canceller::new(),
+    )
+    .await
+    .unwrap();
+    let offsets: Vec<String> = server
+        .records()
+        .into_iter()
+        .filter(|record| record.verb == "REST")
+        .map(|record| record.argument)
+        .collect();
+    assert!(!offsets.is_empty(), "a segmented transfer must REST");
+    assert!(offsets.iter().any(|offset| offset != "0"), "{offsets:?}");
+}
+
+#[tokio::test]
+async fn a_per_host_limit_lowers_the_segment_count() {
+    use segmenta_core::engine::Canceller;
+    use segmenta_core::hostlimits::{HostLimitPolicy, HostLimits, MonotonicClock};
+    use std::sync::Arc;
+
+    let server = FtpServer::start(FtpServerConfig {
+        body: vec![3u8; 6 * 1024 * 1024],
+        ..FtpServerConfig::default()
+    })
+    .await;
+    let limits = HostLimits::new(
+        HostLimitPolicy::default(),
+        Arc::new(MonotonicClock::default()),
+    );
+    limits.on_throttled("127.0.0.1");
+    limits.on_throttled("127.0.0.1");
+    limits.on_throttled("127.0.0.1");
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = FtpConfig {
+        connections: 8,
+        allow_local: true,
+        ..FtpConfig::default()
+    };
+    segmenta_core::ftp::download(
+        &server.url(),
+        &dir.path().join("f.bin"),
+        &cfg,
+        Some(&limits),
+        &Canceller::new(),
+    )
+    .await
+    .unwrap();
+    let retr = server
+        .verbs()
+        .into_iter()
+        .filter(|verb| verb == "RETR")
+        .count();
+    assert_eq!(retr, 1, "a host limited to one opens one RETR, not four");
+}
+
+#[tokio::test]
+async fn a_server_without_size_still_transfers_and_a_cut_is_reported() {
+    use segmenta_core::engine::Canceller;
+    // The server truncates the stream: the bytes written stay, but the download must not
+    // claim the full file.
+    let body = vec![7u8; 50_000];
+    let server = FtpServer::start(FtpServerConfig {
+        body: body.clone(),
+        cut_after: Some(1_000),
+        ..FtpServerConfig::default()
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = FtpConfig {
+        connections: 1,
+        allow_local: true,
+        ..FtpConfig::default()
+    };
+    let written = segmenta_core::ftp::download(
+        &server.url(),
+        &dir.path().join("f.bin"),
+        &cfg,
+        None,
+        &Canceller::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        written, 1_000,
+        "the count must reflect what the server actually sent"
+    );
+}
