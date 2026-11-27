@@ -26,6 +26,7 @@ pub mod ratelimit;
 pub mod retry;
 pub mod rules;
 pub mod siterules;
+pub mod sites;
 pub mod stream;
 pub mod urlssrf;
 

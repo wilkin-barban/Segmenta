@@ -3440,6 +3440,7 @@ dependencies = [
 name = "segmenta-core"
 version = "0.7.0"
 dependencies = [
+ "async-trait",
  "futures-util",
  "hex 0.4.3",
  "httpdate",
