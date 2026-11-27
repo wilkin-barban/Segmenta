@@ -15,6 +15,8 @@ use crate::error::{CoreError, Result};
 pub enum PreallocOutcome {
     /// `posix_fallocate` reserved the blocks.
     Fallocate,
+    /// No size was declared: nothing was reserved, and the file grows as bytes arrive.
+    Sparse,
     /// The filesystem cannot fallocate; the length was set and free space checked.
     Truncate {
         /// Free bytes reported by `fstatvfs` before truncating.
@@ -124,7 +126,10 @@ impl DiskWriter {
             .write(true)
             .create_new(true)
             .open(path)?;
-        let mut outcome = PreallocOutcome::Truncate { free_bytes: 0 };
+        // Without a declared size there is nothing to reserve: the file is created empty
+        // and every `pwrite` extends it, leaving holes where the engine has not written
+        // yet. That is what makes a kept stream readable even after a partial transfer.
+        let mut outcome = PreallocOutcome::Sparse;
         if let Some(total) = total {
             let fd = file.as_raw_fd();
             outcome = preallocate_with(

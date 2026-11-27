@@ -157,3 +157,37 @@ fn file_offset_writes_are_visible_through_std_reads() {
     file.read_exact_at(&mut buf, 0).unwrap();
     assert_eq!(&buf, b"aabbcc");
 }
+
+#[test]
+fn an_unknown_length_creates_a_sparse_file_that_grows_with_writes() {
+    // A stream with no Content-Length cannot be preallocated: the file starts empty and
+    // grows as bytes arrive, which is what lets `download.keep` keep what was received.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("stream.bin");
+    let (writer, outcome) = DiskWriter::create_new(&path, None).unwrap();
+    assert_eq!(outcome, PreallocOutcome::Sparse);
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), 0);
+
+    writer.pwrite_all(b"hello", 0).unwrap();
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), 5);
+    // Writing past the end leaves a hole, not an error: the offset is explicit.
+    writer.pwrite_all(b"world", 10).unwrap();
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), 15);
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(&bytes[..5], b"hello");
+    assert_eq!(&bytes[5..10], &[0, 0, 0, 0, 0]);
+    assert_eq!(&bytes[10..], b"world");
+}
+
+#[test]
+fn a_known_length_is_still_preallocated_and_reported_as_such() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("known.bin");
+    let (_writer, outcome) = DiskWriter::create_new(&path, Some(4096)).unwrap();
+    assert_ne!(
+        outcome,
+        PreallocOutcome::Sparse,
+        "a declared size must reserve, not grow on demand"
+    );
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), 4096);
+}
