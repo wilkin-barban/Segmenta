@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Current schema version, stored in `PRAGMA user_version`.
-pub const SCHEMA_VERSION: i64 = 8;
+pub const SCHEMA_VERSION: i64 = 9;
 
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
@@ -268,6 +268,45 @@ impl DownloadStatus {
                 | DownloadStatus::Finalizing
                 | DownloadStatus::Retrying
         )
+    }
+}
+
+/// One row of `site_rules`. The headers themselves live in the secret store; only the
+/// alias that points at them is persisted here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SiteRuleRecord {
+    /// Stable identifier.
+    pub id: String,
+    /// Host or parent domain the rule applies to.
+    pub domain_pattern: String,
+    /// User agent that replaces the global one.
+    pub user_agent: Option<String>,
+    /// Per-host connection ceiling.
+    pub max_connections: Option<i64>,
+    /// Send the headers a browser sends.
+    pub browser_like: bool,
+    /// Alias of the headers in the secret store.
+    pub headers_secret_id: Option<String>,
+}
+
+impl SiteRuleRecord {
+    /// Does this rule apply to `host`? Same rule as the core matcher: the host itself or a
+    /// subdomain of it, never a bare suffix of another domain.
+    pub fn matches(&self, host: &str) -> bool {
+        let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
+        let pattern = self
+            .domain_pattern
+            .trim()
+            .trim_start_matches("*.")
+            .trim_end_matches('.')
+            .to_ascii_lowercase();
+        if pattern.is_empty() || host.is_empty() {
+            return false;
+        }
+        if pattern == "*" {
+            return true;
+        }
+        host == pattern || host.ends_with(&format!(".{pattern}"))
     }
 }
 
@@ -1140,9 +1179,90 @@ impl Store {
                 );",
             )?;
         }
+        if current < 9 {
+            // Site rules are additive: one new table, no rebuild, and the existing rows of
+            // every other table stay exactly where they are.
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS site_rules (
+                    id TEXT PRIMARY KEY,
+                    domain_pattern TEXT NOT NULL UNIQUE,
+                    user_agent TEXT,
+                    max_connections INTEGER,
+                    browser_like INTEGER NOT NULL DEFAULT 0,
+                    headers_secret_id TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );",
+            )?;
+        }
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         Ok(SCHEMA_VERSION)
+    }
+
+    /// Every stored rule, newest pattern first is left to the caller.
+    pub fn site_rules(&self) -> Result<Vec<SiteRuleRecord>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, domain_pattern, user_agent, max_connections, browser_like,
+                    headers_secret_id
+             FROM site_rules
+             ORDER BY domain_pattern",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(SiteRuleRecord {
+                    id: row.get(0)?,
+                    domain_pattern: row.get(1)?,
+                    user_agent: row.get(2)?,
+                    max_connections: row.get(3)?,
+                    browser_like: row.get::<_, i64>(4)? != 0,
+                    headers_secret_id: row.get(5)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// Insert or replace one rule. The caller stores the headers in the secret store and
+    /// passes only their alias here: the database never sees a header value.
+    pub fn upsert_site_rule(&self, record: &SiteRuleRecord) -> Result<()> {
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO site_rules
+                (id, domain_pattern, user_agent, max_connections, browser_like,
+                 headers_secret_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(id) DO UPDATE SET
+                domain_pattern = excluded.domain_pattern,
+                user_agent = excluded.user_agent,
+                max_connections = excluded.max_connections,
+                browser_like = excluded.browser_like,
+                headers_secret_id = excluded.headers_secret_id",
+            params![
+                record.id,
+                record.domain_pattern,
+                record.user_agent,
+                record.max_connections,
+                record.browser_like as i64,
+                record.headers_secret_id,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Remove one rule; the secret of its headers is the caller's to delete.
+    pub fn delete_site_rule(&self, id: &str) -> Result<bool> {
+        let conn = self.lock();
+        let removed = conn.execute("DELETE FROM site_rules WHERE id = ?1", params![id])?;
+        Ok(removed > 0)
+    }
+
+    /// Rule that applies to `host`, if any. The caller resolves the headers afterwards.
+    pub fn site_rule_for(&self, host: &str) -> Result<Option<SiteRuleRecord>> {
+        Ok(self
+            .site_rules()?
+            .into_iter()
+            .find(|rule| rule.matches(host)))
     }
 
     /// Schema version of the file on disk.

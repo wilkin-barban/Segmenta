@@ -43,6 +43,9 @@ use crate::store::{
 /// is visible in the list instead of looking like a successful one.
 const ERR_FILE_DELETE_FAILED: i64 = 1048;
 
+/// Hard ceiling the engine accepts, used to clamp a stored per-site value.
+const CONNECTION_CEILING: usize = 128;
+
 /// Live numbers of a running task, kept out of the database until a checkpoint.
 #[derive(Debug, Clone, Default)]
 pub struct ProgressSnapshot {
@@ -829,29 +832,16 @@ impl Manager {
                 })?;
             }
         }
+        let mut http = self.http_config(&record.url)?;
         let (headers, sensitive) = self.request_headers(task_id)?;
-        let http = HttpConfig {
-            user_agent: format!("Segmenta/{}", crate::DAEMON_VERSION),
-            allow_local: settings.allow_local_downloads,
-            interface: vpn_interface(&settings),
-            profile: segmenta_core::probe::TlsProfile::parse(&settings.tls_profile)
-                .unwrap_or_default(),
-            proxy: if settings.proxy_mode == "manual" {
-                settings.proxy_url.clone()
-            } else if settings.proxy_mode == "none" {
-                None
-            } else {
-                std::env::var("https_proxy")
-                    .ok()
-                    .or_else(|| std::env::var("HTTPS_PROXY").ok())
-                    .or_else(|| std::env::var("http_proxy").ok())
-            },
-            headers,
-            sensitive_headers: sensitive,
-            ..HttpConfig::default()
-        };
+        http.headers = headers;
+        http.sensitive_headers = sensitive;
         let cfg = EngineConfig {
-            connections,
+            connections: http
+                .rule
+                .as_ref()
+                .map(|rule| rule.connection_limit(connections as usize, CONNECTION_CEILING) as u32)
+                .unwrap_or(connections),
             max_retries: settings.max_retries,
             http,
             speed_limit_bps: settings.global_speed_limit_bps.filter(|limit| *limit > 0),
@@ -966,6 +956,77 @@ impl Manager {
             single_stream_written: record.downloaded_bytes,
             last_error: None,
         }))
+    }
+
+    /// Rule that applies to `host`, with its headers resolved from the secret store.
+    ///
+    /// A rule whose secret cannot be read is dropped with a warning instead of failing the
+    /// download: losing an optional header must not stop a user's transfer.
+    pub fn site_rule(
+        &self,
+        host: &str,
+    ) -> Result<Option<segmenta_core::siterules::SiteRule>, RpcError> {
+        let Some(record) = self.store.site_rule_for(host).map_err(store_error)? else {
+            return Ok(None);
+        };
+        let mut headers = Vec::new();
+        if let Some(alias) = record.headers_secret_id.as_deref() {
+            match self.secrets.lookup(alias) {
+                Ok(Some(raw)) => match serde_json::from_str::<Vec<(String, String)>>(&raw) {
+                    Ok(pairs) => headers = pairs,
+                    Err(_) => {
+                        tracing::warn!(rule = %record.id, "site rule headers are not a list of pairs")
+                    }
+                },
+                Ok(None) => {}
+                Err(err) => {
+                    tracing::warn!(rule = %record.id, "cannot read site rule headers: {err}")
+                }
+            }
+        }
+        Ok(Some(segmenta_core::siterules::SiteRule {
+            domain_pattern: record.domain_pattern,
+            user_agent: record.user_agent,
+            max_connections: record
+                .max_connections
+                .and_then(|value| usize::try_from(value).ok()),
+            browser_like: record.browser_like,
+            headers,
+        }))
+    }
+
+    /// HTTP configuration for `url`: the global settings plus the rule of its host.
+    ///
+    /// Kept separate from [`Manager::request_headers`] so a rule can be inspected without
+    /// a task, and so the probe configuration has exactly one construction site.
+    pub fn http_config(&self, url: &str) -> Result<HttpConfig, RpcError> {
+        let settings = self.settings();
+        let host = url::Url::parse(url)
+            .ok()
+            .and_then(|parsed| parsed.host_str().map(str::to_string));
+        let rule = match host {
+            Some(host) => self.site_rule(&host)?,
+            None => None,
+        };
+        Ok(HttpConfig {
+            user_agent: format!("Segmenta/{}", crate::DAEMON_VERSION),
+            allow_local: settings.allow_local_downloads,
+            interface: vpn_interface(&settings),
+            profile: segmenta_core::probe::TlsProfile::parse(&settings.tls_profile)
+                .unwrap_or_default(),
+            proxy: if settings.proxy_mode == "manual" {
+                settings.proxy_url.clone()
+            } else if settings.proxy_mode == "none" {
+                None
+            } else {
+                std::env::var("https_proxy")
+                    .ok()
+                    .or_else(|| std::env::var("HTTPS_PROXY").ok())
+                    .or_else(|| std::env::var("http_proxy").ok())
+            },
+            rule,
+            ..HttpConfig::default()
+        })
     }
 
     fn request_headers(&self, task_id: &str) -> Result<(HeaderMap, HeaderMap), RpcError> {

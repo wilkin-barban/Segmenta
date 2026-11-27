@@ -105,6 +105,8 @@ pub struct HttpConfig {
     pub interface: Option<String>,
     /// TLS fingerprint the transport asks for.
     pub profile: TlsProfile,
+    /// Per-site override that applies to the host being opened, if one matches.
+    pub rule: Option<crate::siterules::SiteRule>,
 }
 
 /// TLS fingerprint a request wants to present.
@@ -154,6 +156,7 @@ impl Default for HttpConfig {
             read_timeout: Duration::from_secs(30),
             interface: None,
             profile: TlsProfile::Standard,
+            rule: None,
         }
     }
 }
@@ -197,10 +200,19 @@ impl Session {
     pub async fn open(cfg: &HttpConfig, url: &Url) -> Result<Session> {
         validate_scheme(url)?;
         let addrs = resolve_checked(url, cfg.allow_local).await?;
+        // The rule is consulted after the address passed the SSRF guard, so it can change
+        // the shape of the request but never where it goes.
+        let host = url.host_str().unwrap_or_default();
+        let rule = cfg
+            .rule
+            .as_ref()
+            .filter(|rule| rule.matches(host))
+            .cloned()
+            .unwrap_or_default();
         let mut builder = Client::builder()
             .redirect(Policy::none())
             .connect_timeout(cfg.connect_timeout)
-            .user_agent(cfg.user_agent.clone());
+            .user_agent(rule.user_agent_or(&cfg.user_agent).to_string());
         if let Some(proxy) = &cfg.proxy {
             builder =
                 builder.proxy(reqwest::Proxy::all(proxy).map_err(|err| {
@@ -216,7 +228,6 @@ impl Session {
             builder = builder.interface(interface);
         }
         cfg.unsupported_profile()?;
-        let host = url.host_str().unwrap_or_default();
         if host.parse::<IpAddr>().is_err() {
             // reqwest would resolve the name again; pin the address we validated.
             builder = builder.resolve(host, addrs[0]);
@@ -224,10 +235,24 @@ impl Session {
         let client = builder
             .build()
             .map_err(|err| CoreError::Network(err.to_string()))?;
+        let mut headers = cfg.headers.clone();
+        for (name, value) in rule.all_headers() {
+            match (
+                HeaderName::from_bytes(name.as_bytes()),
+                HeaderValue::from_str(&value),
+            ) {
+                (Ok(name), Ok(value)) => {
+                    headers.insert(name, value);
+                }
+                // A header the transport cannot represent is skipped instead of being
+                // guessed at; the request still goes out with the rest of the rule.
+                _ => continue,
+            }
+        }
         Ok(Session {
             client,
             url: url.clone(),
-            headers: cfg.headers.clone(),
+            headers,
             sensitive_headers: cfg.sensitive_headers.clone(),
             read_timeout: cfg.read_timeout,
         })

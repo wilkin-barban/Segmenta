@@ -462,7 +462,7 @@ fn migration_from_v2_to_v3_preserves_data_and_creates_torrent_tables() {
     }
     let store = Store::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 8);
+    assert_eq!(SCHEMA_VERSION, 9);
 
     let rows = store.list(None, 10, 0).unwrap();
     assert_eq!(rows.len(), 1);
@@ -943,7 +943,7 @@ fn a_legacy_site_login_is_listed_but_never_used_for_injection() {
 
 #[test]
 fn migration_from_v5_to_v6_adds_scheduled_at_column_and_preserves_rows() {
-    assert_eq!(SCHEMA_VERSION, 8);
+    assert_eq!(SCHEMA_VERSION, 9);
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("segmenta-v5.db");
     {
@@ -1033,7 +1033,7 @@ fn a_v6_database_gains_packages_without_touching_its_downloads() {
     drop(conn);
 
     let migrated = Store::open(&dir.path().join("segmenta.db")).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 8);
+    assert_eq!(migrated.schema_version().unwrap(), SCHEMA_VERSION);
     let kept = migrated.get("kept").unwrap().unwrap();
     assert_eq!(kept.id, "kept");
     assert!(migrated.packages().unwrap().is_empty());

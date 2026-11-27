@@ -150,3 +150,15 @@ CREATE TABLE IF NOT EXISTS rss_seen_items (
     first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (feed_id, guid)
 );
+
+-- Reglas por sitio: cómo pedir un host concreto (v9). Los headers sensibles no viven
+-- aquí: `headers_secret_id` es el alias con el que el almacén de secretos los guarda.
+CREATE TABLE IF NOT EXISTS site_rules (
+    id TEXT PRIMARY KEY,
+    domain_pattern TEXT NOT NULL UNIQUE,
+    user_agent TEXT,
+    max_connections INTEGER,
+    browser_like INTEGER NOT NULL DEFAULT 0,
+    headers_secret_id TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
