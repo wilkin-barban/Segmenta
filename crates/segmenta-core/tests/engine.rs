@@ -715,3 +715,119 @@ async fn zero_byte_download_creates_an_empty_file() {
     );
     server.shutdown().await;
 }
+
+/// A host that answers 429 lowers the shared limit, and the next generation starts smaller.
+///
+/// The registry is observed through the same `Arc` the engine used, so this is the wiring
+/// and not a unit test of the module (which has its own suite).
+#[tokio::test]
+async fn a_429_lowers_the_host_limit_shared_by_the_daemon() {
+    use segmenta_core::hostlimits::{HostLimitPolicy, HostLimits};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    struct Frozen;
+    impl segmenta_core::hostlimits::Clock for Frozen {
+        fn elapsed_ms(&self) -> u64 {
+            0
+        }
+    }
+
+    let limits = Arc::new(HostLimits::new(
+        HostLimitPolicy {
+            initial: 8,
+            ceiling: 128,
+            penalty: Duration::from_secs(60),
+            decay: Duration::from_secs(15),
+        },
+        Arc::new(Frozen),
+    ));
+    let server = RangeServer::start(ServerConfig {
+        body: payload(2 * MB),
+        force_status: Some(429),
+        ..ServerConfig::default()
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = local_cfg(4);
+    cfg.max_retries = 1;
+    cfg.host_limits = Some(Arc::clone(&limits));
+    let host = server.url().host_str().unwrap().to_string();
+
+    let outcome = run_to_end(cfg, spec_for(server.url(), dir.path().join("f.bin")))
+        .await
+        .0;
+    assert!(
+        matches!(
+            outcome,
+            TaskOutcome::Failed { .. } | TaskOutcome::Paused { .. }
+        ),
+        "a permanent 429 must not look like success: {outcome:?}"
+    );
+    // The probe tries once and retries once (max_retries = 1), so the host refused twice
+    // and each refusal halves: 8 -> 4 -> 2. Going lower with more refusals is the point.
+    assert_eq!(
+        limits.limit(&host),
+        2,
+        "every refusal must halve the shared limit"
+    );
+}
+
+/// The per-host limit caps the workers of a generation even when the caller asks for more.
+#[tokio::test]
+async fn a_lowered_host_limit_caps_the_workers_of_the_next_generation() {
+    use segmenta_core::hostlimits::{HostLimitPolicy, HostLimits};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    struct Frozen;
+    impl segmenta_core::hostlimits::Clock for Frozen {
+        fn elapsed_ms(&self) -> u64 {
+            0
+        }
+    }
+
+    let limits = Arc::new(HostLimits::new(
+        HostLimitPolicy {
+            initial: 8,
+            ceiling: 128,
+            penalty: Duration::from_secs(60),
+            decay: Duration::from_secs(15),
+        },
+        Arc::new(Frozen),
+    ));
+    let server = RangeServer::start(ServerConfig {
+        body: payload(8 * MB),
+        slow: Some(Duration::from_millis(20)),
+        ..ServerConfig::default()
+    })
+    .await;
+    let host = server.url().host_str().unwrap().to_string();
+    // Two refusals leave the host at two connections before the run starts.
+    limits.on_throttled(&host);
+    limits.on_throttled(&host);
+    assert_eq!(limits.limit(&host), 2);
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = local_cfg(8);
+    cfg.host_limits = Some(Arc::clone(&limits));
+    let (outcome, events) = run_to_end(cfg, spec_for(server.url(), dir.path().join("f.bin"))).await;
+    assert!(
+        matches!(outcome, TaskOutcome::Completed { .. }),
+        "{outcome:?}"
+    );
+    // The plan is what bounds the workers: at most `limit` segments may start, and no
+    // split may add one. Counting sockets would measure retries instead of concurrency.
+    let started = events
+        .iter()
+        .filter(|event| matches!(event, EngineEvent::SegmentStarted { .. }))
+        .count();
+    let splits = events
+        .iter()
+        .filter(|event| matches!(event, EngineEvent::SegmentSplit { .. }))
+        .count();
+    assert!(
+        started <= 2 && splits == 0,
+        "a host limited to 2 started {started} segments with {splits} splits"
+    );
+}

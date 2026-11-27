@@ -88,6 +88,9 @@ pub struct DonorChoice {
     pub clamped_next: u64,
 }
 
+/// Hard bound shared with [`crate::hostlimits::MAX_CONNECTIONS`].
+const CEILING: u32 = crate::hostlimits::MAX_CONNECTIONS as u32;
+
 /// Bytes still to download in `[next, end]`.
 pub fn remaining(end: u64, next: u64) -> u64 {
     if next > end {
@@ -97,17 +100,22 @@ pub fn remaining(end: u64, next: u64) -> u64 {
     }
 }
 
-/// Connection count implied by the file size and the user's preference (1-32).
+/// Connection count implied by the file size and the user's preference (1-128).
+///
+/// The ceiling is [`crate::hostlimits::MAX_CONNECTIONS`]; a per-host limit can lower it
+/// further, never raise it.
 pub fn connections_for(total: u64, requested: u32) -> u32 {
-    let requested = requested.clamp(1, 32);
+    let requested = requested.clamp(1, CEILING);
+    // The size only *reduces* the request. A user who asks for one connection on a 10 MB
+    // file gets one; asking for many never goes past what the size justifies.
     let by_size = if total < 5 * MB {
         1
     } else if total < 50 * MB {
         4
     } else {
-        requested
+        CEILING
     };
-    by_size.clamp(1, 32)
+    requested.min(by_size).clamp(1, CEILING)
 }
 
 /// Split `total` bytes into `segments` contiguous ranges.
@@ -116,7 +124,7 @@ pub fn segments_for(total: u64, segments: u32) -> Vec<SegmentRange> {
         return Vec::new();
     }
     // Never create more segments than bytes: every range must hold at least one byte.
-    let count = u64::from(segments.clamp(1, 32)).min(total) as u32;
+    let count = u64::from(segments.clamp(1, CEILING)).min(total) as u32;
     let chunk = total / u64::from(count);
     (0..count)
         .map(|i| {
@@ -186,4 +194,33 @@ pub fn choose_donor(candidates: &[DonorView]) -> Option<DonorChoice> {
         midpoint,
         clamped_next: midpoint + 1,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_connection_ceiling_is_one_hundred_and_twenty_eight() {
+        // A large file honours the request, and the request cannot widen the ceiling.
+        assert_eq!(connections_for(500 * MB, 64), 64);
+        assert_eq!(connections_for(500 * MB, 200), 128);
+        assert_eq!(connections_for(500 * MB, u32::MAX), 128);
+        // Small files keep the conservative plan: the size still decides first.
+        assert_eq!(connections_for(MB, 64), 1);
+        assert_eq!(connections_for(10 * MB, 64), 4);
+        // Zero means one connection, never none.
+        assert_eq!(connections_for(500 * MB, 0), 1);
+    }
+
+    #[test]
+    fn segments_accept_the_same_ceiling_and_cover_every_byte() {
+        let ranges = segments_for(200 * MB, 128);
+        assert_eq!(ranges.len(), 128);
+        assert_eq!(ranges.first().unwrap().start, 0);
+        assert_eq!(ranges.last().unwrap().end, 200 * MB - 1);
+        // More segments than input bytes cannot create empty ranges.
+        assert_eq!(segments_for(3, 128).len(), 3);
+        assert_eq!(segments_for(0, 128).len(), 0);
+    }
 }

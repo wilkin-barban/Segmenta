@@ -17,8 +17,10 @@ fn connection_count_follows_size_thresholds() {
     assert_eq!(connections_for(50 * MB - 1, 16), 4);
     assert_eq!(connections_for(50 * MB, 16), 16);
     assert_eq!(connections_for(2 * 1024 * MB, 32), 32);
-    // The user request is capped at 32 connections.
-    assert_eq!(connections_for(2 * 1024 * MB, 64), 32);
+    // The user request is capped at 128 connections. It used to be 32; the per-host
+    // adaptive limit is what keeps a smaller number when the host asks for one.
+    assert_eq!(connections_for(2 * 1024 * MB, 64), 64);
+    assert_eq!(connections_for(2 * 1024 * MB, 200), 128);
     assert_eq!(connections_for(2 * 1024 * MB, 0), 1);
 }
 
@@ -73,7 +75,8 @@ fn initial_segmentation_respects_the_size_thresholds() {
     assert_eq!(initial_segments(5 * MB, 16).len(), 4);
     assert_eq!(initial_segments(50 * MB, 16).len(), 16);
     assert_eq!(initial_segments(50 * MB, 8).len(), 8);
-    assert_eq!(initial_segments(50 * MB, 99).len(), 32);
+    assert_eq!(initial_segments(50 * MB, 99).len(), 99);
+    assert_eq!(initial_segments(50 * MB, 200).len(), 128);
 }
 
 #[test]

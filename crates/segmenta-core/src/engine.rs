@@ -53,7 +53,7 @@ const SPLIT_CHANNEL_CAPACITY: usize = 4;
 /// Engine tuning knobs.
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
-    /// Connections to use when the plan is derived from the file size (1-32).
+    /// Connections to use when the plan is derived from the file size (1-128).
     pub connections: u32,
     /// Consecutive failures tolerated per worker before the task pauses.
     pub max_retries: u32,
@@ -63,6 +63,8 @@ pub struct EngineConfig {
     pub speed_limit_bps: Option<u64>,
     /// Read/write buffer granularity.
     pub chunk_size: usize,
+    /// Per-host adaptive limit shared by every task of the daemon.
+    pub host_limits: Option<std::sync::Arc<crate::hostlimits::HostLimits>>,
 }
 
 impl Default for EngineConfig {
@@ -73,6 +75,7 @@ impl Default for EngineConfig {
             http: HttpConfig::default(),
             speed_limit_bps: None,
             chunk_size: 64 * 1024,
+            host_limits: None,
         }
     }
 }
@@ -398,6 +401,13 @@ enum ProbeStep {
     Stopped(TaskOutcome),
 }
 
+/// Report a throttling answer seen during probing, if a registry was supplied.
+fn report_probe_throttled(cfg: &EngineConfig, spec: &DownloadSpec) {
+    if let (Some(limits), Some(host)) = (&cfg.host_limits, spec.url.host_str()) {
+        limits.on_throttled(host);
+    }
+}
+
 async fn probe_step(cfg: &EngineConfig, spec: &DownloadSpec, cancel: &Canceller) -> ProbeStep {
     let mut attempt = 0u32;
     loop {
@@ -412,6 +422,9 @@ async fn probe_step(cfg: &EngineConfig, spec: &DownloadSpec, cancel: &Canceller)
         match outcome {
             Ok(ProbeOutcome::Ready(info)) => return ProbeStep::Ready(info),
             Ok(ProbeOutcome::Retry { retry_after }) => {
+                // The probe is the first thing a host sees; a 429 here is the same signal
+                // as one from a worker and must lower the allowance just as early.
+                report_probe_throttled(cfg, spec);
                 if attempt >= cfg.max_retries {
                     return ProbeStep::Stopped(TaskOutcome::Failed {
                         error: CoreError::Network(format!(
@@ -576,6 +589,18 @@ enum Cycle {
 
 async fn download_generation(job: &Job<'_>) -> Cycle {
     let sequential = !job.info.mode.supports_ranges();
+    // One clamp, in one place: the configured count is bounded by the global ceiling and
+    // by what this host currently allows. A 429 earlier in the process shows up here.
+    let effective_connections = {
+        let ceiling = job
+            .cfg
+            .connections
+            .min(crate::hostlimits::MAX_CONNECTIONS as u32);
+        match (&job.cfg.host_limits, job.info.final_url.host_str()) {
+            (Some(limits), Some(host)) => ceiling.min(limits.limit(host).max(1) as u32),
+            _ => ceiling,
+        }
+    };
     let declared_total = job.info.mode.total_bytes();
     let resume = match job.open {
         OpenMode::Resume => job.resume,
@@ -646,7 +671,7 @@ async fn download_generation(job: &Job<'_>) -> Cycle {
             Some(state) if !state.segments.is_empty() => state.segments.clone(),
             _ => match &job.spec.plan_override {
                 Some(ranges) => range_records(ranges),
-                None => range_records(&planner::initial_segments(total, job.cfg.connections)),
+                None => range_records(&planner::initial_segments(total, effective_connections)),
             },
         };
         (records, Some(total))
@@ -678,6 +703,8 @@ async fn download_generation(job: &Job<'_>) -> Cycle {
         file,
         bucket: Arc::clone(job.bucket),
         halt: Canceller::new(),
+        host_limits: job.cfg.host_limits.clone(),
+        max_workers: effective_connections.max(1) as usize,
     });
     let shared = Arc::new(Shared {
         env,
@@ -820,6 +847,23 @@ struct Env {
     bucket: Arc<TokenBucket>,
     /// Internal stop flag: a stale-cache restart or a fatal worker error.
     halt: Canceller,
+    /// Adaptive per-host limit, when the caller supplied one.
+    host_limits: Option<std::sync::Arc<crate::hostlimits::HostLimits>>,
+    /// Workers this generation may run: the configured count, already clamped by the
+    /// per-host limit in force and by the global ceiling.
+    max_workers: usize,
+}
+
+impl Env {
+    /// Tell the registry this host asked for less (429/503). Cheap and idempotent when no
+    /// registry was supplied.
+    fn report_throttled(&self) {
+        if let (Some(limits), Some(host)) = (&self.host_limits, self.url.host_str()) {
+            // The lowered value is what the next generation will use; logging lives in the
+            // daemon, which owns the subscriber.
+            let _lowered = limits.on_throttled(host);
+        }
+    }
 }
 
 /// State shared by the coordinator and the workers of one generation.
@@ -979,7 +1023,10 @@ async fn coordinate(
                         shared.emit(completed_event(&shared.env, &seg)).await;
                     }
                     // The idle worker takes half of the largest donor, if any is worth it.
+                    // The per-host limit is the ceiling for this generation: a throttled
+                    // host keeps its finished worker instead of splitting a new one.
                     if active > 0
+                        && active < shared.env.max_workers
                         && plan.splits
                         && try_split(&shared, &mut live, &mut workers, &mut next_id, &msg_tx, cancel).await
                     {
@@ -1417,6 +1464,9 @@ impl SegmentWorker {
                     }
                 }
                 StatusDecision::Retry(hint) => {
+                    // 429 and 503 are the host asking for fewer connections; tell the
+                    // registry before the backoff so the next generation starts smaller.
+                    self.shared.env.report_throttled();
                     let error = CoreError::Network(format!("HTTP {status}"));
                     if !self.retry(&mut control, hint).await {
                         if self.stopping() {

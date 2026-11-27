@@ -18,6 +18,7 @@ pub mod dns;
 pub mod engine;
 pub mod error;
 pub mod filename;
+pub mod hostlimits;
 pub mod netguard;
 pub mod planner;
 pub mod probe;
