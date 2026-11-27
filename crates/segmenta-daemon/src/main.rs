@@ -113,6 +113,9 @@ async fn serve(args: Args) -> Result<(), String> {
     .map_err(|err| format!("cannot bind {}: {err}", socket_path.display()))?;
     let server = Arc::new(server);
 
+    // The resolver configuration travels with the settings; publishing it once here is
+    // enough because `settings.update` republishes it.
+    publish_dns(&store);
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
     let manager = Arc::new(Manager::new(
         Arc::clone(&store),
@@ -277,6 +280,27 @@ async fn remote_supervisor(
     if let Some(handle) = server.take() {
         handle.abort();
     }
+}
+
+/// Publish the encrypted-DNS configuration the resolver reads.
+fn publish_dns(store: &segmenta_daemon::store::Store) {
+    let settings = store.settings().unwrap_or_default();
+    let mode = segmenta_core::dns::DnsMode::parse(&settings.dns_mode).unwrap_or_default();
+    let provider = segmenta_core::dns::DohProvider::parse(&settings.dns_provider)
+        .unwrap_or_default()
+        .url()
+        .to_string();
+    let endpoint = if settings.dns_custom_url.trim().is_empty() {
+        provider
+    } else {
+        settings.dns_custom_url.trim().to_string()
+    };
+    segmenta_core::dns::set_config(Some(segmenta_core::dns::DnsConfig {
+        mode,
+        endpoint,
+        interface: Some(settings.vpn_interface.clone()).filter(|name| !name.trim().is_empty()),
+        allow_local: settings.allow_local_downloads,
+    }));
 }
 
 async fn terminate_signal() {

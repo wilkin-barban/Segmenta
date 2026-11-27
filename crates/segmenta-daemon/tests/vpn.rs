@@ -176,3 +176,23 @@ fn torrent_sessions_bind_to_the_interface_and_hide_from_the_lan() {
     let empty = segmenta_daemon::torrent::session_options(Some("   "));
     assert_eq!(empty.bind_device_name, None);
 }
+
+#[test]
+fn the_dns_settings_are_validated_before_they_are_stored() {
+    let daemon = Daemon::start();
+    let bad_mode = daemon.request("settings.update", json!({"dns_mode": "dns-over-ftp"}));
+    assert_eq!(bad_mode["error"]["code"], -32602, "{bad_mode}");
+
+    let bad_provider = daemon.request("settings.update", json!({"dns_provider": "custom"}));
+    assert_eq!(bad_provider["error"]["code"], -32602, "{bad_provider}");
+
+    let bad_url = daemon.request("settings.update", json!({"dns_custom_url": "http://x/dns"}));
+    assert_eq!(bad_url["error"]["code"], -32602, "{bad_url}");
+
+    let stored = daemon.call(
+        "settings.update",
+        json!({"dns_mode": "doh", "dns_provider": "quad9"}),
+    );
+    assert_eq!(stored["dns_mode"], "doh");
+    assert_eq!(stored["dns_provider"], "quad9");
+}

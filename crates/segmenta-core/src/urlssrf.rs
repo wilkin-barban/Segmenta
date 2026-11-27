@@ -58,10 +58,22 @@ pub async fn resolve_checked(url: &Url, allow_local: bool) -> Result<Vec<SocketA
     let addrs: Vec<SocketAddr> = if let Ok(ip) = host.parse::<IpAddr>() {
         vec![SocketAddr::new(ip, port)]
     } else {
-        lookup_host((host, port))
-            .await
-            .map_err(|err| CoreError::InvalidUrl(format!("{host}: {err}")))?
-            .collect()
+        let mut resolved: Vec<SocketAddr> = Vec::new();
+        // A encrypted resolver, when configured, answers first; the system resolver stays
+        // as the fallback so a broken DoH endpoint cannot make downloads impossible.
+        match crate::dns::resolve_host(host).await {
+            Ok(ips) if !ips.is_empty() => {
+                resolved.extend(ips.into_iter().map(|ip| SocketAddr::new(ip, port)));
+            }
+            _ => {
+                resolved.extend(
+                    lookup_host((host, port))
+                        .await
+                        .map_err(|err| CoreError::InvalidUrl(format!("{host}: {err}")))?,
+                );
+            }
+        }
+        resolved
     };
     if addrs.is_empty() {
         return Err(CoreError::InvalidUrl(format!(

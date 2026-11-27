@@ -14,6 +14,7 @@
 pub mod checksum;
 pub mod debrid;
 pub mod disk;
+pub mod dns;
 pub mod engine;
 pub mod error;
 pub mod filename;

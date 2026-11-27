@@ -476,6 +476,12 @@ pub struct Settings {
     pub vpn_interface: String,
     /// TLS fingerprint: `standard`, or `chrome` in an impersonation build.
     pub tls_profile: String,
+    /// DNS transport: `system`, `doh` or `dot`.
+    pub dns_mode: String,
+    /// Known DoH provider: `cloudflare`, `quad9` or `google`.
+    pub dns_provider: String,
+    /// Custom DoH endpoint; takes precedence over the provider when set.
+    pub dns_custom_url: String,
     /// Serve the remote control API.
     pub remote_enabled: bool,
     /// Port of the remote control API.
@@ -533,6 +539,9 @@ impl Default for Settings {
             debrid_provider: "none".to_string(),
             vpn_interface: String::new(),
             tls_profile: "standard".to_string(),
+            dns_mode: "system".to_string(),
+            dns_provider: "cloudflare".to_string(),
+            dns_custom_url: String::new(),
             remote_enabled: false,
             remote_port: 8765,
             remote_bind: "127.0.0.1".to_string(),
@@ -656,6 +665,9 @@ pub const SETTING_KEYS: &[&str] = &[
     "debrid_provider",
     "vpn_interface",
     "tls_profile",
+    "dns_mode",
+    "dns_provider",
+    "dns_custom_url",
     "remote_enabled",
     "remote_port",
     "remote_bind",
@@ -798,6 +810,21 @@ impl Settings {
         if self.max_retries > 20 {
             return Err(StoreError::Invalid(
                 "max_retries must be between 0 and 20".to_string(),
+            ));
+        }
+        if segmenta_core::dns::DnsMode::parse(&self.dns_mode).is_none() {
+            return Err(StoreError::Invalid(
+                "dns_mode must be system, doh or dot".to_string(),
+            ));
+        }
+        if segmenta_core::dns::DohProvider::parse(&self.dns_provider).is_none() {
+            return Err(StoreError::Invalid(
+                "dns_provider must be cloudflare, quad9 or google".to_string(),
+            ));
+        }
+        if !self.dns_custom_url.is_empty() && !self.dns_custom_url.starts_with("https://") {
+            return Err(StoreError::Invalid(
+                "dns_custom_url must be an https endpoint".to_string(),
             ));
         }
         if self.remote_port < 1024 {

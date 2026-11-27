@@ -2226,6 +2226,21 @@ impl Manager {
             hook();
         }
         self.http_bucket.set_rate(updated.global_speed_limit_bps);
+        // The resolver reads its configuration from a process-wide slot; republish it here
+        // so a DNS change applies without restarting the daemon.
+        segmenta_core::dns::set_config(Some(segmenta_core::dns::DnsConfig {
+            mode: segmenta_core::dns::DnsMode::parse(&updated.dns_mode).unwrap_or_default(),
+            endpoint: if updated.dns_custom_url.trim().is_empty() {
+                segmenta_core::dns::DohProvider::parse(&updated.dns_provider)
+                    .unwrap_or_default()
+                    .url()
+                    .to_string()
+            } else {
+                updated.dns_custom_url.trim().to_string()
+            },
+            interface: Some(updated.vpn_interface.clone()).filter(|name| !name.trim().is_empty()),
+            allow_local: updated.allow_local_downloads,
+        }));
         *current = updated.clone();
         serde_json::to_value(updated).map_err(|err| RpcError::internal(err.to_string()))
     }
