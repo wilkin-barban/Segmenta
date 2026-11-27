@@ -190,3 +190,70 @@ async fn a_redirect_is_followed_when_local_downloads_are_allowed() {
     assert_eq!(status, 200, "the redirect must be followed by hand");
     assert_eq!(body, "ok");
 }
+
+#[tokio::test]
+async fn a_google_drive_file_becomes_the_download_endpoint() {
+    // No page is fetched: the id in the URL is all the endpoint needs. The confirm
+    // parameter is what the "file too large to scan" interstitial ends up submitting.
+    let fetcher = Canned::new(&[]);
+    let url = Url::parse("https://drive.google.com/file/d/1AbCdEfGhIjK/view?usp=sharing").unwrap();
+    match resolve_with(&fetcher, &url).await.unwrap() {
+        SiteOutcome::Resolved(resolved) => assert_eq!(
+            resolved.url.as_str(),
+            "https://drive.usercontent.google.com/download?id=1AbCdEfGhIjK&export=download&confirm=t"
+        ),
+        other => panic!("google drive must resolve, got {other:?}"),
+    }
+    assert!(fetcher.asked().is_empty(), "no page is read for a file id");
+}
+
+#[tokio::test]
+async fn a_google_doc_becomes_its_office_export() {
+    let fetcher = Canned::new(&[]);
+    for (url, expected) in [
+        (
+            "https://docs.google.com/document/d/DOC1/edit",
+            "https://docs.google.com/document/d/DOC1/export?format=docx",
+        ),
+        (
+            "https://docs.google.com/spreadsheets/d/SHEET1/edit",
+            "https://docs.google.com/spreadsheets/d/SHEET1/export?format=xlsx",
+        ),
+        (
+            "https://docs.google.com/presentation/d/PRES1/edit",
+            "https://docs.google.com/presentation/d/PRES1/export?format=pptx",
+        ),
+    ] {
+        let parsed = Url::parse(url).unwrap();
+        match resolve_with(&fetcher, &parsed).await.unwrap() {
+            SiteOutcome::Resolved(resolved) => assert_eq!(resolved.url.as_str(), expected, "{url}"),
+            other => panic!("{url} must resolve, got {other:?}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn rapidgator_takes_the_link_the_page_announces() {
+    let fetcher = Canned::new(&[(
+        "/file/abc123/name.zip",
+        200,
+        r#"<script>location.href = 'https://rg.to/download/xyz/name.zip';</script>"#,
+    )]);
+    let url = Url::parse("https://rapidgator.net/file/abc123/name.zip").unwrap();
+    match resolve_with(&fetcher, &url).await.unwrap() {
+        SiteOutcome::Resolved(resolved) => {
+            assert_eq!(resolved.url.as_str(), "https://rg.to/download/xyz/name.zip")
+        }
+        other => panic!("rapidgator must resolve, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_rapidgator_page_without_a_download_link_is_reported() {
+    let fetcher = Canned::new(&[("/file/abc/name.zip", 200, "<html>File not found</html>")]);
+    let url = Url::parse("https://rapidgator.net/file/abc/name.zip").unwrap();
+    assert!(matches!(
+        resolve_with(&fetcher, &url).await.unwrap(),
+        SiteOutcome::Changed { .. }
+    ));
+}

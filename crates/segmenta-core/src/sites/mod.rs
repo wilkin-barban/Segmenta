@@ -20,8 +20,10 @@ use url::Url;
 
 use crate::probe::HttpConfig;
 
+pub mod google_drive;
 pub mod internet_archive;
 pub mod mediafire;
+pub mod rapidgator;
 
 /// What an extractor produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,6 +204,8 @@ pub enum SiteError {
 fn registry() -> Vec<Box<dyn Extractor>> {
     vec![
         Box::new(mediafire::MediaFire),
+        Box::new(google_drive::GoogleDrive),
+        Box::new(rapidgator::Rapidgator),
         Box::new(internet_archive::InternetArchive),
     ]
 }
