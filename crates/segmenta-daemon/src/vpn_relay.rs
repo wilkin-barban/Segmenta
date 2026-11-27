@@ -34,6 +34,82 @@ use tokio::net::TcpStream;
 /// Environment variable a child process must receive to use the relay.
 pub const PROXY_ENV: &str = "SEGMENTA_VPN_PROXY";
 
+/// Proxy variables a child may inherit from the daemon's parent.
+///
+/// With an active VPN they are **removed** before the relay URL is set: an inherited
+/// `HTTPS_PROXY` pointing at a corporate or system proxy would take the traffic around the
+/// tunnel, which is exactly the leak this phase exists to avoid.
+pub const INHERITED_PROXY_ENV: [&str; 10] = [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+    "no_proxy",
+    "FTP_PROXY",
+    "ftp_proxy",
+];
+
+/// URL of the relay running in this process, when the VPN is active.
+static ACTIVE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Publish or clear the relay URL used by every child process.
+pub fn set_active(url: Option<String>) {
+    *ACTIVE.lock().unwrap_or_else(|err| err.into_inner()) = url;
+}
+
+/// The relay URL, if a VPN relay is running.
+pub fn active_url() -> Option<String> {
+    ACTIVE.lock().unwrap_or_else(|err| err.into_inner()).clone()
+}
+
+/// Clean inherited proxies and point the child at the relay.
+///
+/// When no relay is active the environment is left exactly as it was: a user without a VPN
+/// keeps using their system proxy as before.
+pub fn apply_env(command: &mut std::process::Command) {
+    let Some(url) = active_url() else {
+        return;
+    };
+    for name in INHERITED_PROXY_ENV {
+        command.env_remove(name);
+    }
+    command.env("HTTP_PROXY", &url);
+    command.env("HTTPS_PROXY", &url);
+    command.env("ALL_PROXY", &url);
+    command.env("http_proxy", &url);
+    command.env("https_proxy", &url);
+    command.env("all_proxy", &url);
+    command.env(PROXY_ENV, &url);
+}
+
+/// Same rule for the async command used by the media backend.
+pub fn apply_env_tokio(command: &mut tokio::process::Command) {
+    let Some(url) = active_url() else {
+        return;
+    };
+    for name in INHERITED_PROXY_ENV {
+        command.env_remove(name);
+    }
+    command.env("HTTP_PROXY", &url);
+    command.env("HTTPS_PROXY", &url);
+    command.env("ALL_PROXY", &url);
+    command.env("http_proxy", &url);
+    command.env("https_proxy", &url);
+    command.env("all_proxy", &url);
+    command.env(PROXY_ENV, &url);
+}
+
+/// `--proxy <url>` for the tools that take the flag instead of the environment.
+pub fn proxy_args() -> Vec<String> {
+    match active_url() {
+        Some(url) => vec!["--proxy".to_string(), url],
+        None => Vec::new(),
+    }
+}
+
 /// Largest request head the relay accepts, in bytes.
 const MAX_HEAD: usize = 16 * 1024;
 
@@ -361,4 +437,50 @@ async fn refuse(client: &mut TcpStream, status: &str) -> io::Result<()> {
     client
         .write_all(format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\n\r\n").as_bytes())
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The stub prints the proxy variables the child really received.
+    #[test]
+    fn a_child_sees_the_relay_and_not_the_inherited_proxy() {
+        let dir = std::env::temp_dir().join(format!("relay-env-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("print-proxy");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nprintf 'HTTP_PROXY=%s\\n' \"$HTTP_PROXY\"\nprintf 'ALL_PROXY=%s\\n' \"$ALL_PROXY\"\n",
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        set_active(Some("http://token@127.0.0.1:9999".to_string()));
+        let outcome = crate::postprocess::run_process(
+            &[script.to_string_lossy().into_owned()],
+            std::time::Duration::from_secs(5),
+            4096,
+            "probe",
+        );
+        set_active(None);
+
+        assert!(
+            outcome
+                .stdout
+                .contains("HTTP_PROXY=http://token@127.0.0.1:9999"),
+            "the child must receive the relay: {}",
+            outcome.stdout
+        );
+        assert!(
+            outcome
+                .stdout
+                .contains("ALL_PROXY=http://token@127.0.0.1:9999"),
+            "the child must receive the relay for every scheme: {}",
+            outcome.stdout
+        );
+    }
 }

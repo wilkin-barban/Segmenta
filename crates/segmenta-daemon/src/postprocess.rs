@@ -328,7 +328,11 @@ pub(crate) fn run_process(
             timeout,
         );
     }
-    let mut child = match Command::new(binary)
+    let mut command = Command::new(binary);
+    // Every external binary inherits the same rule: with a VPN relay active, the relay is
+    // the only proxy and the parent's proxy variables are dropped.
+    crate::vpn_relay::apply_env(&mut command);
+    let mut child = match command
         .args(&argv[1..])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

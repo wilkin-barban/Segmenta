@@ -166,6 +166,36 @@ async fn serve(args: Args) -> Result<(), String> {
             }
         });
     }
+    // With a VPN interface configured, every external tool goes through this relay: it is
+    // the only proxy that binds its sockets to the tunnel. Without the interface it never
+    // starts, so a user without a VPN keeps the previous behaviour untouched.
+    {
+        let settings = store.settings().unwrap_or_default();
+        let interface = settings.vpn_interface.trim().to_string();
+        if !interface.is_empty() {
+            match segmenta_daemon::vpn_relay::spawn(
+                interface.clone(),
+                settings.allow_local_downloads,
+            )
+            .await
+            {
+                Ok(relay) => {
+                    tracing::info!(
+                        port = relay.port,
+                        interface = %interface,
+                        "vpn relay listening"
+                    );
+                    segmenta_daemon::vpn_relay::set_active(Some(relay.url.clone()));
+                    std::mem::forget(relay);
+                }
+                Err(err) => tracing::warn!(
+                    interface = %interface,
+                    error = %err,
+                    "the vpn relay could not start; external tools keep their own network"
+                ),
+            }
+        }
+    }
     // Remote control is opt-in: the supervisor opens the port only while the setting is on
     // and a token digest exists, and closes it as soon as either goes away.
     tokio::spawn(remote_supervisor(Arc::clone(&manager), shutdown_rx.clone()));

@@ -1412,10 +1412,12 @@ impl Manager {
                 return Err("ERR_RSS_UNSAFE_URL");
             }
         }
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .map_err(|_| "ERR_RSS_UNREACHABLE")?;
+        let mut builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(30));
+        // With a VPN relay running, the poller goes through it like every other tool.
+        if let Some(url) = crate::vpn_relay::active_url() {
+            builder = builder.proxy(reqwest::Proxy::all(&url).map_err(|_| "ERR_RSS_UNREACHABLE")?);
+        }
+        let client = builder.build().map_err(|_| "ERR_RSS_UNREACHABLE")?;
         let response = client
             .get(parsed)
             .send()

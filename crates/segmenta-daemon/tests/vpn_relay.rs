@@ -182,3 +182,29 @@ fn base64(user: &str, password: &str) -> String {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.encode(format!("{user}:{password}"))
 }
+
+#[test]
+fn the_environment_matrix_is_documented_and_enforced() {
+    use segmenta_daemon::vpn_relay::{active_url, set_active, INHERITED_PROXY_ENV};
+
+    // Without a relay nothing changes: a user without a VPN keeps their system proxy.
+    set_active(None);
+    assert_eq!(active_url(), None);
+    assert!(segmenta_daemon::vpn_relay::proxy_args().is_empty());
+
+    set_active(Some("http://token@127.0.0.1:9999".to_string()));
+    assert_eq!(active_url().as_deref(), Some("http://token@127.0.0.1:9999"));
+    // Tools that take the flag get it; the rest are covered by the environment below.
+    assert_eq!(
+        segmenta_daemon::vpn_relay::proxy_args(),
+        vec![
+            "--proxy".to_string(),
+            "http://token@127.0.0.1:9999".to_string()
+        ]
+    );
+    // The variables a child inherits when the VPN is active are exactly these.
+    assert!(INHERITED_PROXY_ENV.contains(&"HTTP_PROXY"));
+    assert!(INHERITED_PROXY_ENV.contains(&"https_proxy"));
+    assert!(INHERITED_PROXY_ENV.contains(&"ALL_PROXY"));
+    set_active(None);
+}

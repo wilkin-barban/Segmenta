@@ -655,7 +655,11 @@ pub async fn probe_with(
     limit: Option<usize>,
 ) -> Result<ProbeOutcome, MediaError> {
     let mut command = Command::new(tool);
+    crate::vpn_relay::apply_env_tokio(&mut command);
     command.arg("--no-config").arg("--no-warnings");
+    if crate::vpn_relay::active_url().is_some() {
+        command.args(crate::vpn_relay::proxy_args());
+    }
     // A full `-J` walk fails when any later entry is private or unavailable, so the
     // probe stops at the requested playlist bound (`--playlist-end N`).
     if let Some(limit) = limit.filter(|_| kind == "playlist") {

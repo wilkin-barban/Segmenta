@@ -104,12 +104,14 @@ pub fn run(url: &str, destination: &Path, search: &[PathBuf], timeout: Duration)
         return GalleryRun::Unavailable;
     };
     let before: std::collections::HashSet<PathBuf> = collect(destination).into_iter().collect();
-    let argv = vec![
+    let mut argv = vec![
         binary.to_string_lossy().into_owned(),
         "--dest".to_string(),
         destination.to_string_lossy().into_owned(),
-        url.to_string(),
     ];
+    // gallery-dl honours `--proxy`; the environment is cleaned by `run_process`.
+    argv.extend(crate::vpn_relay::proxy_args());
+    argv.push(url.to_string());
     let outcome = run_process(&argv, timeout, DEFAULT_CAPTURE_LIMIT, "gallery-dl");
     if !outcome.exit.succeeded() {
         return GalleryRun::Failed {
