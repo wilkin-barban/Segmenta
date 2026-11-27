@@ -343,9 +343,20 @@ fn snapshot_of_exactly_the_page_size_paints_no_notice() {
             "the full page never reached the list (state {:?})",
             window.view_state()
         );
-        // Pump while the counting answer lands: a wrong total would paint the notice
-        // and keep it painted, so waiting cannot hide the bug.
-        let _ = pump_until(|| false, Duration::from_millis(500));
+        // Pump until the counting answer lands instead of sleeping a fixed slice: the
+        // fake answers on the main loop, and 500 ms was enough on an idle machine but not
+        // on a loaded one. A wrong total keeps the notice painted forever, so waiting for
+        // it to clear cannot hide the bug this test exists for.
+        assert!(
+            pump_until(
+                || window.truncation_notice().is_none(),
+                Duration::from_secs(10)
+            ),
+            "the notice never cleared with a total equal to the page size (state {:?})",
+            window.view_state()
+        );
+        // It must stay clear after settling, not flicker back on the next frame.
+        let _ = pump_until(|| false, Duration::from_millis(100));
         assert_eq!(window.truncation_notice(), None);
         assert_eq!(window.rows().len(), 500);
     });
