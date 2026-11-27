@@ -29,13 +29,13 @@ use crate::rpc::{
     MediaProbeParams, MediaStatusParams, PackageAssignParams, PackageCreateParams, PackageIdParams,
     PackageRenameParams, QueueCreateParams, QueueRemoveParams, QueueScheduleParams,
     RemoteEnableParams, RpcError, RssCheckParams, RssFeedAddParams, RssFeedIdParams, SegmentView,
-    SiteLoginOriginParams, SiteLoginSetParams, TaskIdParams,
+    SiteLoginOriginParams, SiteLoginSetParams, SiteRuleParams, TaskIdParams,
 };
 use crate::scheduler::{resolve_schedule, Clock, LocalClock, QueueSchedule};
 use crate::secrets::SecretStore;
 use crate::store::{
     Checkpoint, DownloadRecord, DownloadStatus, PostprocessRecord, SegmentRow, Settings,
-    SiteLoginRow, Store, StoreError, TorrentFileInsert,
+    SiteLoginRow, SiteRuleRecord, Store, StoreError, TorrentFileInsert,
 };
 
 /// Error stored on a task whose file a batch delete could not remove.
@@ -969,6 +969,82 @@ impl Manager {
             single_stream_written: record.downloaded_bytes,
             last_error: None,
         }))
+    }
+
+    /// Stored rules, without a single header value: the UI lists what it can act on.
+    fn site_rule_list(&self) -> Result<Value, RpcError> {
+        let rules = self.store.site_rules().map_err(store_error)?;
+        let rows: Vec<Value> = rules
+            .into_iter()
+            .map(|rule| {
+                json!({
+                    "id": rule.id,
+                    "domain_pattern": rule.domain_pattern,
+                    "user_agent": rule.user_agent,
+                    "max_connections": rule.max_connections,
+                    "browser_like": rule.browser_like,
+                    // The alias never leaves the daemon either: knowing it is a step
+                    // towards reading the secret from another process.
+                    "has_headers": rule.headers_secret_id.is_some(),
+                })
+            })
+            .collect();
+        Ok(Value::Array(rows))
+    }
+
+    /// Insert or replace a rule; the headers go to the secret store, never to SQLite.
+    fn site_rule_upsert(&self, params: SiteRuleParams) -> Result<Value, RpcError> {
+        let pattern = params.domain_pattern.trim().to_ascii_lowercase();
+        if pattern.is_empty() || pattern.contains(char::is_whitespace) || pattern.contains('/') {
+            return Err(RpcError::invalid_params(
+                "domain_pattern must be a host or a parent domain".to_string(),
+            ));
+        }
+        if let Some(limit) = params.max_connections {
+            if !(1..=128).contains(&limit) {
+                return Err(RpcError::invalid_params(
+                    "max_connections must be between 1 and 128".to_string(),
+                ));
+            }
+        }
+        let id = params
+            .id
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| format!("rule-{}", uuid::Uuid::new_v4()));
+        let alias = format!("site-rule:{id}");
+        let mut secret_id = None;
+        if let Some(headers) = params.headers {
+            if headers.is_empty() {
+                let _ = self.secrets.delete(&alias);
+            } else {
+                let pairs: Vec<(String, String)> = headers.into_iter().collect();
+                let encoded = serde_json::to_string(&pairs)
+                    .map_err(|err| RpcError::internal(err.to_string()))?;
+                self.secrets
+                    .store(&alias, &encoded)
+                    .map_err(|err| RpcError::internal(err.to_string()))?;
+                secret_id = Some(alias);
+            }
+        }
+        self.store
+            .upsert_site_rule(&SiteRuleRecord {
+                id: id.clone(),
+                domain_pattern: pattern,
+                user_agent: params.user_agent.filter(|value| !value.trim().is_empty()),
+                max_connections: params.max_connections,
+                browser_like: params.browser_like,
+                headers_secret_id: secret_id,
+            })
+            .map_err(store_error)?;
+        tracing::info!(rule = %id, "site_rule.upsert");
+        Ok(json!({ "id": id }))
+    }
+
+    /// Remove a rule and its secret together.
+    fn site_rule_remove(&self, id: &str) -> Result<Value, RpcError> {
+        let _ = self.secrets.delete(&format!("site-rule:{id}"));
+        let removed = self.store.delete_site_rule(id).map_err(store_error)?;
+        Ok(json!({ "id": id, "removed": removed }))
     }
 
     /// Rule that applies to `host`, with its headers resolved from the secret store.
@@ -4385,6 +4461,17 @@ impl RpcHandler for Manager {
                     let parsed: TaskIdParams = serde_json::from_value(parse(params)?)
                         .map_err(|err| RpcError::invalid_params(err.to_string()))?;
                     self.pause_task(&parsed.task_id).await
+                }
+                "site_rule.list" => self.site_rule_list(),
+                "site_rule.upsert" => {
+                    let parsed: SiteRuleParams = serde_json::from_value(parse(params)?)
+                        .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                    self.site_rule_upsert(parsed)
+                }
+                "site_rule.remove" => {
+                    let parsed: TaskIdParams = serde_json::from_value(parse(params)?)
+                        .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                    self.site_rule_remove(&parsed.task_id)
                 }
                 "download.keep" => {
                     let parsed: TaskIdParams = serde_json::from_value(parse(params)?)

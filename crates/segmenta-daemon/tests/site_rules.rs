@@ -178,3 +178,86 @@ fn the_rule_shape_is_what_the_daemon_stores() {
     assert_eq!(value["domain_pattern"], json!("example.com"));
     assert_eq!(value["browser_like"], json!(false));
 }
+
+#[tokio::test]
+async fn the_rpc_surface_manages_rules_without_leaking_headers() {
+    use segmenta_daemon::ipc::RpcHandler;
+
+    let dir = temp_dir("site-rules-rpc");
+    let harness = harness(&dir);
+    let answer = harness
+        .manager
+        .call(
+            "site_rule.upsert",
+            Some(serde_json::json!({
+                "domain_pattern": "Example.com",
+                "user_agent": "custom/1",
+                "max_connections": 4,
+                "browser_like": true,
+                "headers": { "cookie": "session=abc123" }
+            })),
+        )
+        .await
+        .unwrap();
+    let id = answer["id"].as_str().unwrap().to_string();
+
+    let listed = harness
+        .manager
+        .call("site_rule.list", Some(serde_json::json!({})))
+        .await
+        .unwrap();
+    let rows = listed.as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["domain_pattern"], "example.com", "stored lowercase");
+    assert_eq!(rows[0]["has_headers"], true);
+    // Neither the value nor the alias travels to a client.
+    let serialized = listed.to_string();
+    assert!(!serialized.contains("session=abc123"), "{serialized}");
+    assert!(!serialized.contains("site-rule:"), "{serialized}");
+
+    // The rule is applied to the host it covers.
+    let applied = harness
+        .manager
+        .site_rule("cdn.example.com")
+        .unwrap()
+        .unwrap();
+    assert_eq!(applied.user_agent.as_deref(), Some("custom/1"));
+
+    // And removing it takes the secret with it.
+    harness
+        .manager
+        .call(
+            "site_rule.remove",
+            Some(serde_json::json!({ "task_id": id })),
+        )
+        .await
+        .unwrap();
+    assert!(harness.store.site_rules().unwrap().is_empty());
+    assert!(harness.manager.site_rule("example.com").unwrap().is_none());
+    assert!(harness
+        .secrets
+        .lookup(&format!("site-rule:{id}"))
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn an_invalid_rule_is_refused_before_it_is_stored() {
+    use segmenta_daemon::ipc::RpcHandler;
+
+    let dir = temp_dir("site-rules-invalid");
+    let harness = harness(&dir);
+    for payload in [
+        serde_json::json!({ "domain_pattern": " " }),
+        serde_json::json!({ "domain_pattern": "a/b" }),
+        serde_json::json!({ "domain_pattern": "example.com", "max_connections": 0 }),
+        serde_json::json!({ "domain_pattern": "example.com", "max_connections": 129 }),
+    ] {
+        let refused = harness
+            .manager
+            .call("site_rule.upsert", Some(payload.clone()))
+            .await;
+        assert!(refused.is_err(), "accepted an invalid rule: {payload}");
+    }
+    assert!(harness.store.site_rules().unwrap().is_empty());
+}

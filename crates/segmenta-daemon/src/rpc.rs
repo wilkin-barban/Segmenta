@@ -424,6 +424,24 @@ pub struct TaskIdParams {
     pub task_id: String,
 }
 
+/// Parameters of `site_rule.upsert`: one override for the hosts a pattern covers.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SiteRuleParams {
+    /// Existing rule to replace; a new one is created when absent.
+    pub id: Option<String>,
+    /// Host or parent domain.
+    pub domain_pattern: String,
+    /// User agent that replaces the global one.
+    pub user_agent: Option<String>,
+    /// Per-host connection ceiling, 1-128.
+    pub max_connections: Option<i64>,
+    /// Send the headers a current browser sends.
+    #[serde(default)]
+    pub browser_like: bool,
+    /// Headers to keep in the secret store; values never reach SQLite.
+    pub headers: Option<std::collections::BTreeMap<String, String>>,
+}
+
 /// Parameters of `site_login.set` (0.2): the login belongs to one exact origin.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SiteLoginSetParams {
