@@ -20,6 +20,7 @@ use url::Url;
 
 use crate::probe::HttpConfig;
 
+pub mod internet_archive;
 pub mod mediafire;
 
 /// What an extractor produced.
@@ -163,7 +164,10 @@ pub enum SiteError {
 
 /// Every extractor, in the order they are asked.
 fn registry() -> Vec<Box<dyn Extractor>> {
-    vec![Box::new(mediafire::MediaFire)]
+    vec![
+        Box::new(mediafire::MediaFire),
+        Box::new(internet_archive::InternetArchive),
+    ]
 }
 
 /// Resolve `url` with the extractor that claims it.

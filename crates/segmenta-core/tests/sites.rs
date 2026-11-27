@@ -80,6 +80,32 @@ async fn a_mediafire_page_without_the_button_is_reported_as_changed() {
 }
 
 #[tokio::test]
+async fn an_internet_archive_item_resolves_through_its_metadata() {
+    // `archive.org/details/<id>` becomes `/download/<id>/<file>`; the file chooser uses the
+    // metadata API instead of guessing.
+    let fetcher = Canned::new(&[(
+        "/metadata/episode-one",
+        200,
+        r#"{"files":[
+             {"name":"__ia_thumb.jpg","format":"Thumbnail","size":"1234"},
+             {"name":"episode one.mp4","format":"MPEG4","size":"1048576"}
+           ]}"#,
+    )]);
+    let url = Url::parse("https://archive.org/details/episode-one").unwrap();
+    match resolve_with(&fetcher, &url).await.unwrap() {
+        SiteOutcome::Resolved(resolved) => {
+            assert_eq!(
+                resolved.url.as_str(),
+                "https://archive.org/download/episode-one/episode%20one.mp4"
+            );
+            assert_eq!(resolved.filename.as_deref(), Some("episode one.mp4"));
+        }
+        other => panic!("the archive item must resolve, got {other:?}"),
+    }
+    assert_eq!(fetcher.asked(), vec!["/metadata/episode-one".to_string()]);
+}
+
+#[tokio::test]
 async fn an_unknown_host_is_left_alone() {
     let fetcher = Canned::new(&[]);
     let url = Url::parse("https://example.test/file.bin").unwrap();
