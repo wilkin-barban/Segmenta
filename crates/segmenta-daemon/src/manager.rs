@@ -1157,6 +1157,58 @@ impl Manager {
         Ok(json!({ "origin": origin, "removed": removed }))
     }
 
+    /// Keep what a stream already wrote and publish it as the finished file.
+    ///
+    /// Only a task that is not running can be kept, and only when its file is on disk:
+    /// the point is to stop throwing away a partial transfer that cannot be resumed
+    /// because the server never declared a length.
+    fn keep_task(&self, task_id: &str) -> Result<Value, RpcError> {
+        let record = self
+            .store
+            .get(task_id)
+            .map_err(store_error)?
+            .ok_or_else(|| RpcError::invalid_params(format!("unknown task {task_id}")))?;
+        if !matches!(
+            record.status,
+            DownloadStatus::Paused | DownloadStatus::Failed | DownloadStatus::Pending
+        ) {
+            return Err(RpcError::new(
+                1084,
+                "ERR_KEEP_ACTIVE",
+                "pause or fail the task before keeping what it wrote".to_string(),
+            ));
+        }
+        // Torrent payloads are assembled by librqbit and have their own completion rules;
+        // everything streamed over HTTP can be kept with what reached the disk.
+        if matches!(record.download_type.as_str(), "torrent" | "magnet") {
+            return Err(RpcError::new(
+                1085,
+                "ERR_KEEP_UNSUPPORTED",
+                format!("`{}` tasks are not kept this way", record.download_type),
+            ));
+        }
+        let bytes = std::fs::metadata(&record.final_path)
+            .map(|meta| meta.len())
+            .unwrap_or(0);
+        if bytes == 0 {
+            return Err(RpcError::new(
+                1086,
+                "ERR_KEEP_EMPTY",
+                "there is nothing on disk to keep".to_string(),
+            ));
+        }
+        self.store
+            .keep_partial(task_id, bytes)
+            .map_err(store_error)?;
+        self.bus.publish(
+            "task_updated",
+            Some(task_id),
+            json!({ "status": "completed", "downloaded_bytes": bytes, "kept": true }),
+        );
+        tracing::info!(task_id = %task_id, bytes, "download.keep");
+        self.status_download(task_id)
+    }
+
     async fn pause_task(&self, task_id: &str) -> Result<Value, RpcError> {
         let record = self
             .store
@@ -4333,6 +4385,11 @@ impl RpcHandler for Manager {
                     let parsed: TaskIdParams = serde_json::from_value(parse(params)?)
                         .map_err(|err| RpcError::invalid_params(err.to_string()))?;
                     self.pause_task(&parsed.task_id).await
+                }
+                "download.keep" => {
+                    let parsed: TaskIdParams = serde_json::from_value(parse(params)?)
+                        .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                    self.keep_task(&parsed.task_id)
                 }
                 "download.resume" => {
                     let parsed: TaskIdParams = serde_json::from_value(parse(params)?)

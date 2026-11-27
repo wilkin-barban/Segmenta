@@ -1557,6 +1557,23 @@ impl Store {
         Ok(())
     }
 
+    /// Mark a partial stream as finished with the bytes that actually reached disk.
+    ///
+    /// Used by `download.keep`: a single stream with no declared size cannot be resumed,
+    /// and discarding it wastes what the user already paid for. The caller must have
+    /// verified that the file exists and that the task is not running.
+    pub fn keep_partial(&self, id: &str, bytes: u64) -> Result<()> {
+        let conn = self.lock();
+        conn.execute(
+            "UPDATE downloads SET downloaded_bytes = ?2, total_bytes = ?2,
+                 status = 'completed', completed_at = CURRENT_TIMESTAMP,
+                 error_code = NULL, error_message = NULL
+             WHERE id = ?1",
+            params![id, bytes as i64],
+        )?;
+        Ok(())
+    }
+
     /// Fetch one task by id.
     pub fn get(&self, id: &str) -> Result<Option<DownloadRecord>> {
         let conn = self.lock();
