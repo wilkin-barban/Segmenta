@@ -30,7 +30,7 @@ Versión: **0.7.0**, sin tag ni release hasta cerrar el hito.
 
 ## Tareas
 
-- [ ] T1 — Andamiaje de `sites/`: tipo `Resolved` (url, headers, nombre sugerido, sha256 opcional), registro por host, y los dos primeros extractores puros con servidor de prueba local (MediaFire e Internet Archive) (S1) — ruta: `segmenta-core` — commit: pendiente.
+- [x] T1 — Andamiaje de `sites/`: tipo `Resolved` (url, headers, nombre sugerido, sha256 opcional), registro por host, y los dos primeros extractores puros con servidor de prueba local (MediaFire e Internet Archive) (S1) — ruta: `segmenta-core` — commit: `8d2db7d` + `ce9993f`.
 - [ ] T2 — GDrive (confirmación de análisis de virus y exportación de Docs/Sheets/Slides), Gofile y Rapidgator, con reenvío acotado de formularios y enlaces caducados (S1) — ruta: `segmenta-core` — commit: pendiente.
 - [ ] T3 — `hub.rs`: GitHub releases con paginación `Link: rel="next"`, Hugging Face (modelo/dataset) con rutas validadas contra traversal, SHA-256 publicado y token desde Site Logins (S1) — ruta: `segmenta-core` + daemon — commit: pendiente.
 - [ ] T4 — `ftp.rs` sin TLS: sondeo `SIZE`/`MDTM`, `REST`/`RETR` pasivo segmentado, reutilizando planner, DiskWriter y HostLimits, con servidor FTP de prueba (S2) — ruta: `segmenta-core` — commit: pendiente.
@@ -78,3 +78,11 @@ Versión: **0.7.0**, sin tag ni release hasta cerrar el hito.
 - L2 — Investigación del árbol: **no existen** `sites/`, `ftp.rs`, `batch.rs`, `folder.rs` ni `remotezip.rs`; el hito es construcción nueva, no refactor. `crates/segmenta-core/src/` tiene hoy `engine.rs`, `probe.rs`, `planner.rs`, `disk.rs`, `hostlimits.rs`, `checksum.rs`, `urlssrf.rs` y `testserver.rs`, que son las piezas a reutilizar. `crates/segmenta-daemon/src/remote.rs` (387 líneas) ya sirve `GET /api/downloads` y `POST /api/action` por **HTTP plano** con un único token en el almacén de secretos y `token_digest`.
 - L3 — Investigación de dependencias: el workspace **no** tiene cliente FTP (`suppaftp` ni similar), ni TLS de servidor (`tokio-rustls`/`rcgen`), ni `flate2` en `segmenta-core`. `reqwest` ya trae `rustls-tls` para el cliente, y `zip 0.6` (con `deflate`) sólo está en el daemon. Consecuencia: FTPS y el HTTPS remoto exigen dependencias nuevas, y la descompresión de entradas ZIP en `segmenta-core` también. Cada una se decide en su unidad; T4 (FTP sin TLS) no las necesita y por eso va primero.
 - L4 — Límites de alcance de esta entrega: el plan es lo único que se commitea ahora. La primera unidad habilitada es **T1**, que no requiere dependencias nuevas y se prueba entera contra un servidor local.
+
+- L5 — T1 cerrado: extracción nativa con registro por host. `sites::resolve` (y `resolve_with` para pruebas) devuelve `Unsupported` para un host que no reclama nadie, `Resolved` con URL, headers, nombre y SHA-256 opcional, o `Changed { service, reason }` cuando la página ya no tiene la forma esperada. **Nunca devuelve la URL de la página**: guardar un `.html` con nombre de archivo y llamarlo descarga es peor que fallar.
+  - Seguridad: todo resultado pasa por `check_result`, que solo acepta `http`/`https`; el llamador sigue aplicando `urlssrf` sobre el destino. Un `href="file:///etc/passwd"` en la página se reporta como `Changed`.
+  - MediaFire lee el `href` del `id="downloadButton"`, aceptando el atributo antes o después del id, y solo en rutas `/file/`. Internet Archive resuelve `details/<id>` vía `/metadata/<id>` y elige el archivo real más grande, descartando miniaturas.
+  - Pruebas: fetcher inyectable con respuestas canónicas (cinco pruebas de integración) más unitarias del parseo. Nada de red, nada de `testserver`.
+  - **Bug corregido en el camino**: `encode_segment` escapaba cada punto (`%2E`), lo que rompe servidores que comparan el nombre literal; ahora conserva `.`, `-`, `_`, `~` y escapa solo lo que cambia la ruta.
+  - **Dependencia nueva**: `async-trait` (solo en `segmenta-core`) para el trait `Extractor`. Es la primera del hito y está aislada.
+  - Corte de commits: el primer intento quedó en 649 líneas, por encima del tope de 400. Se rehizo en dos unidades (`8d2db7d` registro + MediaFire; `ce9993f` Internet Archive).
