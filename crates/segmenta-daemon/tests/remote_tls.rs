@@ -41,6 +41,29 @@ fn the_private_key_is_only_readable_by_its_owner() {
 }
 
 #[test]
+fn a_world_readable_key_is_tightened_even_when_the_pair_is_reused() {
+    // `OpenOptions::mode` only applies at creation: replacing or reusing a file that was
+    // already 0644 used to leave the private key readable by every user on the machine.
+    let dir = tempfile::tempdir().unwrap();
+    let tls = RemoteTls::ensure(dir.path()).unwrap();
+    let key = dir.path().join(key_name());
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    // Reusing the existing pair must repair the permissions, not honour them.
+    RemoteTls::ensure(dir.path()).unwrap();
+    let mode = std::fs::metadata(&key).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "reused key left at {mode:o}");
+    assert!(tls.cert_pem().contains("BEGIN CERTIFICATE"));
+
+    // And replacement (corrupt pair) must end at 0600 as well.
+    std::fs::write(&key, "garbage").unwrap();
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o644)).unwrap();
+    RemoteTls::ensure(dir.path()).unwrap();
+    let mode = std::fs::metadata(&key).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "replaced key left at {mode:o}");
+}
+
+#[test]
 fn an_unreadable_pair_is_replaced_instead_of_failing() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join(cert_name()), "garbage").unwrap();

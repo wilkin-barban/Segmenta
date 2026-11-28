@@ -81,12 +81,16 @@ impl RemoteTls {
         ) {
             match fingerprint_of_pem(&cert_pem) {
                 Ok(fingerprint) if !is_near_expiry(&cert_path) => {
+                    // A pair that was left readable keeps being readable unless repaired,
+                    // and this is the only place that sees it on every start.
+                    tighten(&cert_path)?;
+                    tighten(&key_path)?;
                     return Ok(RemoteTls {
                         cert_pem,
                         key_pem,
                         fingerprint,
                         path,
-                    })
+                    });
                 }
                 // Near expiry or unparsable: fall through and replace both files together.
                 _ => {}
@@ -126,17 +130,33 @@ impl RemoteTls {
 }
 
 /// Write a file only the owner can read.
+///
+/// `OpenOptions::mode` applies **only when the file is created**, so a pre-existing
+/// world-readable file would keep its mode through a truncating open. The explicit
+/// `set_permissions` is what makes the promise true on both paths, and it is also applied to
+/// a reused pair, because a key that was once readable stays readable until someone fixes it.
 fn write_private(path: &Path, contents: &str) -> Result<(), TlsError> {
     use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
         .mode(0o600)
         .open(path)?;
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     file.write_all(contents.as_bytes())?;
     file.sync_all()?;
+    Ok(())
+}
+
+/// Make sure an existing pair is not readable by anyone else.
+fn tighten(path: &Path) -> Result<(), TlsError> {
+    use std::os::unix::fs::PermissionsExt;
+    let metadata = std::fs::metadata(path)?;
+    if metadata.permissions().mode() & 0o777 != 0o600 {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
     Ok(())
 }
 
