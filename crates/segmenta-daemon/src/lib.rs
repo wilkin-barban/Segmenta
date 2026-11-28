@@ -13,6 +13,7 @@ pub mod ipc;
 pub mod logging;
 pub mod manager;
 pub mod media;
+pub mod pairing;
 pub mod postprocess;
 pub mod remote;
 pub mod remote_tls;
