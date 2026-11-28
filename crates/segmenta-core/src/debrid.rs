@@ -309,6 +309,216 @@ pub fn parse_resolution(
     sanitize_link(&link).ok_or(DebridError::Malformed)
 }
 
+/// One in-flight device authorization, as the provider described it.
+///
+/// The code the user types lives here and nowhere else: it is a temporary credential, so
+/// the `Debug` render keeps it out of logs while still being useful for a bug report.
+#[derive(Clone, PartialEq, Eq)]
+pub struct DeviceFlow {
+    /// Code the client polls with.
+    pub device_code: String,
+    /// Short code the user types on the provider's page.
+    pub user_code: String,
+    /// Page where the code is entered.
+    pub verification_url: String,
+    /// Seconds between polls, as requested by the provider.
+    pub interval_secs: u64,
+    /// How long the whole flow stays valid.
+    pub expires_in_secs: u64,
+}
+
+impl fmt::Debug for DeviceFlow {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DeviceFlow")
+            .field("verification_url", &self.verification_url)
+            .field("interval_secs", &self.interval_secs)
+            .field("expires_in_secs", &self.expires_in_secs)
+            .finish()
+    }
+}
+
+/// Longest interval the client will wait between polls, however the provider answers.
+pub const MAX_POLL_INTERVAL_SECS: u64 = 60;
+
+/// What one poll produced.
+///
+/// `Debug` is written by hand: the granted variant holds the per-user secret, and a derived
+/// render would print it.
+#[derive(Clone, PartialEq, Eq)]
+pub enum PollOutcome {
+    /// The user has not authorized yet: poll again after the interval.
+    Pending,
+    /// The provider asked for a longer interval.
+    SlowDown,
+    /// The user refused on the provider's page.
+    Denied,
+    /// The flow expired before being authorized.
+    Expired,
+    /// Authorized: the provider handed credentials, which still need the token exchange.
+    Granted {
+        /// Per-user client id.
+        client_id: String,
+        /// Per-user secret. Never rendered by `Debug`.
+        client_secret: String,
+    },
+}
+
+impl fmt::Debug for PollOutcome {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PollOutcome::Pending => formatter.write_str("Pending"),
+            PollOutcome::SlowDown => formatter.write_str("SlowDown"),
+            PollOutcome::Denied => formatter.write_str("Denied"),
+            PollOutcome::Expired => formatter.write_str("Expired"),
+            PollOutcome::Granted { .. } => formatter.write_str("Granted { <redacted> }"),
+        }
+    }
+}
+
+/// Build the request that starts a device flow.
+///
+/// The client id is a parameter on purpose: a made-up one fails on the first call and looks
+/// like a broken integration, so the caller must own that decision.
+pub fn device_start_request(
+    provider: Provider,
+    client_id: &str,
+) -> Result<DebridRequest, DebridError> {
+    if client_id.trim().is_empty() {
+        return Err(DebridError::Unsupported("missing oauth client id"));
+    }
+    match provider {
+        Provider::RealDebrid => Ok(DebridRequest {
+            method: "GET",
+            url: format!(
+                "https://api.real-debrid.com/oauth/v2/device/code?client_id={}&new_credentials=yes",
+                encode(client_id.trim())
+            ),
+            headers: Vec::new(),
+            body: String::new(),
+            credential_in_url: false,
+        }),
+        // AllDebrid and TorBox authenticate with an API key; Mega-Debrid with the account
+        // itself; Premiumize needs a registered OAuth client before the flow exists.
+        Provider::AllDebrid | Provider::TorBox | Provider::MegaDebrid | Provider::Premiumize => {
+            Err(DebridError::Unsupported(provider.as_str()))
+        }
+    }
+}
+
+/// Read the start of a device flow.
+pub fn parse_device_start(
+    provider: Provider,
+    status: u16,
+    body: &str,
+) -> Result<DeviceFlow, DebridError> {
+    match status {
+        401 | 403 => return Err(DebridError::Unauthorized),
+        429 => return Err(DebridError::QuotaExceeded),
+        500..=599 => return Err(DebridError::Unreachable),
+        _ => {}
+    }
+    if provider != Provider::RealDebrid {
+        return Err(DebridError::Unsupported(provider.as_str()));
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(body).map_err(|_| DebridError::Malformed)?;
+    let text = |key: &str| {
+        value
+            .get(key)
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+    };
+    Ok(DeviceFlow {
+        device_code: text("device_code").ok_or(DebridError::Malformed)?,
+        user_code: text("user_code").ok_or(DebridError::Malformed)?,
+        verification_url: text("verification_url").ok_or(DebridError::Malformed)?,
+        interval_secs: value
+            .get("interval")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(5)
+            .max(1),
+        expires_in_secs: value
+            .get("expires_in")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(600),
+    })
+}
+
+/// Build the poll request for `flow`.
+pub fn device_poll_request(
+    flow: &DeviceFlow,
+    client_id: &str,
+) -> Result<DebridRequest, DebridError> {
+    if client_id.trim().is_empty() {
+        return Err(DebridError::Unsupported("missing oauth client id"));
+    }
+    Ok(DebridRequest {
+        method: "GET",
+        url: format!(
+            "https://api.real-debrid.com/oauth/v2/device/credentials?client_id={}&device_code={}",
+            encode(client_id.trim()),
+            encode(&flow.device_code)
+        ),
+        headers: Vec::new(),
+        body: String::new(),
+        // The device code is a temporary credential and travels in the query.
+        credential_in_url: true,
+    })
+}
+
+/// Read one poll answer.
+pub fn parse_poll(provider: Provider, status: u16, body: &str) -> Result<PollOutcome, DebridError> {
+    if provider != Provider::RealDebrid {
+        return Err(DebridError::Unsupported(provider.as_str()));
+    }
+    // The provider answers 403 while the user has not decided yet.
+    if status == 403 {
+        return Ok(PollOutcome::Pending);
+    }
+    if (500..=599).contains(&status) {
+        return Err(DebridError::Unreachable);
+    }
+    if status == 200 {
+        let value: serde_json::Value =
+            serde_json::from_str(body).map_err(|_| DebridError::Malformed)?;
+        let client_id = value
+            .get("client_id")
+            .and_then(|value| value.as_str())
+            .ok_or(DebridError::Malformed)?
+            .to_string();
+        let client_secret = value
+            .get("client_secret")
+            .and_then(|value| value.as_str())
+            .ok_or(DebridError::Malformed)?
+            .to_string();
+        return Ok(PollOutcome::Granted {
+            client_id,
+            client_secret,
+        });
+    }
+    let value: serde_json::Value = serde_json::from_str(body).unwrap_or_default();
+    let error = value
+        .get("error")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    match error {
+        "slow_down" => Ok(PollOutcome::SlowDown),
+        "access_denied" => Ok(PollOutcome::Denied),
+        "expired_token" => Ok(PollOutcome::Expired),
+        // An unknown error is not a reason to keep polling forever.
+        "" => Ok(PollOutcome::Pending),
+        _ => Ok(PollOutcome::Pending),
+    }
+}
+
+/// Next wait between polls: the provider's interval, doubled on `slow_down`, capped.
+pub fn next_interval(interval: u64, slow_down: bool) -> u64 {
+    let base = interval.max(1);
+    let wanted = if slow_down { base * 2 } else { base };
+    wanted.min(MAX_POLL_INTERVAL_SECS)
+}
+
 /// Anything that can perform a [`DebridRequest`]: the daemon's HTTP client in production,
 /// a canned answer in tests.
 #[async_trait::async_trait]

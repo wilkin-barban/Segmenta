@@ -3,7 +3,9 @@
 // ---------------------------------------------------------------------------
 
 use segmenta_core::debrid::{
-    account_request, parse_account, resolve_with, AccountInfo, DebridHttp, Provider,
+    account_request, device_poll_request, device_start_request, next_interval, parse_account,
+    parse_device_start, parse_poll, resolve_with, AccountInfo, DebridHttp, PollOutcome, Provider,
+    MAX_POLL_INTERVAL_SECS,
 };
 use std::sync::Mutex;
 
@@ -359,4 +361,106 @@ fn mega_debrid_account_reads_the_vip_epoch() {
     )
     .unwrap_err();
     assert_eq!(free, segmenta_core::debrid::DebridError::AccountNotPremium);
+}
+
+#[test]
+fn a_device_flow_start_carries_the_code_the_user_must_type() {
+    let request = device_start_request(Provider::RealDebrid, "client-1").unwrap();
+    assert!(
+        request.url.contains("/oauth/v2/device/code"),
+        "{}",
+        request.url
+    );
+    assert!(request.url.contains("client_id=client-1"));
+    assert!(request.url.contains("new_credentials=yes"));
+
+    let flow = parse_device_start(
+        Provider::RealDebrid,
+        200,
+        r#"{"device_code":"dev","user_code":"ABCD","verification_url":"https://real-debrid.com/device","interval":5,"expires_in":1800}"#,
+    )
+    .unwrap();
+    assert_eq!(flow.device_code, "dev");
+    assert_eq!(flow.user_code, "ABCD");
+    assert_eq!(flow.verification_url, "https://real-debrid.com/device");
+    assert_eq!(flow.interval_secs, 5);
+    assert_eq!(flow.expires_in_secs, 1800);
+}
+
+#[test]
+fn only_providers_with_a_real_device_flow_offer_one() {
+    // AllDebrid and TorBox authenticate with an API key, and Premiumize needs a registered
+    // OAuth client: inventing a flow for them would fail on the first call.
+    for provider in [Provider::AllDebrid, Provider::TorBox, Provider::MegaDebrid] {
+        assert!(
+            device_start_request(provider, "client-1").is_err(),
+            "{provider:?}"
+        );
+    }
+    assert!(device_start_request(Provider::Premiumize, "client-1").is_err());
+    // An empty client id is a configuration mistake, not a reason to call the provider.
+    assert!(device_start_request(Provider::RealDebrid, "  ").is_err());
+}
+
+#[test]
+fn polling_reports_pending_denied_and_granted_without_guessing() {
+    let flow = parse_device_start(
+        Provider::RealDebrid,
+        200,
+        r#"{"device_code":"dev","user_code":"ABCD","verification_url":"https://x/device","interval":5,"expires_in":900}"#,
+    )
+    .unwrap();
+    let request = device_poll_request(&flow, "client-1").unwrap();
+    assert!(request.url.contains("device_code=dev"), "{}", request.url);
+
+    // 403 is what the provider answers while the user has not authorized yet.
+    assert_eq!(
+        parse_poll(Provider::RealDebrid, 403, "").unwrap(),
+        PollOutcome::Pending
+    );
+    // `slow_down` asks for a longer interval instead of an immediate retry.
+    assert_eq!(
+        parse_poll(
+            Provider::RealDebrid,
+            400,
+            r#"{"error":"slow_down","error_code":16}"#
+        )
+        .unwrap(),
+        PollOutcome::SlowDown
+    );
+    assert_eq!(
+        parse_poll(
+            Provider::RealDebrid,
+            400,
+            r#"{"error":"access_denied","error_code":17}"#
+        )
+        .unwrap(),
+        PollOutcome::Denied
+    );
+    assert_eq!(
+        parse_poll(
+            Provider::RealDebrid,
+            400,
+            r#"{"error":"expired_token","error_code":18}"#
+        )
+        .unwrap(),
+        PollOutcome::Expired
+    );
+    // A granted poll hands over the per-user credentials, not the token yet.
+    let granted = parse_poll(
+        Provider::RealDebrid,
+        200,
+        r#"{"client_id":"user-client","client_secret":"user-secret"}"#,
+    )
+    .unwrap();
+    assert!(matches!(granted, PollOutcome::Granted { .. }));
+    // The secret must never render.
+    assert!(!format!("{granted:?}").contains("user-secret"));
+}
+
+#[test]
+fn the_next_poll_interval_respects_slow_down_and_the_cap() {
+    assert_eq!(next_interval(5, false), 5);
+    assert_eq!(next_interval(5, true), 10);
+    assert_eq!(next_interval(50, true), MAX_POLL_INTERVAL_SECS);
 }
