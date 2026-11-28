@@ -34,7 +34,7 @@ Versión: **0.7.0**, sin tag ni release hasta cerrar el hito.
 - [x] T2 — GDrive (confirmación de análisis de virus y exportación de Docs/Sheets/Slides), Gofile y Rapidgator, con reenvío acotado de formularios y enlaces caducados (S1) — ruta: `segmenta-core` — commit: `d1893fa` + `dbcf591`.
 - [x] T3 — `hub.rs`: GitHub releases con paginación `Link: rel="next"`, Hugging Face (modelo/dataset) con rutas validadas contra traversal, SHA-256 publicado y token desde Site Logins (S1) — ruta: `segmenta-core` + daemon — commit: `d7047c7` + `3411ff4`.
 - [x] T4 — `ftp.rs` sin TLS: sondeo `SIZE`/`MDTM`, `REST`/`RETR` pasivo segmentado, reutilizando planner, DiskWriter y HostLimits, con servidor FTP de prueba (S2) — ruta: `segmenta-core` — commit: `0e0cba5` + `e17e563` + ver L8.
-- [x] T5 — FTPS, reanudación por `MDTM` y bind a `vpn_interface`, sobre el mismo cliente (S2) — ruta: `segmenta-core` — commit: ver L9.
+- [x] T5 — FTPS, reanudación por `MDTM` y bind a `vpn_interface`, sobre el mismo cliente (S2) — ruta: `segmenta-core` — commit: `cca9bd9` + `c4a69f0` + `65c46e8`, ver L9.
 - [ ] T6 — `batch.rs` (patrones `archivo_[01-25].jpg`) y `folder.rs` (BFS acotado de `Index of` y FTP, filtrado de hosts externos y carpetas padre) (S3) — ruta: `segmenta-core` — commit: pendiente.
 - [ ] T7 — `remotezip.rs`: EOCD + ZIP64 + directorio central por `Range`, listado en el alta y descarga selectiva con `If-Range` y CRC-32 (S3) — ruta: `segmenta-core` — commit: pendiente.
 - [ ] T8 — Diálogo **Link Grabber** en la GUI y `LinksPart` en `segmenta-host`: pegar listas, filtrar, asignar paquete y contraseña de lote (S3) — ruta: `segmenta-gui`, `segmenta-host` — commit: pendiente.
