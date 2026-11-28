@@ -7,19 +7,23 @@ use segmenta_core::debrid::{
 };
 use std::sync::Mutex;
 
-/// Canned debrid API: records requests and answers by URL path.
+/// Canned debrid API: records requests and answers by URL path, in order.
 struct Canned {
-    answers: std::collections::HashMap<String, (u16, String)>,
+    answers: Mutex<std::collections::HashMap<String, std::collections::VecDeque<(u16, String)>>>,
     seen: Mutex<Vec<(String, String)>>,
 }
 
 impl Canned {
     fn new(answers: &[(&str, u16, &str)]) -> Canned {
+        let mut map: std::collections::HashMap<String, std::collections::VecDeque<(u16, String)>> =
+            std::collections::HashMap::new();
+        for (path, status, body) in answers {
+            map.entry(path.to_string())
+                .or_default()
+                .push_back((*status, body.to_string()));
+        }
         Canned {
-            answers: answers
-                .iter()
-                .map(|(path, status, body)| (path.to_string(), (*status, body.to_string())))
-                .collect(),
+            answers: Mutex::new(map),
             seen: Mutex::new(Vec::new()),
         }
     }
@@ -46,11 +50,14 @@ impl DebridHttp for Canned {
             .lock()
             .unwrap()
             .push((request.method.to_string(), request.url.clone()));
-        Ok(self
-            .answers
-            .get(&base)
-            .cloned()
-            .unwrap_or((404, String::new())))
+        // Answers are consumed in order: Mega-Debrid answers the login and the link request
+        // on the same path, so a single answer per path would hide the second step.
+        let mut answers = self.answers.lock().unwrap();
+        match answers.get_mut(&base) {
+            Some(queue) if queue.len() > 1 => Ok(queue.pop_front().unwrap()),
+            Some(queue) => Ok(queue.front().cloned().unwrap_or((404, String::new()))),
+            None => Ok((404, String::new())),
+        }
     }
 }
 
@@ -263,4 +270,93 @@ fn a_request_that_carries_a_secret_in_its_url_redacts_it_when_printed() {
     let printed = format!("{request:?}");
     assert!(!printed.contains("SECRET"), "{printed}");
     assert!(printed.contains("mega-debrid"), "{printed}");
+}
+
+#[tokio::test]
+async fn mega_debrid_logs_in_with_credentials_then_asks_for_the_link() {
+    let http = Canned::new(&[
+        (
+            "/api.php",
+            200,
+            r#"{"response_code":"ok","token":"session-token","vip":"1900000000"}"#,
+        ),
+        (
+            "/api.php",
+            200,
+            r#"{"response_code":"ok","link":"https://dl.mega-debrid.eu/f.zip"}"#,
+        ),
+    ]);
+    let link = resolve_with(
+        &http,
+        Provider::MegaDebrid,
+        "user:pass",
+        "https://hoster.example/f.zip",
+    )
+    .await
+    .unwrap();
+    assert_eq!(link, "https://dl.mega-debrid.eu/f.zip");
+    let seen = http.seen();
+    assert_eq!(seen.len(), 2, "{seen:?}");
+    // The session token travels in the query — that is the provider's design — so the
+    // request must be marked as carrying a credential there.
+    assert!(seen[1].1.contains("token=session-token"), "{seen:?}");
+    assert!(!seen[0].1.contains("password"), "{seen:?}");
+}
+
+#[tokio::test]
+async fn a_free_mega_debrid_account_is_not_reported_as_a_bad_token() {
+    // `vip_end` means the account cannot use the API at all. Telling the user their token is
+    // wrong sends them to look at the wrong thing.
+    let http = Canned::new(&[(
+        "/api.php",
+        200,
+        r#"{"response_code":"vip_end","response_text":"only premium"}"#,
+    )]);
+    let refused = resolve_with(
+        &http,
+        Provider::MegaDebrid,
+        "user:pass",
+        "https://hoster.example/f.zip",
+    )
+    .await;
+    assert_eq!(
+        refused.unwrap_err(),
+        segmenta_core::debrid::DebridError::AccountNotPremium
+    );
+}
+
+#[tokio::test]
+async fn mega_debrid_credentials_without_a_password_are_refused_before_any_request() {
+    let http = Canned::new(&[]);
+    let refused = resolve_with(
+        &http,
+        Provider::MegaDebrid,
+        "onlyuser",
+        "https://x.example/a",
+    )
+    .await;
+    assert_eq!(
+        refused.unwrap_err(),
+        segmenta_core::debrid::DebridError::Unauthorized
+    );
+    assert!(http.seen().is_empty());
+}
+
+#[test]
+fn mega_debrid_account_reads_the_vip_epoch() {
+    let paid = parse_account(
+        Provider::MegaDebrid,
+        200,
+        r#"{"response_code":"ok","token":"t","vip":"1900000000"}"#,
+    )
+    .unwrap();
+    assert!(paid.is_premium);
+    assert_eq!(paid.expires_at.as_deref(), Some("1900000000"));
+    let free = parse_account(
+        Provider::MegaDebrid,
+        200,
+        r#"{"response_code":"vip_end","response_text":"only premium"}"#,
+    )
+    .unwrap_err();
+    assert_eq!(free, segmenta_core::debrid::DebridError::AccountNotPremium);
 }

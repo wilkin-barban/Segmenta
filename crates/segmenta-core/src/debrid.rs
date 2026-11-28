@@ -40,6 +40,8 @@ pub enum Provider {
     TorBox,
     /// Premiumize: one `directdl` call with the key in the header.
     Premiumize,
+    /// Mega-Debrid: credentials become a session token, and the token travels in the query.
+    MegaDebrid,
 }
 
 impl Provider {
@@ -50,6 +52,7 @@ impl Provider {
             "alldebrid" | "all-debrid" | "all_debrid" => Some(Provider::AllDebrid),
             "torbox" | "tor-box" => Some(Provider::TorBox),
             "premiumize" => Some(Provider::Premiumize),
+            "megadebrid" | "mega-debrid" | "mega_debrid" => Some(Provider::MegaDebrid),
             _ => None,
         }
     }
@@ -61,6 +64,7 @@ impl Provider {
             Provider::AllDebrid => "alldebrid",
             Provider::TorBox => "torbox",
             Provider::Premiumize => "premiumize",
+            Provider::MegaDebrid => "megadebrid",
         }
     }
 }
@@ -117,6 +121,9 @@ pub enum DebridError {
     LinkUnavailable,
     /// The account ran out of traffic or hit a rate limit.
     QuotaExceeded,
+    /// The account exists but cannot use the API at all (a free plan on a premium-only API).
+    /// Distinct from [`DebridError::Unauthorized`] on purpose: the credentials are fine.
+    AccountNotPremium,
     /// The provider answered with an unexpected shape.
     Malformed,
     /// The provider could not be reached at all.
@@ -131,6 +138,7 @@ impl DebridError {
             DebridError::Unauthorized => "ERR_DEBRID_UNAUTHORIZED",
             DebridError::LinkUnavailable => "ERR_DEBRID_LINK_UNAVAILABLE",
             DebridError::QuotaExceeded => "ERR_DEBRID_QUOTA",
+            DebridError::AccountNotPremium => "ERR_DEBRID_NOT_PREMIUM",
             DebridError::Malformed => "ERR_DEBRID_BAD_RESPONSE",
             DebridError::Unreachable => "ERR_DEBRID_UNREACHABLE",
         }
@@ -146,6 +154,9 @@ impl DebridError {
             DebridError::LinkUnavailable => "the provider cannot unrestrict this link".to_string(),
             DebridError::QuotaExceeded => {
                 "the provider quota or rate limit was reached".to_string()
+            }
+            DebridError::AccountNotPremium => {
+                "this account cannot use the provider API; a paid plan is required".to_string()
             }
             DebridError::Malformed => "the provider answered with an unexpected shape".to_string(),
             DebridError::Unreachable => "the provider could not be reached".to_string(),
@@ -196,6 +207,20 @@ pub fn resolve_request(
             body: format!("link={}", encode(link)),
             credential_in_url: false,
         }),
+        Provider::MegaDebrid => {
+            let (login, password) = split_credentials(token)?;
+            Ok(DebridRequest {
+                method: "POST",
+                url: "https://www.mega-debrid.eu/api.php?action=connectUser".to_string(),
+                headers: vec![(
+                    "Content-Type".to_string(),
+                    "application/x-www-form-urlencoded".to_string(),
+                )],
+                // Credentials go in the body of a POST, never in the query of a logged URL.
+                body: format!("login={}&password={}", encode(&login), encode(&password)),
+                credential_in_url: false,
+            })
+        }
         Provider::Premiumize => Ok(DebridRequest {
             method: "POST",
             url: "https://www.premiumize.me/api/transfer/directdl".to_string(),
@@ -273,8 +298,8 @@ pub fn parse_resolution(
                 .and_then(|link| link.as_str())
                 .map(str::to_string)
         }
-        // TorBox needs a second call; a single answer has no link to return.
-        Provider::TorBox => return Err(DebridError::Malformed),
+        // TorBox and Mega-Debrid need a second call; a single answer has no link.
+        Provider::TorBox | Provider::MegaDebrid => return Err(DebridError::Malformed),
     };
     // Two different failures, deliberately kept apart: a provider that answers successfully
     // without a link is telling us the hoster is unavailable (the user can try another one);
@@ -309,6 +334,12 @@ pub async fn resolve_with(
         Provider::RealDebrid | Provider::AllDebrid | Provider::Premiumize => {
             parse_resolution(provider, status, &body)
         }
+        Provider::MegaDebrid => {
+            let session = mega_debrid_session(status, &body)?;
+            let request = mega_debrid_link_request(&session, link)?;
+            let (status, body) = http.send(&request).await?;
+            mega_debrid_link(status, &body)
+        }
         Provider::TorBox => {
             let id = torbox_download_id(status, &body)?;
             let request = torbox_link_request(token, id)?;
@@ -316,6 +347,91 @@ pub async fn resolve_with(
             torbox_link(status, &body)
         }
     }
+}
+
+/// Split `login:password` into its two halves.
+///
+/// Mega-Debrid has no API key: it authenticates with the account itself and returns a
+/// session token. Storing the pair in the keyring is the same promise as storing a token —
+/// nothing leaves the secret store — but the UI has to call it what it is.
+fn split_credentials(credentials: &str) -> Result<(String, String), DebridError> {
+    match credentials.split_once(':') {
+        Some((login, password)) if !login.trim().is_empty() && !password.is_empty() => {
+            Ok((login.trim().to_string(), password.to_string()))
+        }
+        _ => Err(DebridError::Unauthorized),
+    }
+}
+
+/// Read the session token Mega-Debrid returns after `connectUser`.
+fn mega_debrid_session(status: u16, body: &str) -> Result<String, DebridError> {
+    match status {
+        401 | 403 => return Err(DebridError::Unauthorized),
+        429 => return Err(DebridError::QuotaExceeded),
+        500..=599 => return Err(DebridError::Unreachable),
+        _ => {}
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(body).map_err(|_| DebridError::Malformed)?;
+    match value
+        .get("response_code")
+        .and_then(|code| code.as_str())
+        .unwrap_or_default()
+    {
+        "ok" => value
+            .get("token")
+            .and_then(|token| token.as_str())
+            .filter(|token| !token.is_empty())
+            .map(str::to_string)
+            .ok_or(DebridError::Malformed),
+        // A free account cannot use the API at all: the credentials are fine and telling the
+        // user otherwise sends them to check the wrong thing.
+        "vip_end" => Err(DebridError::AccountNotPremium),
+        _ => Err(DebridError::Unauthorized),
+    }
+}
+
+/// Second Mega-Debrid step: ask for the link of `target` with the session token.
+fn mega_debrid_link_request(session: &str, target: &str) -> Result<DebridRequest, DebridError> {
+    Ok(DebridRequest {
+        method: "GET",
+        url: format!(
+            "https://www.mega-debrid.eu/api.php?action=getLink&token={}&link={}",
+            encode(session),
+            encode(target)
+        ),
+        headers: Vec::new(),
+        body: String::new(),
+        // The provider's API puts the session token in the query by design.
+        credential_in_url: true,
+    })
+}
+
+/// Read the link out of the Mega-Debrid answer.
+fn mega_debrid_link(status: u16, body: &str) -> Result<String, DebridError> {
+    match status {
+        401 | 403 => return Err(DebridError::Unauthorized),
+        429 => return Err(DebridError::QuotaExceeded),
+        500..=599 => return Err(DebridError::Unreachable),
+        _ => {}
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(body).map_err(|_| DebridError::Malformed)?;
+    let code = value
+        .get("response_code")
+        .and_then(|code| code.as_str())
+        .unwrap_or_default();
+    if code == "vip_end" {
+        return Err(DebridError::AccountNotPremium);
+    }
+    if code != "ok" {
+        return Err(DebridError::LinkUnavailable);
+    }
+    let link = value
+        .get("link")
+        .and_then(|link| link.as_str())
+        .ok_or(DebridError::LinkUnavailable)?;
+    sanitize_link(link).ok_or(DebridError::Malformed)
 }
 
 /// Read the id of the web download TorBox just created.
@@ -407,6 +523,7 @@ pub fn account_request(provider: Provider, token: &str) -> Result<DebridRequest,
         Provider::AllDebrid => "https://api.alldebrid.com/v4/user",
         Provider::TorBox => "https://api.torbox.app/v1/api/user/me",
         Provider::Premiumize => "https://www.premiumize.me/api/account/info",
+        Provider::MegaDebrid => "https://www.mega-debrid.eu/api.php?action=connectUser",
     };
     Ok(DebridRequest {
         method: "GET",
@@ -458,6 +575,32 @@ pub fn parse_account(
                     .get("premiumUntil")
                     .and_then(|v| v.as_u64())
                     .map(|epoch| epoch.to_string()),
+            }
+        }
+        Provider::MegaDebrid => {
+            let code = value
+                .get("response_code")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            if code == "vip_end" {
+                return Err(DebridError::AccountNotPremium);
+            }
+            if code != "ok" {
+                return Err(DebridError::Unauthorized);
+            }
+            let vip = value
+                .get("vip")
+                .and_then(|value| match value {
+                    serde_json::Value::String(text) => text.parse::<u64>().ok(),
+                    other => other.as_u64(),
+                })
+                .unwrap_or(0);
+            AccountInfo {
+                // The API answers with a session token, not a name: there is nothing honest
+                // to show here, so nothing is invented.
+                username: None,
+                is_premium: vip > 0,
+                expires_at: (vip > 0).then(|| vip.to_string()),
             }
         }
         Provider::Premiumize => {

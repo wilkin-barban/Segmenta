@@ -44,7 +44,7 @@ Versión: **0.7.0**, sin tag ni release hasta cerrar el hito.
 ## Tareas
 
 - [x] T1 — Debrid: contrato de proveedor con metadata y **TorBox** completo (resolución + cuenta), con servidor de prueba local (S1) — ruta: `segmenta-core` — commit: ver L5.
-- [x] T2 — Premiumize y Mega-Debrid sobre el mismo contrato (S1) — ruta: `segmenta-core` — commit: ver L6.
+- [x] T2 — Premiumize y Mega-Debrid sobre el mismo contrato (S1) — ruta: `segmenta-core` — commit: `0fd3b01` + ver L6/L7.
 - [ ] T3 — Device code / OAuth con polling para los proveedores que lo ofrecen, y `segmenta debrid login` (S1) — ruta: `segmenta-core`, `segmenta-cli` — commit: pendiente.
 - [ ] T4 — `debrid_accounts` (migración aditiva), prioridad y resolución centralizada en `manager.rs` con `direct: true` (S2) — ruta: `segmenta-daemon` — commit: pendiente.
 - [ ] T5 — `torrent_via_debrid`: alta remota, polling de progreso, descarga por HTTP y limpieza (S3) — ruta: `segmenta-daemon` — commit: pendiente.
@@ -108,3 +108,9 @@ Versión: **0.7.0**, sin tag ni release hasta cerrar el hito.
   - **Dos fallos distintos, a propósito**: un proveedor que responde bien **sin enlace** es `LinkUnavailable` (el hoster no está disponible para esa cuenta, el usuario puede probar otro); un enlace **inseguro** (`http`, credenciales, espacios) es `Malformed`, porque reintentar no lo arregla.
   - `premium_until = 0` significa «nunca suscripto», no «vencido hace mucho»: no se lee como premium.
   - Cuatro pruebas nuevas (resolución, lista vacía, metadata premium y gratis, y redacción en `Debug`).
+
+- L7 — T2 (b) cerrado: **Mega-Debrid**, el proveedor que no encaja en el molde. Su API no usa un token pegable: se conecta con `login`/`password` (`action=connectUser`) y devuelve un **token de sesión** que viaja en la query (`action=getLink`). Se implementó como flujo de dos pasos sobre `resolve_with`.
+  - **Error propio `AccountNotPremium`** (`ERR_DEBRID_NOT_PREMIUM`): `vip_end` significa que la cuenta existe y no puede usar la API. Devolverlo como `Unauthorized` mandaría al usuario a revisar un token que está perfecto.
+  - Las credenciales van en el **cuerpo de un POST**, nunca en la query; el paso del token de sesión sí va en la query y por eso la petición se marca `credential_in_url: true`, que ya redacta el `Debug`.
+  - `username` queda en `None` a propósito: la API no lo devuelve y no se inventa.
+  - Cuatro pruebas nuevas, más un arreglo del arnés: `Canned` ahora **consume respuestas en orden por path**, porque el login y el pedido de enlace comparten `/api.php` y una sola respuesta por path ocultaba el segundo paso.
