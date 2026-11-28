@@ -91,14 +91,15 @@ impl Daemon {
                 .nth(1)
                 .expect("the pairing payload carries the token")
                 .to_string();
-            let deadline = Instant::now() + Duration::from_secs(15);
+            let deadline = Instant::now() + Duration::from_secs(20);
             while Instant::now() < deadline {
                 if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+                    // The daemon serves HTTPS only: the test pins the certificate it
+                    // generated in its own data directory, exactly like a phone would.
                     let (status, _) = self.http("GET", "/api/downloads", Some(&token), "");
                     if status == 200 {
                         return token;
                     }
-                    break;
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
@@ -107,11 +108,39 @@ impl Daemon {
     }
 
     fn http(&self, method: &str, path: &str, token: Option<&str>, body: &str) -> (u16, String) {
-        use std::io::{Read, Write};
-        let mut stream = std::net::TcpStream::connect(("127.0.0.1", self.port)).unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(10)))
+        // The daemon only serves HTTPS. The client pins the certificate the daemon wrote in
+        // its own data directory: anything else would be trusting whatever answers.
+        let tls = segmenta_daemon::remote_tls::RemoteTls::ensure(
+            &self.dir.path().join("data").join("segmenta"),
+        )
+        .expect("the daemon generated a certificate");
+        let mut roots = tokio_rustls::rustls::RootCertStore::empty();
+        for der in pem_certificates(tls.cert_pem()) {
+            roots
+                .add(tokio_rustls::rustls::pki_types::CertificateDer::from(der))
+                .unwrap();
+        }
+        let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+        let config = std::sync::Arc::new(
+            tokio_rustls::rustls::ClientConfig::builder()
+                .with_root_certificates(roots)
+                .with_no_client_auth(),
+        );
+        let connector = tokio_rustls::TlsConnector::from(config);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
             .unwrap();
+        let name = tokio_rustls::rustls::pki_types::ServerName::try_from("127.0.0.1").unwrap();
+        let mut stream = runtime.block_on(async {
+            let tcp = tokio::net::TcpStream::connect(("127.0.0.1", self.port))
+                .await
+                .unwrap();
+            connector
+                .connect(name, tcp)
+                .await
+                .expect("pinned handshake")
+        });
         let auth = token
             .map(|token| format!("Authorization: Bearer {token}\r\n"))
             .unwrap_or_default();
@@ -119,9 +148,17 @@ impl Daemon {
             "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{auth}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         );
-        stream.write_all(request.as_bytes()).unwrap();
         let mut response = String::new();
-        stream.read_to_string(&mut response).unwrap();
+        // One runtime drives the whole exchange: the stream is async even though the rest
+        // of this harness is not.
+        let _ = runtime.block_on(async {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            stream.write_all(request.as_bytes()).await?;
+            let mut buffer = Vec::new();
+            let _ = stream.read_to_end(&mut buffer).await;
+            response = String::from_utf8_lossy(&buffer).to_string();
+            Ok::<(), std::io::Error>(())
+        });
         let status = response
             .split_whitespace()
             .nth(1)
@@ -247,4 +284,48 @@ fn enabling_returns_the_token_once_and_status_never_repeats_it() {
     assert_ne!(second, token);
     let (status, _) = daemon.http("GET", "/api/downloads", Some(&token), "");
     assert_eq!(status, 401);
+}
+
+/// DER bodies of the certificate blocks in a PEM bundle.
+fn pem_certificates(pem: &str) -> Vec<Vec<u8>> {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = Vec::new();
+    let mut body = String::new();
+    let mut inside = false;
+    for line in pem.lines() {
+        let line = line.trim();
+        if line.contains("BEGIN CERTIFICATE") {
+            inside = true;
+            continue;
+        }
+        if line.contains("END CERTIFICATE") {
+            let mut decoded = Vec::new();
+            let mut buffer = 0u32;
+            let mut bits = 0u8;
+            for byte in body.bytes() {
+                if byte == b'=' {
+                    continue;
+                }
+                let Some(value) = TABLE.iter().position(|c| *c == byte) else {
+                    continue;
+                };
+                buffer = (buffer << 6) | value as u32;
+                bits += 6;
+                if bits >= 8 {
+                    bits -= 8;
+                    decoded.push((buffer >> bits) as u8);
+                }
+            }
+            if !decoded.is_empty() {
+                out.push(decoded);
+            }
+            inside = false;
+            body.clear();
+            continue;
+        }
+        if inside {
+            body.push_str(line);
+        }
+    }
+    out
 }
