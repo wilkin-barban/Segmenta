@@ -210,6 +210,10 @@ pub struct Manager {
     /// HTTP layer used for debrid calls. Production uses reqwest; a test injects canned
     /// answers, which is the only way to exercise the seam hermetically.
     debrid_http: std::sync::Arc<dyn segmenta_core::debrid::DebridHttp>,
+    /// Download sink used for debrid torrent jobs. Injected in tests; production creates tasks.
+    download_sink: Option<std::sync::Arc<dyn crate::debrid_torrent_job::DownloadSink>>,
+    /// Clock used for debrid torrent jobs. Injected in tests; production uses real clock.
+    torrent_clock: Option<std::sync::Arc<dyn crate::debrid_torrent_job::JobClock>>,
     #[cfg(test)]
     after_settings_persist: Option<Arc<dyn Fn() + Send + Sync>>,
     progress: Arc<Mutex<HashMap<String, ProgressSnapshot>>>,
@@ -248,6 +252,8 @@ impl Manager {
             host_limits,
             pairing: std::sync::Mutex::new(crate::pairing::PairingCodes::new()),
             debrid_http: std::sync::Arc::new(crate::debrid_http::ReqwestDebrid),
+            download_sink: None,
+            torrent_clock: None,
             #[cfg(test)]
             after_settings_persist: None,
             progress: Arc::new(Mutex::new(HashMap::new())),
@@ -266,6 +272,24 @@ impl Manager {
         http: std::sync::Arc<dyn segmenta_core::debrid::DebridHttp>,
     ) -> Manager {
         self.debrid_http = http;
+        self
+    }
+
+    /// Replace the download sink used for debrid torrent jobs. Injected in tests.
+    pub fn with_download_sink(
+        mut self,
+        sink: std::sync::Arc<dyn crate::debrid_torrent_job::DownloadSink>,
+    ) -> Manager {
+        self.download_sink = Some(sink);
+        self
+    }
+
+    /// Replace the clock used for debrid torrent jobs. Injected in tests.
+    pub fn with_torrent_clock(
+        mut self,
+        clock: std::sync::Arc<dyn crate::debrid_torrent_job::JobClock>,
+    ) -> Manager {
+        self.torrent_clock = Some(clock);
         self
     }
 
@@ -2076,7 +2100,7 @@ impl Manager {
     ///
     /// When no account row exists the per-provider alias from the previous version is used,
     /// so an installation that never created an account keeps working.
-    fn debrid_candidates(&self) -> Result<Vec<(Provider, String)>, RpcError> {
+    pub fn debrid_candidates(&self) -> Result<Vec<(Provider, String)>, RpcError> {
         let rows = self.store.debrid_accounts().map_err(store_error)?;
         let mut out = Vec::new();
         for row in rows.into_iter().filter(|row| row.enabled) {
@@ -2101,6 +2125,12 @@ impl Manager {
             }
         }
         Ok(out)
+    }
+
+    /// Select the highest priority enabled account that supports remote torrents.
+    pub fn best_debrid_account_for_torrent(&self) -> Result<Option<(Provider, String)>, RpcError> {
+        let candidates = self.debrid_candidates()?;
+        Ok(crate::debrid_torrent_job::pick_best_account(&candidates))
     }
 
     /// Import one Click'n'Load 2 package.
@@ -2896,6 +2926,77 @@ fn debrid_code(error: &segmenta_core::debrid::DebridError) -> i64 {
         segmenta_core::debrid::DebridError::UnknownState(_) => 1067,
         segmenta_core::debrid::DebridError::Malformed => 1064,
         segmenta_core::debrid::DebridError::Unreachable => 1065,
+    }
+}
+
+/// Default download sink that persists direct HTTP downloads into the store.
+struct ProductionDownloadSink {
+    store: Arc<Store>,
+    bus: Arc<EventBus>,
+    destination_dir: PathBuf,
+}
+
+#[async_trait::async_trait]
+impl crate::debrid_torrent_job::DownloadSink for ProductionDownloadSink {
+    async fn enqueue(&self, url: &str) -> Result<(), String> {
+        let parsed = url::Url::parse(url).map_err(|e| e.to_string())?;
+        let filename = parsed
+            .path_segments()
+            .and_then(|mut s| s.next_back())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("download.bin")
+            .to_string();
+        let final_path =
+            resolve_unique_path(&self.destination_dir, &filename).map_err(|e| e.to_string())?;
+        let task_id = uuid::Uuid::new_v4().to_string();
+        let record = DownloadRecord {
+            id: task_id.clone(),
+            url: url.to_string(),
+            final_url: None,
+            final_path: final_path.to_string_lossy().into_owned(),
+            temp_path: None,
+            total_bytes: None,
+            downloaded_bytes: 0,
+            status: DownloadStatus::Pending,
+            supports_ranges: false,
+            etag: None,
+            last_modified: None,
+            content_type: None,
+            expected_checksum: None,
+            error_code: None,
+            error_message: None,
+            retry_count: 0,
+            priority: 0,
+            queue_name: "main".to_string(),
+            download_type: "direct".to_string(),
+            created_at: None,
+            completed_at: None,
+            filename,
+            media_kind: None,
+            media_format: None,
+            playlist_title: None,
+            playlist_count: None,
+            batch_id: None,
+            quarantine_path: None,
+            postprocess_exit: None,
+            postprocess_message: None,
+            scheduled_at: None,
+        };
+        self.store
+            .insert_download(&record)
+            .map_err(|e| e.to_string())?;
+        self.bus.publish(
+            "task_added",
+            Some(&task_id),
+            json!({
+                "task_id": task_id,
+                "status": "pending",
+                "url": url,
+                "destination_dir": self.destination_dir.to_string_lossy(),
+                "final_path": record.final_path,
+            }),
+        );
+        Ok(())
     }
 }
 
@@ -4289,8 +4390,21 @@ impl Manager {
             }),
         );
 
-        // One shared librqbit session drives every torrent: seeding stays off, so the
-        // task ends as soon as the payload is complete or the user cancels it.
+        let is_magnet = url.starts_with("magnet:") || segmenta_core::debrid_torrent::is_magnet(url);
+        let debrid_account = if settings.torrent_via_debrid && is_magnet {
+            Some(self.best_debrid_account_for_torrent()?.ok_or_else(|| {
+                RpcError::new(
+                    1060,
+                    "ERR_DEBRID_UNSUPPORTED",
+                    "torrent_via_debrid is active but no supported debrid account is enabled",
+                )
+            })?)
+        } else {
+            None
+        };
+
+        // One shared librqbit session drives every torrent (or remote debrid runner when active):
+        // seeding stays off, so the task ends as soon as the payload is complete or the user cancels it.
         let cancel = Canceller::new();
         let store = Arc::clone(&self.store);
         let bus = Arc::clone(&self.bus);
@@ -4300,10 +4414,12 @@ impl Manager {
         let id = task_id.clone();
         let path = record.final_path.clone();
         let task_cancel = cancel.clone();
-        let settings = self.settings();
         let sequential = settings.torrent_sequential;
         let vpn = vpn_interface(&settings);
         let wake = Arc::clone(&self.scheduler_wake);
+        let debrid_http = Arc::clone(&self.debrid_http);
+        let download_sink = self.download_sink.clone();
+        let torrent_clock = self.torrent_clock.clone();
         let handle = tokio::spawn(async move {
             let mut pipeline = ProgressPipeline::new(
                 Arc::clone(&store),
@@ -4312,20 +4428,72 @@ impl Manager {
                 id.clone(),
             );
             let result = async {
-                let session = crate::torrent::shared_session(&session_dir, vpn.as_deref())
-                    .await
-                    .map_err(|err| (1044, err))?;
                 let _ = store.set_status(&id, DownloadStatus::Downloading, None);
                 bus.publish(
                     "task_started",
                     Some(&id),
                     json!({ "status": "downloading" }),
                 );
-                crate::torrent::run_torrent(session, source, task_cancel, sequential, |line| {
-                    pipeline.report(line.downloaded, Some(line.total));
-                })
-                .await
-                .map_err(|err| (1044, err))
+                if let Some((provider, token)) = debrid_account {
+                    let sink: Arc<dyn crate::debrid_torrent_job::DownloadSink> = match download_sink
+                    {
+                        Some(sink) => sink,
+                        None => Arc::new(ProductionDownloadSink {
+                            store: Arc::clone(&store),
+                            bus: Arc::clone(&bus),
+                            destination_dir: session_dir.clone(),
+                        }),
+                    };
+                    let clock: Arc<dyn crate::debrid_torrent_job::JobClock> = match torrent_clock {
+                        Some(clock) => clock,
+                        None => Arc::new(crate::debrid_torrent_job::RealClock),
+                    };
+                    crate::debrid_torrent_job::run_debrid_torrent_job(
+                        &*debrid_http,
+                        provider,
+                        &token,
+                        &source,
+                        &*sink,
+                        &*clock,
+                        &task_cancel,
+                        // Cleanup is destructive: deleting the remote job before the local
+                        // downloads finished leaves the user with neither the files nor the
+                        // source. Until completion tracking for these enqueued tasks exists,
+                        // the honest answer is "not confirmed", which keeps the remote job.
+                        || {
+                            Err("local completion is not tracked for remote torrents yet"
+                                .to_string())
+                        },
+                        |job| {
+                            pipeline.report(job.progress_pct as u64, Some(100));
+                        },
+                    )
+                    .await
+                    .map_err(|err| match err {
+                        crate::debrid_torrent_job::DebridTorrentError::Core(debrid_err) => {
+                            (debrid_code(&debrid_err), debrid_err.message())
+                        }
+                        crate::debrid_torrent_job::DebridTorrentError::Cancelled => {
+                            (1006, "cancelled".to_string())
+                        }
+                        crate::debrid_torrent_job::DebridTorrentError::DeadlineExceeded => {
+                            (1044, "deadline exceeded".to_string())
+                        }
+                        crate::debrid_torrent_job::DebridTorrentError::Expired => {
+                            (1062, "remote torrent expired".to_string())
+                        }
+                        other => (1044, other.to_string()),
+                    })
+                } else {
+                    let session = crate::torrent::shared_session(&session_dir, vpn.as_deref())
+                        .await
+                        .map_err(|err| (1044, err))?;
+                    crate::torrent::run_torrent(session, source, task_cancel, sequential, |line| {
+                        pipeline.report(line.downloaded, Some(line.total));
+                    })
+                    .await
+                    .map_err(|err| (1044, err))
+                }
             }
             .await;
             pipeline.finish();

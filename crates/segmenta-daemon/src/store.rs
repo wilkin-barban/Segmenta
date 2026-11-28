@@ -537,6 +537,8 @@ pub struct Settings {
     pub inhibit_sleep: bool,
     /// Ask librqbit for the first pieces of a torrent, so playback can start early.
     pub torrent_sequential: bool,
+    /// Send magnets to a Debrid provider instead of running a local BitTorrent session.
+    pub torrent_via_debrid: bool,
     /// Accept Click'n'Load 2 imports on the loopback port.
     pub cnl2_enabled: bool,
     /// Debrid provider used to unrestrict links: `none`, `realdebrid`, `alldebrid` or `torbox`.
@@ -604,6 +606,7 @@ impl Default for Settings {
             extract_remove_source: false,
             inhibit_sleep: true,
             torrent_sequential: false,
+            torrent_via_debrid: false,
             cnl2_enabled: false,
             debrid_provider: "none".to_string(),
             vpn_interface: String::new(),
@@ -730,6 +733,7 @@ pub const SETTING_KEYS: &[&str] = &[
     "extract_remove_source",
     "inhibit_sleep",
     "torrent_sequential",
+    "torrent_via_debrid",
     "cnl2_enabled",
     "debrid_provider",
     "vpn_interface",
