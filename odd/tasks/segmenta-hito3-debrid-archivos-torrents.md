@@ -46,7 +46,7 @@ Versión: **0.7.0**, sin tag ni release hasta cerrar el hito.
 - [x] T1 — Debrid: contrato de proveedor con metadata y **TorBox** completo (resolución + cuenta), con servidor de prueba local (S1) — ruta: `segmenta-core` — commit: ver L5.
 - [x] T2 — Premiumize y Mega-Debrid sobre el mismo contrato (S1) — ruta: `segmenta-core` — commit: `0fd3b01` + ver L6/L7.
 - [x] T3 (a) — Device code / OAuth con polling para los proveedores que lo ofrecen, y `segmenta debrid login` (S1) — ruta: `segmenta-core`, `segmenta-cli` — commit: `23cca14`, ver L8.
-- [ ] T4 — `debrid_accounts` (migración aditiva), prioridad y resolución centralizada en `manager.rs` con `direct: true` (S2) — ruta: `segmenta-daemon` — commit: pendiente.
+- [x] T4 — `debrid_accounts` (migración aditiva), prioridad y resolución centralizada en `manager.rs` con `direct: true` (S2) — ruta: `segmenta-daemon` — commit: ver L9.
 - [ ] T5 — `torrent_via_debrid`: alta remota, polling de progreso, descarga por HTTP y limpieza (S3) — ruta: `segmenta-daemon` — commit: pendiente.
 - [ ] T6 — Verificación de integridad al finalizar (zip en Rust, `7z t` para el resto) con umbral y comprobación bajo demanda (S4) — ruta: `segmenta-daemon` — commit: pendiente.
 - [ ] T7 — Reparación parcial de ZIP por `Range` + `If-Range` conservando cabeceras y segmentos (S4) — ruta: `segmenta-daemon` — commit: pendiente.
@@ -121,3 +121,11 @@ Versión: **0.7.0**, sin tag ni release hasta cerrar el hito.
   - **Defecto propio corregido por la prueba**: `PollOutcome` derivaba `Debug`, y la variante `Granted` lleva el secreto por usuario. Ahora `Debug` está escrito a mano y redacta. La prueba que lo detectó fue la que exige que el secreto no aparezca al imprimir.
   - El `device_code` viaja en la query → la petición de polling se marca `credential_in_url: true` y el `Debug` la redacta.
   - Falta de T3 para cerrar: intercambio del par por un `access_token` y el comando `segmenta debrid login`.
+
+- L9 — T4 cerrado: **resolución centralizada**. Esquema **v11** con `debrid_accounts(id, provider, label, priority, enabled)`; el token vive en el keyring bajo `debrid:<id>` y la fila sólo dice a quién pertenece. `manager::debrid_resolve` ya **no** describe una petición suelta: recorre las cuentas habilitadas por prioridad y llama a `resolve_with`, que es lo que ejecuta los flujos de dos pasos de TorBox y Mega-Debrid. Antes de este commit, T1 y T2 eran código muerto en el binario.
+  - **Fallback real**: `LinkUnavailable`, `QuotaExceeded`, `Unreachable`, `AccountNotPremium` y `Unauthorized` pasan a la cuenta siguiente; se registra cuál se salteó y por qué. Un proveedor que responde fuera de contrato también cae al siguiente, pero queda en el log.
+  - **`direct: true`** devuelve el enlace intacto y **no hace ninguna llamada** (hay prueba con el contador del mock en cero).
+  - **Sin cuentas, el alias por proveedor sigue funcionando** (compatibilidad con la instalación anterior), y hay prueba de ello.
+  - `Manager::with_debrid_http` inyecta la capa HTTP: es lo que hace hermética la prueba de costura. No se finge que `api.real-debrid.com` vive en loopback; se prueba lo que T4 decide —prioridad, caída y bypass— con el `Manager` real, el store real y el keyring de archivo.
+  - Cinco pruebas de costura nuevas: prioridad, fallback entre proveedores distintos, `direct`, borrado de cuenta con su token, y compatibilidad con el alias legacy.
+  - **Tres pruebas viejas que fijaban el mundo anterior** se actualizaron con su razón: TorBox ya no es «no soportado» (ahora responde 1061 sin token), y dos que comparaban `SCHEMA_VERSION` contra un número pasaron a la constante.

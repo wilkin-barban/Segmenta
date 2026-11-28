@@ -10,6 +10,7 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, watch, Notify};
 
+use segmenta_core::debrid::{DebridError, Provider};
 use segmenta_core::engine::{
     run_with_bucket as run_engine, Canceller, DownloadSpec, EngineConfig, EngineEvent, ResumeState,
     SegmentStateRecord, TaskOutcome,
@@ -206,6 +207,9 @@ pub struct Manager {
     http_bucket: Arc<TokenBucket>,
     host_limits: Arc<HostLimits>,
     pairing: std::sync::Mutex<crate::pairing::PairingCodes>,
+    /// HTTP layer used for debrid calls. Production uses reqwest; a test injects canned
+    /// answers, which is the only way to exercise the seam hermetically.
+    debrid_http: std::sync::Arc<dyn segmenta_core::debrid::DebridHttp>,
     #[cfg(test)]
     after_settings_persist: Option<Arc<dyn Fn() + Send + Sync>>,
     progress: Arc<Mutex<HashMap<String, ProgressSnapshot>>>,
@@ -243,6 +247,7 @@ impl Manager {
             http_bucket,
             host_limits,
             pairing: std::sync::Mutex::new(crate::pairing::PairingCodes::new()),
+            debrid_http: std::sync::Arc::new(crate::debrid_http::ReqwestDebrid),
             #[cfg(test)]
             after_settings_persist: None,
             progress: Arc::new(Mutex::new(HashMap::new())),
@@ -253,6 +258,15 @@ impl Manager {
             scheduler_wake: Arc::new(Notify::new()),
             started: std::time::Instant::now(),
         }
+    }
+
+    /// Replace the debrid HTTP layer. Only tests use it: production keeps the reqwest one.
+    pub fn with_debrid_http(
+        mut self,
+        http: std::sync::Arc<dyn segmenta_core::debrid::DebridHttp>,
+    ) -> Manager {
+        self.debrid_http = http;
+        self
     }
 
     /// Adaptive per-host connection limits shared across tasks.
@@ -1993,43 +2007,100 @@ impl Manager {
     /// The provider is asked only when it is configured and has a token; every failure is
     /// translated to a stable code and a fixed sentence, so neither the token nor the
     /// provider payload can reach the caller or the task record.
-    async fn debrid_resolve(&self, link: &str) -> Result<Value, RpcError> {
-        use segmenta_core::debrid::{parse_resolution, resolve_request, DebridError, Provider};
-        let Some(provider) = self.debrid_provider() else {
-            return Err(debrid_error(DebridError::Unsupported(
-                "no provider configured",
-            )));
-        };
-        if provider == Provider::TorBox {
-            // No request is built for a provider whose hoster flow is not verified, so the
-            // caller gets the honest "unsupported" before a token is ever asked for.
-            return Err(debrid_error(DebridError::Unsupported("torbox")));
+    /// Resolve `link` with the best account that can do it.
+    ///
+    /// The accounts are tried in priority order and the next one covers a provider that is
+    /// unavailable, out of quota or unreachable: a single dead hoster on one account must
+    /// not fail a download that another account can serve.
+    async fn debrid_resolve(&self, link: &str, direct: bool) -> Result<Value, RpcError> {
+        if direct {
+            // The caller asked for the link untouched: useful when the user knows the hoster
+            // serves them directly and wants no third party in the middle.
+            return Ok(json!({ "link": link, "resolved": false }));
         }
-        let token = self
-            .secrets
-            .lookup(&Self::debrid_alias(provider.as_str()))
-            .map_err(|_| RpcError::internal("cannot read the token"))?
-            .filter(|token| !token.trim().is_empty())
-            .ok_or_else(|| debrid_error(DebridError::Unauthorized))?;
-        let request = resolve_request(provider, &token, link).map_err(debrid_error)?;
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(20))
-            .build()
-            .map_err(|_| debrid_error(DebridError::Unreachable))?;
-        let mut builder = client.post(&request.url);
-        for (name, value) in &request.headers {
-            builder = builder.header(name, value);
+        let candidates = self.debrid_candidates()?;
+        if candidates.is_empty() {
+            // Two very different situations: nothing is configured at all, or something is
+            // configured without a usable token. The codes must not merge.
+            let configured = !self
+                .store
+                .debrid_accounts()
+                .map_err(store_error)?
+                .is_empty()
+                || self.debrid_provider().is_some();
+            return Err(debrid_error(if configured {
+                DebridError::Unauthorized
+            } else {
+                DebridError::Unsupported("no provider configured")
+            }));
         }
-        let response = builder
-            .body(request.body)
-            .send()
-            .await
-            .map_err(|_| debrid_error(DebridError::Unreachable))?;
-        let status = response.status().as_u16();
-        let body = response.text().await.unwrap_or_default();
-        let link = parse_resolution(provider, status, &body).map_err(debrid_error)?;
-        let _ = Provider::as_str(provider);
-        Ok(json!({ "link": link }))
+        let mut last: Option<DebridError> = None;
+        for (provider, token) in candidates {
+            match segmenta_core::debrid::resolve_with(&*self.debrid_http, provider, &token, link)
+                .await
+            {
+                Ok(resolved) => {
+                    return Ok(json!({ "link": resolved, "provider": provider.as_str() }))
+                }
+                // These mean "this account cannot do it": another one may.
+                Err(
+                    error @ (DebridError::LinkUnavailable
+                    | DebridError::QuotaExceeded
+                    | DebridError::Unreachable
+                    | DebridError::AccountNotPremium
+                    | DebridError::Unauthorized),
+                ) => {
+                    tracing::warn!(
+                        provider = provider.as_str(),
+                        error = error.code(),
+                        "debrid account skipped"
+                    );
+                    last = Some(error);
+                }
+                // A provider that answers outside its contract is not a reason to give up,
+                // but it is not silently ignored either.
+                Err(error) => {
+                    tracing::warn!(
+                        provider = provider.as_str(),
+                        error = error.code(),
+                        "debrid provider answered unexpectedly"
+                    );
+                    last = Some(error);
+                }
+            }
+        }
+        Err(debrid_error(last.unwrap_or(DebridError::LinkUnavailable)))
+    }
+
+    /// Enabled accounts in priority order, each with its token.
+    ///
+    /// When no account row exists the per-provider alias from the previous version is used,
+    /// so an installation that never created an account keeps working.
+    fn debrid_candidates(&self) -> Result<Vec<(Provider, String)>, RpcError> {
+        let rows = self.store.debrid_accounts().map_err(store_error)?;
+        let mut out = Vec::new();
+        for row in rows.into_iter().filter(|row| row.enabled) {
+            let Some(provider) = Provider::parse(&row.provider) else {
+                continue;
+            };
+            let alias = format!("debrid:{}", row.id);
+            match self.secrets.lookup(&alias) {
+                Ok(Some(token)) if !token.trim().is_empty() => out.push((provider, token)),
+                // An enabled account without a usable token is skipped, not fatal.
+                _ => tracing::warn!(account = %row.id, "debrid account has no token"),
+            }
+        }
+        if out.is_empty() {
+            if let Some(provider) = self.debrid_provider() {
+                if let Ok(Some(token)) = self.secrets.lookup(&Self::debrid_alias(provider.as_str()))
+                {
+                    if !token.trim().is_empty() {
+                        out.push((provider, token));
+                    }
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// Import one Click'n'Load 2 package.
@@ -4820,6 +4891,86 @@ impl RpcHandler for Manager {
                         .map_err(|err| RpcError::invalid_params(err.to_string()))?;
                     self.gallery_add(parsed).await
                 }
+                "debrid.accounts" => {
+                    let _ = parse(params)?;
+                    let rows: Vec<Value> = self
+                        .store
+                        .debrid_accounts()
+                        .map_err(store_error)?
+                        .into_iter()
+                        .map(|account| {
+                            json!({
+                                "id": account.id,
+                                "provider": account.provider,
+                                "label": account.label,
+                                "priority": account.priority,
+                                "enabled": account.enabled,
+                            })
+                        })
+                        .collect();
+                    Ok(Value::Array(rows))
+                }
+                "debrid.account.add" => {
+                    let provider = params
+                        .as_ref()
+                        .and_then(|value| value.get("provider"))
+                        .and_then(|value| value.as_str())
+                        .and_then(segmenta_core::debrid::Provider::parse)
+                        .ok_or_else(|| RpcError::invalid_params("unknown debrid provider"))?;
+                    let token = params
+                        .as_ref()
+                        .and_then(|value| value.get("token"))
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default();
+                    if token.trim().is_empty() {
+                        return Err(RpcError::invalid_params("the token cannot be empty"));
+                    }
+                    let label = params
+                        .as_ref()
+                        .and_then(|value| value.get("label"))
+                        .and_then(|value| value.as_str())
+                        .filter(|label| !label.trim().is_empty())
+                        .unwrap_or_else(|| provider.as_str())
+                        .to_string();
+                    let priority = params
+                        .as_ref()
+                        .and_then(|value| value.get("priority"))
+                        .and_then(|value| value.as_i64())
+                        .unwrap_or(100);
+                    let id = params
+                        .as_ref()
+                        .and_then(|value| value.get("id"))
+                        .and_then(|value| value.as_str())
+                        .filter(|id| !id.trim().is_empty())
+                        .map(str::to_string)
+                        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                    // The token lives in the keyring under its own alias, never in the row.
+                    let alias = format!("debrid:{id}");
+                    self.secrets
+                        .store(&alias, token.trim())
+                        .map_err(|err| RpcError::internal(err.to_string()))?;
+                    self.store
+                        .upsert_debrid_account(&crate::store::DebridAccountRecord {
+                            id: id.clone(),
+                            provider: provider.as_str().to_string(),
+                            label,
+                            priority,
+                            enabled: true,
+                        })
+                        .map_err(store_error)?;
+                    Ok(json!({ "id": id }))
+                }
+                "debrid.account.remove" => {
+                    let id = params
+                        .as_ref()
+                        .and_then(|value| value.get("id"))
+                        .and_then(|value| value.as_str())
+                        .ok_or_else(|| RpcError::invalid_params("missing account id"))?
+                        .to_string();
+                    let _ = self.secrets.delete(&format!("debrid:{id}"));
+                    let removed = self.store.remove_debrid_account(&id).map_err(store_error)?;
+                    Ok(json!({ "id": id, "removed": removed }))
+                }
                 "debrid.status" => {
                     let _ = parse(params)?;
                     Ok(self.debrid_status())
@@ -4837,7 +4988,7 @@ impl RpcHandler for Manager {
                 "debrid.resolve" => {
                     let parsed: DebridResolveParams = serde_json::from_value(parse(params)?)
                         .map_err(|err| RpcError::invalid_params(err.to_string()))?;
-                    self.debrid_resolve(&parsed.link).await
+                    self.debrid_resolve(&parsed.link, parsed.direct).await
                 }
                 "download.clean_completed" => {
                     // `{}` is the whole contract: no filter, no file deletion.

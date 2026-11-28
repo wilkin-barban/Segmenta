@@ -132,10 +132,11 @@ fn every_failure_maps_to_a_stable_code_without_leaking_anything() {
     assert_eq!(bad_link["error"]["code"], 1062, "{bad_link}");
     assert!(!bad_link.to_string().contains("ad-token"));
 
-    // TorBox is recognized but not committed: unsupported, not a silent success.
+    // TorBox is a supported provider now, so its failure is the missing token rather than
+    // "unsupported": the code has to say what is actually wrong.
     daemon.call("settings.update", json!({"debrid_provider": "torbox"}));
     let torbox = daemon.request("debrid.resolve", json!({"link": "https://hoster.test/f"}));
-    assert_eq!(torbox["error"]["code"], 1060, "{torbox}");
+    assert_eq!(torbox["error"]["code"], 1061, "{torbox}");
 
     // The settings reject a provider nobody knows.
     let invalid = daemon.request("settings.update", json!({"debrid_provider": "mystery"}));

@@ -608,6 +608,9 @@ pub struct GalleryAddParams {
 pub struct DebridResolveParams {
     /// Hoster link to unrestrict.
     pub link: String,
+    /// Skip debrid entirely and hand the link back untouched.
+    #[serde(default)]
+    pub direct: bool,
 }
 
 /// Parameters of `download.list`.

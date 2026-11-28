@@ -5,6 +5,7 @@
 
 pub mod browsers;
 pub mod cnl2;
+pub mod debrid_http;
 pub mod events;
 pub mod extract;
 pub mod gallery;

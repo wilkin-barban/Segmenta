@@ -22,6 +22,7 @@ base64.workspace = true
 cbc.workspace = true
 clap.workspace = true
 futures-util.workspace = true
+async-trait = "0.1"
 hex.workspace = true
 rcgen = "0.14"
 tokio-rustls.workspace = true

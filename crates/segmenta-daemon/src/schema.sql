@@ -172,3 +172,13 @@ CREATE TABLE IF NOT EXISTS remote_devices (
     paired_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_seen_at TIMESTAMP
 );
+
+-- Cuentas de debrid, en orden de prioridad (v11). El token vive en el keyring bajo
+-- `debrid:<id>`: acá sólo se guarda a quién pertenece cada fila.
+CREATE TABLE IF NOT EXISTS debrid_accounts (
+    id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    label TEXT NOT NULL,
+    priority INTEGER NOT NULL DEFAULT 100,
+    enabled INTEGER NOT NULL DEFAULT 1
+);

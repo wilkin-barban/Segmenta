@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Current schema version, stored in `PRAGMA user_version`.
-pub const SCHEMA_VERSION: i64 = 10;
+pub const SCHEMA_VERSION: i64 = 11;
 
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
@@ -308,6 +308,21 @@ impl SiteRuleRecord {
         }
         host == pattern || host.ends_with(&format!(".{pattern}"))
     }
+}
+
+/// One debrid account the daemon may use, in priority order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DebridAccountRecord {
+    /// Stable identifier; the keyring alias is `debrid:<id>`.
+    pub id: String,
+    /// Provider name, as `Provider::as_str` returns it.
+    pub provider: String,
+    /// Name the user sees.
+    pub label: String,
+    /// Lower goes first.
+    pub priority: i64,
+    /// Whether the account is offered when resolving.
+    pub enabled: bool,
 }
 
 /// One paired phone or tablet allowed to control the daemon.
@@ -1198,6 +1213,19 @@ impl Store {
                 );",
             )?;
         }
+        if current < 11 {
+            // Debrid accounts are additive. The per-provider alias keeps working when the
+            // table is empty, so an existing installation loses nothing on upgrade.
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS debrid_accounts (
+                    id TEXT PRIMARY KEY,
+                    provider TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    priority INTEGER NOT NULL DEFAULT 100,
+                    enabled INTEGER NOT NULL DEFAULT 1
+                );",
+            )?;
+        }
         if current < 10 {
             // Remote devices are additive: one table, and the older single-token alias keeps
             // working until the user pairs a device.
@@ -1229,6 +1257,56 @@ impl Store {
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         Ok(SCHEMA_VERSION)
+    }
+
+    /// Debrid accounts, best priority first.
+    pub fn debrid_accounts(&self) -> Result<Vec<DebridAccountRecord>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, provider, label, priority, enabled
+             FROM debrid_accounts ORDER BY priority, id",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(DebridAccountRecord {
+                    id: row.get(0)?,
+                    provider: row.get(1)?,
+                    label: row.get(2)?,
+                    priority: row.get(3)?,
+                    enabled: row.get::<_, i64>(4)? != 0,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// Insert or replace one debrid account.
+    pub fn upsert_debrid_account(&self, record: &DebridAccountRecord) -> Result<()> {
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO debrid_accounts (id, provider, label, priority, enabled)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(id) DO UPDATE SET
+                provider = excluded.provider,
+                label = excluded.label,
+                priority = excluded.priority,
+                enabled = excluded.enabled",
+            params![
+                record.id,
+                record.provider,
+                record.label,
+                record.priority,
+                record.enabled as i64,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Remove one account; the caller deletes its keyring entry.
+    pub fn remove_debrid_account(&self, id: &str) -> Result<bool> {
+        let conn = self.lock();
+        let removed = conn.execute("DELETE FROM debrid_accounts WHERE id = ?1", params![id])?;
+        Ok(removed > 0)
     }
 
     /// Paired devices, oldest first.

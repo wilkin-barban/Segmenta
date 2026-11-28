@@ -56,7 +56,10 @@ fn the_migration_adds_the_table_without_touching_existing_rows() {
             .unwrap();
         drop(conn);
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 10);
+        assert_eq!(
+            store.schema_version().unwrap(),
+            segmenta_daemon::store::SCHEMA_VERSION
+        );
         let conn = rusqlite::Connection::open(&path).unwrap();
         let rows: i64 = conn
             .query_row(
