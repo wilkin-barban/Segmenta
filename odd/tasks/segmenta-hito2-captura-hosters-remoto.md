@@ -40,7 +40,7 @@ Versión: **0.7.0**, sin tag ni release hasta cerrar el hito.
 - [x] T8 — Diálogo **Link Grabber** en la GUI y `LinksPart` en `segmenta-host`: pegar listas, filtrar, asignar paquete y contraseña de lote (S3) — ruta: `segmenta-gui`, `segmenta-host` — commit: `da50fe2`, `967023d`, `b3e734f`, `7cd250a`, `2480d54`, ver L12.
 - [x] T9 — `remote.rs` en HTTPS con certificado autofirmado local, huella SHA-256 en la UI y renovación al cambiar la interfaz (S4) — ruta: `segmenta-daemon`, `segmenta-gui`, `segmenta-cli` — commit: `e3742b2`, `4cdbc1a`, `fcd2bb8`, ver L13.
 - [x] T10 — PWA móvil embebida (estado, alta, filtros, acciones por fila, colas) servida por el mismo puerto (S4) — ruta: `segmenta-daemon` — commit: `b710467`, ver L14.
-- [ ] T11 — `remote_devices` (migración aditiva), códigos de emparejamiento con TTL y rate limit, revocación individual y su diálogo (S4) — ruta: `segmenta-daemon`, `segmenta-gui` — commit: pendiente.
+- [x] T11 — `remote_devices` (migración aditiva), códigos de emparejamiento con TTL y rate limit, revocación individual y su diálogo (S4) — ruta: `segmenta-daemon`, `segmenta-gui` — commit: `51026df`, `95574bd`, `868973d`, ver L15.
 - [ ] T12 — Cierre: pruebas en host de los binarios release, notas de 0.8.0 y gates completos (S5, S6) — ruta: documentación — commit: pendiente.
 
 ## Criterios de aceptación
@@ -140,3 +140,9 @@ Versión: **0.7.0**, sin tag ni release hasta cerrar el hito.
 
 - L14 — T10 cerrado: PWA embebida con `include_str!` (`remote-web/index.html`, 142 líneas) servida en `/` **sin token**, porque es la pantalla de entrada y no lleva datos; `/api/*` sigue exigiendo el token. La página trae estado, alta de URL, filtros (todas/activas/completadas) y acciones por fila, con `prefers-color-scheme` y textos en `es`/`en`/`pt`. El token se guarda en `localStorage` y **nunca** viaja en la URL, donde terminaría en un historial o en una captura de pantalla. `POST /api/add` reutiliza `download.add`, así no hay dos validaciones distintas.
   - Prueba: `GET /` sobre TLS responde `200` con HTML y sin datos; `GET /api/downloads` en el mismo puerto sigue devolviendo `401` sin token.
+
+- L15 — T11 cerrado. Esquema **v10** con `remote_devices(id, name, token_digest, paired_at, last_seen_at)`, migración aditiva. Cada dispositivo tiene **su** token; en la base sólo vive el digest, y una prueba serializa el archivo para confirmar que el token no aparece.
+  - **Códigos de emparejamiento**: ocho dígitos aleatorios, TTL de 10 minutos, **un solo uso** y **cinco intentos** antes de quemarse; un código nuevo reemplaza al anterior. Vencido o quemado se informa con el motivo (`Expired`/`Exhausted`) y no como "código inválido" genérico. `Debug` nunca imprime el código.
+  - **Revocación individual**: borrar una fila deja a los demás dispositivos funcionando, y hay prueba de que el token revocado deja de autorizar mientras el otro sigue. El token legacy de la versión anterior sigue aceptándose como `legacy` hasta que el usuario empareje.
+  - `POST /api/pair` es el único endpoint sin token, porque es cómo se obtiene uno; responde `403` con el motivo cuando el código no vale.
+  - **Fragilidad de pruebas que corregí**: tres pruebas de `store.rs` y una de `site_rules.rs` fijaban `SCHEMA_VERSION` como número. Pasaron a comparar contra la constante: fijaban la versión, no el comportamiento, y la migración a v10 las rompió sin que nada estuviera mal.
