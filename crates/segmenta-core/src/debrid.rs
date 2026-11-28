@@ -16,11 +16,16 @@
 //! carry a code and a provider name only; the request struct is not `Debug`-printed by the
 //! daemon, and [`DebridError::message`] is a fixed sentence per case.
 //!
-//! # TorBox
+//! # Multi-step providers
 //!
-//! TorBox exposes `requestdl` for its own torrents, not for a generic hoster link; T1 left
-//! its hoster flow unverified. It is therefore reported as unsupported instead of being
-//! guessed, and a request is never built for it.
+//! Real-Debrid and AllDebrid answer an unrestrict call with the link in one round trip.
+//! TorBox does not: it creates a *web download* first and then asks for that download's
+//! link, so [`resolve_with`] drives the whole exchange while the pure builders below keep
+//! describing one request at a time.
+//!
+//! A provider whose flow is unknown still reports [`DebridError::Unsupported`] instead of
+//! being guessed: a wrong endpoint wastes the user's quota and looks like a bug in the
+//! service.
 
 use std::fmt;
 
@@ -31,7 +36,7 @@ pub enum Provider {
     RealDebrid,
     /// AllDebrid.
     AllDebrid,
-    /// TorBox: recognized, but its hoster flow is not verified.
+    /// TorBox: a web download is created and then its link is requested.
     TorBox,
 }
 
@@ -169,7 +174,18 @@ pub fn resolve_request(
             ],
             body: format!("link={}", encode(link)),
         }),
-        Provider::TorBox => Err(DebridError::Unsupported("torbox")),
+        Provider::TorBox => Ok(DebridRequest {
+            method: "POST",
+            url: "https://api.torbox.app/v1/api/webdl/createwebdownload".to_string(),
+            headers: vec![
+                ("Authorization".to_string(), format!("Bearer {token}")),
+                (
+                    "Content-Type".to_string(),
+                    "application/x-www-form-urlencoded".to_string(),
+                ),
+            ],
+            body: format!("link={}", encode(link)),
+        }),
     }
 }
 
@@ -209,10 +225,208 @@ pub fn parse_resolution(
                 .and_then(|link| link.as_str())
                 .map(str::to_string)
         }
-        Provider::TorBox => return Err(DebridError::Unsupported("torbox")),
+        // TorBox needs a second call; a single answer has no link to return.
+        Provider::TorBox => return Err(DebridError::Malformed),
     };
     let link = link.ok_or(DebridError::Malformed)?;
     sanitize_link(&link).ok_or(DebridError::Malformed)
+}
+
+/// Anything that can perform a [`DebridRequest`]: the daemon's HTTP client in production,
+/// a canned answer in tests.
+#[async_trait::async_trait]
+pub trait DebridHttp: Send + Sync {
+    /// Perform the request and return the status and body.
+    async fn send(&self, request: &DebridRequest) -> Result<(u16, String), DebridError>;
+}
+
+/// Resolve `link` with `token`, driving every step the provider needs.
+///
+/// Real-Debrid and AllDebrid are one call. TorBox is two: create the web download, then ask
+/// for its file link. The token always travels in a header, never in a URL, so a link that
+/// ends up in a log cannot carry the credential with it.
+pub async fn resolve_with(
+    http: &dyn DebridHttp,
+    provider: Provider,
+    token: &str,
+    link: &str,
+) -> Result<String, DebridError> {
+    let first = resolve_request(provider, token, link)?;
+    let (status, body) = http.send(&first).await?;
+    match provider {
+        Provider::RealDebrid | Provider::AllDebrid => parse_resolution(provider, status, &body),
+        Provider::TorBox => {
+            let id = torbox_download_id(status, &body)?;
+            let request = torbox_link_request(token, id)?;
+            let (status, body) = http.send(&request).await?;
+            torbox_link(status, &body)
+        }
+    }
+}
+
+/// Read the id of the web download TorBox just created.
+fn torbox_download_id(status: u16, body: &str) -> Result<u64, DebridError> {
+    match status {
+        401 | 403 => return Err(DebridError::Unauthorized),
+        429 => return Err(DebridError::QuotaExceeded),
+        500..=599 => return Err(DebridError::Unreachable),
+        _ => {}
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(body).map_err(|_| DebridError::Malformed)?;
+    if value.get("success").and_then(|flag| flag.as_bool()) == Some(false) {
+        // The provider accepts the shape and refuses the link: that is availability, not a
+        // malformed answer, and the user can act on it.
+        return Err(DebridError::LinkUnavailable);
+    }
+    value
+        .get("data")
+        .and_then(|data| {
+            data.get("webdownload_id")
+                .or_else(|| data.get("web_id"))
+                .or_else(|| data.get("id"))
+        })
+        .and_then(serde_json::Value::as_u64)
+        .ok_or(DebridError::Malformed)
+}
+
+/// Second TorBox step: ask for the link of the created download.
+fn torbox_link_request(token: &str, id: u64) -> Result<DebridRequest, DebridError> {
+    if token.trim().is_empty() {
+        return Err(DebridError::Unauthorized);
+    }
+    Ok(DebridRequest {
+        method: "GET",
+        url: format!("https://api.torbox.app/v1/api/webdl/requestdl?web_id={id}"),
+        headers: vec![(
+            "Authorization".to_string(),
+            format!("Bearer {}", token.trim()),
+        )],
+        body: String::new(),
+    })
+}
+
+/// Read the link out of the TorBox answer.
+fn torbox_link(status: u16, body: &str) -> Result<String, DebridError> {
+    match status {
+        401 | 403 => return Err(DebridError::Unauthorized),
+        404 | 410 => return Err(DebridError::LinkUnavailable),
+        429 => return Err(DebridError::QuotaExceeded),
+        500..=599 => return Err(DebridError::Unreachable),
+        _ => {}
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(body).map_err(|_| DebridError::Malformed)?;
+    let link = value
+        .get("data")
+        .and_then(|data| match data {
+            serde_json::Value::String(link) => Some(link.clone()),
+            other => other
+                .get("url")
+                .and_then(|url| url.as_str())
+                .map(str::to_string),
+        })
+        .ok_or(DebridError::Malformed)?;
+    sanitize_link(&link).ok_or(DebridError::Malformed)
+}
+
+/// What the provider says about the account behind a token.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AccountInfo {
+    /// Name the provider shows, when it has one.
+    pub username: Option<String>,
+    /// Whether the account can unrestrict today.
+    pub is_premium: bool,
+    /// Expiry as the provider reports it, ISO-8601 or epoch seconds as text.
+    pub expires_at: Option<String>,
+}
+
+/// Build the request that reads the account behind `token`.
+pub fn account_request(provider: Provider, token: &str) -> Result<DebridRequest, DebridError> {
+    if token.trim().is_empty() {
+        return Err(DebridError::Unauthorized);
+    }
+    let auth = format!("Bearer {}", token.trim());
+    let url = match provider {
+        Provider::RealDebrid => "https://api.real-debrid.com/rest/1.0/user",
+        Provider::AllDebrid => "https://api.alldebrid.com/v4/user",
+        Provider::TorBox => "https://api.torbox.app/v1/api/user/me",
+    };
+    Ok(DebridRequest {
+        method: "GET",
+        url: url.to_string(),
+        headers: vec![("Authorization".to_string(), auth)],
+        body: String::new(),
+    })
+}
+
+/// Read account metadata out of the provider answer.
+pub fn parse_account(
+    provider: Provider,
+    status: u16,
+    body: &str,
+) -> Result<AccountInfo, DebridError> {
+    match status {
+        401 | 403 => return Err(DebridError::Unauthorized),
+        429 => return Err(DebridError::QuotaExceeded),
+        500..=599 => return Err(DebridError::Unreachable),
+        _ => {}
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(body).map_err(|_| DebridError::Malformed)?;
+    let account = match provider {
+        Provider::RealDebrid => AccountInfo {
+            username: value
+                .get("username")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            is_premium: value.get("type").and_then(|v| v.as_str()) == Some("premium"),
+            expires_at: value
+                .get("expiration")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+        },
+        Provider::AllDebrid => {
+            let user = value.get("user").ok_or(DebridError::Malformed)?;
+            AccountInfo {
+                username: user
+                    .get("username")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                is_premium: user
+                    .get("isPremium")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                expires_at: user
+                    .get("premiumUntil")
+                    .and_then(|v| v.as_u64())
+                    .map(|epoch| epoch.to_string()),
+            }
+        }
+        Provider::TorBox => {
+            if value.get("success").and_then(|flag| flag.as_bool()) == Some(false) {
+                return Err(DebridError::Unauthorized);
+            }
+            let data = value.get("data").ok_or(DebridError::Malformed)?;
+            AccountInfo {
+                username: data
+                    .get("email")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                // Plan 0 is free; every paid plan is above zero.
+                is_premium: data
+                    .get("plan")
+                    .and_then(|v| v.as_u64())
+                    .map(|plan| plan > 0)
+                    .unwrap_or(false),
+                expires_at: data
+                    .get("premium_expires_at")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+            }
+        }
+    };
+    Ok(account)
 }
 
 /// Real-Debrid documents its failures as numeric codes.
@@ -358,14 +572,14 @@ mod tests {
     }
 
     #[test]
-    fn torbox_is_reported_as_unsupported_instead_of_guessed() {
-        assert_eq!(
-            resolve_request(Provider::TorBox, "tok", "https://x/file").unwrap_err(),
-            DebridError::Unsupported("torbox")
-        );
+    fn torbox_starts_a_web_download_instead_of_unrestricting() {
+        let request = resolve_request(Provider::TorBox, "tok", "https://x/file").unwrap();
+        assert!(request.url.ends_with("/v1/api/webdl/createwebdownload"));
+        assert!(request.body.contains("link="));
+        // A single answer cannot carry the link: TorBox needs the second call.
         assert_eq!(
             parse_resolution(Provider::TorBox, 200, "{}").unwrap_err(),
-            DebridError::Unsupported("torbox")
+            DebridError::Malformed
         );
         assert_eq!(Provider::parse("torbox"), Some(Provider::TorBox));
         assert_eq!(Provider::parse("nope"), None);

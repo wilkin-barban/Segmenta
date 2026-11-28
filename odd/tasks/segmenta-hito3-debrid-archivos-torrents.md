@@ -43,7 +43,7 @@ Versión: **0.7.0**, sin tag ni release hasta cerrar el hito.
 
 ## Tareas
 
-- [ ] T1 — Debrid: contrato de proveedor con metadata y **TorBox** completo (resolución + cuenta), con servidor de prueba local (S1) — ruta: `segmenta-core` — commit: pendiente.
+- [x] T1 — Debrid: contrato de proveedor con metadata y **TorBox** completo (resolución + cuenta), con servidor de prueba local (S1) — ruta: `segmenta-core` — commit: ver L5.
 - [ ] T2 — Premiumize y Mega-Debrid sobre el mismo contrato (S1) — ruta: `segmenta-core` — commit: pendiente.
 - [ ] T3 — Device code / OAuth con polling para los proveedores que lo ofrecen, y `segmenta debrid login` (S1) — ruta: `segmenta-core`, `segmenta-cli` — commit: pendiente.
 - [ ] T4 — `debrid_accounts` (migración aditiva), prioridad y resolución centralizada en `manager.rs` con `direct: true` (S2) — ruta: `segmenta-daemon` — commit: pendiente.
@@ -96,3 +96,9 @@ Versión: **0.7.0**, sin tag ni release hasta cerrar el hito.
 - L2 — Investigación del árbol: `debrid.rs` (389 líneas) tiene `Provider::{RealDebrid, AllDebrid, TorBox}` con `TorBox` devolviendo `DebridError::Unsupported("torbox")` en resolución y en cuenta; el alias del secreto es `debrid:<provider>` y el seam de resolución vive en `add_dialog.rs`, no en el daemon. `extract.rs` (371) ejecuta `7z`/`unzip` y lee **una** contraseña de `SEGMENTA_EXTRACT_PASSWORD`. `torrent.rs` (332) sondea metainfo con listado de archivos y `torrent_sequential`. `rss.rs` (283) sólo encola HTTP/HTTPS, y `rss_feeds` tiene `last_checked_at` pero **no** `last_error`/`last_error_at`. `rss_panel.rs` (190) no edita feeds.
 - L3 — Dependencias disponibles: el daemon ya trae `zip 0.6` con `deflate`, y `segmenta-core` ya tiene `flate2` (de `remotezip`). No hace falta ninguna dependencia nueva para verificar ZIP o leer blocklists `.gz`.
 - L4 — Límite de esta entrega: sólo el plan. La primera unidad habilitada es **T1** (TorBox sobre un contrato de proveedor con metadata), que se prueba entera contra un servidor local.
+
+- L5 — T1 cerrado: **TorBox** deja de ser «no soportado» y pasa a tener su flujo real. La API v1 se confirmó contra la documentación oficial antes de escribir una línea: `POST /v1/api/webdl/createwebdownload` y después `GET /v1/api/webdl/requestdl?web_id=…`. Un `success: false` del proveedor se informa como enlace no disponible, no como respuesta rota: el usuario puede actuar sobre eso.
+  - Contrato nuevo en `debrid.rs`: `DebridHttp` (lo implementa el daemon en producción y una respuesta canónica en pruebas) y `resolve_with`, que **conduce todos los pasos** del proveedor; Real-Debrid y AllDebrid siguen siendo una sola llamada.
+  - Metadata de cuenta para los tres: `account_request` + `parse_account` → `AccountInfo { username, is_premium, expires_at }`. TorBox informa el plan como número (0 es gratis), Real-Debrid `type == "premium"`, AllDebrid `isPremium` + `premiumUntil`. TorBox con `success: false` es `Unauthorized`, no `Malformed`.
+  - El token viaja **siempre** en cabecera; hay prueba de que no aparece en la URL del segundo paso.
+  - Cinco pruebas nuevas contra respuestas canónicas, incluida la secuencia completa de dos llamadas y el rechazo por enlace no soportado.
