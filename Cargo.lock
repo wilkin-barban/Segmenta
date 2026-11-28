@@ -3600,6 +3600,7 @@ name = "segmenta-daemon"
 version = "0.7.0"
 dependencies = [
  "aes",
+ "async-trait",
  "base64 0.22.1",
  "cbc",
  "clap",
