@@ -23,6 +23,7 @@ pub mod folder;
 pub mod ftp;
 pub mod ftps;
 pub mod hostlimits;
+pub mod links;
 pub mod netguard;
 pub mod planner;
 pub mod probe;

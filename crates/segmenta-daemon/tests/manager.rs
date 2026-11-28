@@ -1217,3 +1217,44 @@ async fn download_path_passes_manager_host_limits_to_engine() {
     assert_eq!(h.manager.host_limits().limit("unrelated.example"), 8);
     server.shutdown().await;
 }
+
+#[tokio::test]
+async fn the_grabber_preview_uses_the_daemon_rules() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+    let answer = call(
+        &h.manager,
+        "grabber.preview",
+        json!({"text": "https://example.test/f[1-3].bin\nnot a link\nhttps://example.test/f2.bin"}),
+    )
+    .await
+    .unwrap();
+    let accepted = answer["accepted"].as_array().unwrap();
+    assert_eq!(accepted.len(), 3, "{answer}");
+    let refused = answer["refused"].as_array().unwrap();
+    assert_eq!(refused.len(), 2, "{answer}");
+    // The reason travels with the line, so the dialog can show why.
+    assert!(refused
+        .iter()
+        .any(|item| item["rejection"]["kind"] == "not_a_link"));
+    assert!(refused
+        .iter()
+        .any(|item| item["rejection"]["kind"] == "duplicate"));
+}
+
+#[tokio::test]
+async fn the_grabber_preview_refuses_an_absurd_pattern() {
+    let dir = tempfile::tempdir().unwrap();
+    let h = harness(dir.path());
+    let answer = call(
+        &h.manager,
+        "grabber.preview",
+        json!({"text": "https://example.test/f[1-100000].bin"}),
+    )
+    .await
+    .unwrap();
+    assert!(answer["accepted"].as_array().unwrap().is_empty());
+    let refused = &answer["refused"][0]["rejection"];
+    assert_eq!(refused["kind"], "pattern_too_many");
+    assert_eq!(refused["wanted"], 100000);
+}

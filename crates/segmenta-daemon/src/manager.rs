@@ -4462,6 +4462,20 @@ impl RpcHandler for Manager {
                         .map_err(|err| RpcError::invalid_params(err.to_string()))?;
                     self.pause_task(&parsed.task_id).await
                 }
+                // The GUI pastes a block of text and renders what the daemon would queue;
+                // the rules live in core, so there is one answer, not two.
+                "grabber.preview" => {
+                    let text = params
+                        .and_then(|value| {
+                            value
+                                .get("text")
+                                .and_then(|v| v.as_str())
+                                .map(str::to_string)
+                        })
+                        .unwrap_or_default();
+                    let plan = segmenta_core::links::plan(&text);
+                    serde_json::to_value(plan).map_err(|err| RpcError::internal(err.to_string()))
+                }
                 "site_rule.list" => self.site_rule_list(),
                 "site_rule.upsert" => {
                     let parsed: SiteRuleParams = serde_json::from_value(parse(params)?)
