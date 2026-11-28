@@ -127,6 +127,27 @@ impl RemoteTls {
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    /// TLS acceptor for the remote control server.
+    pub fn acceptor(&self) -> Result<tokio_rustls::TlsAcceptor, TlsError> {
+        use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
+        // The provider has to be chosen explicitly: more than one is compiled in.
+        let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+        let certs: Vec<CertificateDer<'static>> = pem_certificates(&self.cert_pem)
+            .into_iter()
+            .map(CertificateDer::from)
+            .collect();
+        if certs.is_empty() {
+            return Err(TlsError::Stored("no certificate block".to_string()));
+        }
+        let key = pem_key(&self.key_pem)
+            .ok_or_else(|| TlsError::Stored("no private key block".to_string()))?;
+        let config = tokio_rustls::rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(certs, PrivateKeyDer::Pkcs8(key.into()))
+            .map_err(|err| TlsError::Stored(err.to_string()))?;
+        Ok(tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(config)))
+    }
 }
 
 /// Write a file only the owner can read.
@@ -175,6 +196,55 @@ pub fn fingerprint_of_der(der: &[u8]) -> String {
         .map(|byte| format!("{byte:02X}"))
         .collect::<Vec<String>>()
         .join(":")
+}
+
+/// Every certificate block of a PEM bundle, in order.
+fn pem_certificates(pem: &str) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut body: Vec<String> = Vec::new();
+    let mut inside = false;
+    for line in pem.lines() {
+        let line = line.trim();
+        if line.contains("BEGIN CERTIFICATE") {
+            inside = true;
+            body.clear();
+            continue;
+        }
+        if line.contains("END CERTIFICATE") {
+            if let Some(decoded) = decode_base64(&body.concat()) {
+                out.push(decoded);
+            }
+            inside = false;
+            continue;
+        }
+        if inside {
+            body.push(line.to_string());
+        }
+    }
+    out
+}
+
+/// DER body of a PKCS#8 private key block.
+fn pem_key(pem: &str) -> Option<Vec<u8>> {
+    let mut body: Vec<String> = Vec::new();
+    let mut inside = false;
+    for line in pem.lines() {
+        let line = line.trim();
+        if line.contains("BEGIN PRIVATE KEY") {
+            inside = true;
+            continue;
+        }
+        if line.contains("END PRIVATE KEY") {
+            break;
+        }
+        if inside {
+            body.push(line.to_string());
+        }
+    }
+    if body.is_empty() {
+        return None;
+    }
+    decode_base64(&body.concat())
 }
 
 /// Extract the base64 body of the first `CERTIFICATE` block.

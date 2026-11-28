@@ -24,6 +24,7 @@ clap.workspace = true
 futures-util.workspace = true
 hex.workspace = true
 rcgen = "0.14"
+tokio-rustls.workspace = true
 network-interface = "2"
 libc.workspace = true
 quick-xml.workspace = true

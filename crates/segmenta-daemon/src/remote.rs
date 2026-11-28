@@ -206,10 +206,51 @@ pub async fn serve(
     }
 }
 
-async fn handle(
-    stream: &mut tokio::net::TcpStream,
+/// Serve the remote API over TLS.
+///
+/// The HTTP parsing is the same code as the plain listener: encryption is a transport, not
+/// a second protocol. The token check still runs inside `handle`, because a TLS handshake
+/// authenticates the server, not the client.
+pub async fn serve_tls(
+    listener: tokio::net::TcpListener,
+    tls: crate::remote_tls::RemoteTls,
+    manager: std::sync::Arc<crate::manager::Manager>,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) {
+    let acceptor = match tls.acceptor() {
+        Ok(acceptor) => acceptor,
+        Err(err) => {
+            tracing::error!(%err, "the remote control cannot start TLS");
+            return;
+        }
+    };
+    loop {
+        tokio::select! {
+            _ = shutdown.changed() => break,
+            accepted = listener.accept() => {
+                let Ok((stream, _peer)) = accepted else { continue };
+                let acceptor = acceptor.clone();
+                let manager = std::sync::Arc::clone(&manager);
+                tokio::spawn(async move {
+                    // A failed handshake is not an error worth logging with detail: it is a
+                    // client that did not trust this certificate.
+                    let Ok(mut stream) = acceptor.accept(stream).await else {
+                        return;
+                    };
+                    let _ = handle(&mut stream, &manager).await;
+                });
+            }
+        }
+    }
+}
+
+async fn handle<S>(
+    stream: &mut S,
     manager: &std::sync::Arc<crate::manager::Manager>,
-) -> std::io::Result<()> {
+) -> std::io::Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
     use tokio::io::AsyncReadExt;
     let mut raw = Vec::new();
     let mut chunk = [0u8; 4096];
@@ -314,11 +355,10 @@ async fn handle(
     }
 }
 
-async fn reply(
-    stream: &mut tokio::net::TcpStream,
-    status: &str,
-    body: &[u8],
-) -> std::io::Result<()> {
+async fn reply<S>(stream: &mut S, status: &str, body: &[u8]) -> std::io::Result<()>
+where
+    S: tokio::io::AsyncWrite + Unpin,
+{
     use tokio::io::AsyncWriteExt;
     let head = format!(
         "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
