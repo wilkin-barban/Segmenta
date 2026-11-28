@@ -4733,10 +4733,23 @@ impl RpcHandler for Manager {
                 "remote.status" => {
                     let _ = parse(params)?;
                     let settings = self.settings();
+                    // The fingerprint is what the user compares on both screens, so it is
+                    // part of the status and not a detail of the dialog.
+                    let fingerprint = crate::remote_tls::RemoteTls::ensure(&crate::data_dir())
+                        .map(|tls| tls.fingerprint().to_string())
+                        .ok();
+                    let devices = self
+                        .store
+                        .remote_devices()
+                        .map(|rows| rows.len())
+                        .unwrap_or(0);
                     Ok(json!({
                         "enabled": settings.remote_enabled,
                         "port": settings.remote_port,
                         "bind": settings.remote_bind,
+                        "scheme": "https",
+                        "fingerprint": fingerprint,
+                        "devices": devices,
                         "paired": self
                             .secrets
                             .lookup(crate::remote::TOKEN_ALIAS)
@@ -4773,7 +4786,12 @@ impl RpcHandler for Manager {
                 }
                 "remote.pair.code" => {
                     let name = params
-                        .and_then(|value| value.get("name").and_then(|v| v.as_str()).map(str::to_string))
+                        .and_then(|value| {
+                            value
+                                .get("name")
+                                .and_then(|v| v.as_str())
+                                .map(str::to_string)
+                        })
                         .unwrap_or_else(|| "phone".to_string());
                     let code = self.pair_issue(&name);
                     Ok(json!({ "code": code, "name": name, "expires_in_secs": 600 }))

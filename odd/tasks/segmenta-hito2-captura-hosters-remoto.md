@@ -146,3 +146,11 @@ Versión: **0.7.0**, sin tag ni release hasta cerrar el hito.
   - **Revocación individual**: borrar una fila deja a los demás dispositivos funcionando, y hay prueba de que el token revocado deja de autorizar mientras el otro sigue. El token legacy de la versión anterior sigue aceptándose como `legacy` hasta que el usuario empareje.
   - `POST /api/pair` es el único endpoint sin token, porque es cómo se obtiene uno; responde `403` con el motivo cuando el código no vale.
   - **Fragilidad de pruebas que corregí**: tres pruebas de `store.rs` y una de `site_rules.rs` fijaban `SCHEMA_VERSION` como número. Pasaron a comparar contra la constante: fijaban la versión, no el comportamiento, y la migración a v10 las rompió sin que nada estuviera mal.
+
+- L16 — T12 cerrado **y el hito con él**, con la prueba en host como protagonista otra vez. Los binarios release revelaron tres defectos que ninguna suite vio:
+  1. **El daemon seguía sirviendo HTTP plano**: el supervisor de `main.rs` llamaba a `remote::serve`, no a `serve_tls`. Todo T9 era código muerto en producción. Ahora el listener sólo existe con TLS y registra la huella en el journal.
+  2. **El servidor no arrancaba tras emparejar**: exigía el token legacy para considerarse "querido" (`enabled && remote_digest().is_some()`), así que en una instalación nueva quedaba apagado justo después de generar el código.
+  3. **La CLI nunca se actualizó**: `segmenta remote pair` seguía imprimiendo `http://…?token=…` con el token en la query, sin código ni huella; `remote devices` no existía. Ahora imprime la URL **https**, el código de 8 dígitos y la huella, más `remote devices` y `remote revoke --id`.
+  - Evidencia de host: `remote pair` imprime `https://127.0.0.1:18769/`, `code: 57303521` y una huella que **coincide exactamente** con la que devuelve `openssl s_client | x509 -fingerprint -sha256`; `GET /` por HTTPS devuelve la página y HTTP plano no obtiene respuesta de la API.
+  - `remote.status` ahora informa `scheme: https`, `fingerprint` y `devices`, con prueba propia.
+  - Notas de versión en `packaging/release-notes-0.8.0.md`. **Versión 0.7.0, sin tag ni release.**

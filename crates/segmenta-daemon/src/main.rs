@@ -243,7 +243,10 @@ async fn remote_supervisor(
             break;
         }
         let (enabled, bind, port) = manager.remote_config();
-        let wanted = enabled && manager.remote_digest().is_some();
+        // Devices authorize themselves per request, so an enabled server does not need the
+        // legacy token to exist. Requiring it kept the listener off on a fresh install,
+        // right after pairing a phone.
+        let wanted = enabled;
         if !wanted {
             if let Some(handle) = server.take() {
                 handle.abort();
@@ -257,13 +260,31 @@ async fn remote_supervisor(
             let address = format!("{bind}:{port}");
             match tokio::net::TcpListener::bind(&address).await {
                 Ok(listener) => {
-                    tracing::info!(%address, "remote control listening");
-                    bound = Some((bind, port));
-                    server = Some(tokio::spawn(segmenta_daemon::remote::serve(
-                        listener,
-                        Arc::clone(&manager),
-                        shutdown.clone(),
-                    )));
+                    // TLS is the only mode: a plaintext listener would expose the token on
+                    // the LAN, which is exactly what this server exists to avoid.
+                    match segmenta_daemon::remote_tls::RemoteTls::ensure(
+                        &segmenta_daemon::data_dir(),
+                    ) {
+                        Ok(tls) => {
+                            tracing::info!(
+                                %address,
+                                fingerprint = %tls.fingerprint(),
+                                "remote control listening over https"
+                            );
+                            bound = Some((bind, port));
+                            server = Some(tokio::spawn(segmenta_daemon::remote::serve_tls(
+                                listener,
+                                tls,
+                                Arc::clone(&manager),
+                                shutdown.clone(),
+                            )));
+                        }
+                        Err(err) => tracing::error!(
+                            %address,
+                            error = %err,
+                            "remote control cannot prepare TLS; it stays off"
+                        ),
+                    }
                 }
                 Err(err) => tracing::warn!(
                     %address,

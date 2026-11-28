@@ -138,8 +138,14 @@ enum Command {
     /// Remote control: pair a device, then show or revoke the session.
     Remote {
         /// Action to run.
-        #[arg(value_name = "pair|status|revoke")]
+        #[arg(value_name = "pair|status|devices|revoke")]
         action: String,
+        /// Device name shown in the list (pair only).
+        #[arg(short, long)]
+        name: Option<String>,
+        /// Device id to revoke; without it the legacy token is revoked.
+        #[arg(long)]
+        id: Option<String>,
         /// Port for the remote API (pair only).
         #[arg(short, long)]
         port: Option<u16>,
@@ -1194,8 +1200,16 @@ fn run(cli: Cli, locale: Locale) -> Result<String, ClientError> {
                 }
             }
         },
-        Command::Remote { action, port, bind } => match action.as_str() {
+        Command::Remote {
+            action,
+            port,
+            bind,
+            name,
+            id,
+        } => match action.as_str() {
             "pair" => {
+                // Enabling first, then asking for a code: the code is what a phone types,
+                // and the old single-token link is what this replaces.
                 let mut params = json!({});
                 if let Some(port) = port {
                     params["port"] = json!(port);
@@ -1203,25 +1217,47 @@ fn run(cli: Cli, locale: Locale) -> Result<String, ClientError> {
                 if let Some(bind) = &bind {
                     params["bind"] = json!(bind);
                 }
-                let result = client.call("remote.enable", params)?;
+                client.call("remote.enable", params)?;
+                let device = name.clone().unwrap_or_else(|| "phone".to_string());
+                let code = client.call("remote.pair.code", json!({ "name": device }))?;
+                let status = client.call("remote.status", json!({}))?;
                 if json_out {
-                    out.push_str(&format!("{result}\n"));
-                } else if let Some(pairing) = result["pairing"].as_str() {
-                    out.push_str(&format!("{pairing}\n"));
-                    out.push_str(remote_qr(pairing).as_str());
+                    out.push_str(&format!("{code}\n"));
+                } else {
+                    let digits = code["code"].as_str().unwrap_or("-");
+                    let host = status["bind"].as_str().unwrap_or("127.0.0.1");
+                    let port = status["port"].as_u64().unwrap_or(8765);
+                    let url = format!("https://{host}:{port}/");
+                    out.push_str(&format!("{url}\n"));
+                    out.push_str(remote_qr(&url).as_str());
+                    out.push_str(&format!("code: {digits}\n"));
+                    if let Some(fingerprint) = status["fingerprint"].as_str() {
+                        out.push_str(&format!("fingerprint: {fingerprint}\n"));
+                    }
+                    out.push_str(
+                        "type the code in the page; it works once and expires in 10 minutes\n",
+                    );
                 }
             }
             "status" => {
                 let result = client.call("remote.status", json!({}))?;
                 out.push_str(&format!("{result}\n"));
             }
+            "devices" => {
+                let result = client.call("remote.devices", json!({}))?;
+                out.push_str(&format!("{result}\n"));
+            }
             "revoke" => {
-                let result = client.call("remote.revoke", json!({}))?;
+                // With an id, only that device; without one, the legacy token as before.
+                let result = match id {
+                    Some(id) => client.call("remote.device.revoke", json!({ "task_id": id }))?,
+                    None => client.call("remote.revoke", json!({}))?,
+                };
                 out.push_str(&format!("{result}\n"));
             }
             other => {
                 return Err(ClientError::Usage(format!(
-                    "unknown remote action `{other}`; use pair, status or revoke"
+                    "unknown remote action `{other}`; use pair, status, devices or revoke"
                 )))
             }
         },

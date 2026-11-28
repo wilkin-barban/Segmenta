@@ -104,3 +104,50 @@ fn the_debug_never_shows_the_key() {
     let head = &tls.key_pem()[..40.min(tls.key_pem().len())];
     assert!(!printed.contains(head));
 }
+
+#[test]
+fn the_status_reports_https_a_fingerprint_and_the_device_count() {
+    use segmenta_daemon::events::EventBus;
+    use segmenta_daemon::ipc::RpcHandler;
+    use segmenta_daemon::manager::Manager;
+    use segmenta_daemon::secrets::FileSecretStore;
+    use segmenta_daemon::store::Store;
+    use std::sync::Arc;
+
+    let dir = tempfile::tempdir().unwrap();
+    // The status must not depend on `~/.local/share/segmenta`: it reads what the daemon
+    // would serve, which is the same material the CLI prints for the user to compare.
+    let previous = std::env::var("XDG_DATA_HOME").ok();
+    std::env::set_var("XDG_DATA_HOME", dir.path());
+    let store = Arc::new(Store::open(&dir.path().join("segmenta.db")).unwrap());
+    let secrets: Arc<dyn segmenta_daemon::secrets::SecretStore> =
+        Arc::new(FileSecretStore::open(&dir.path().join("secrets.json")).unwrap());
+    let (shutdown, _rx) = tokio::sync::watch::channel(false);
+    let manager = Arc::new(Manager::new(
+        store,
+        secrets,
+        Arc::new(EventBus::new()),
+        shutdown,
+    ));
+    let status = tokio::runtime::Runtime::new().unwrap().block_on(async {
+        manager
+            .call(
+                "settings.update",
+                Some(serde_json::json!({ "remote_enabled": true })),
+            )
+            .await
+            .unwrap();
+        manager
+            .call("remote.status", Some(serde_json::json!({})))
+            .await
+            .unwrap()
+    });
+    match previous {
+        Some(value) => std::env::set_var("XDG_DATA_HOME", value),
+        None => std::env::remove_var("XDG_DATA_HOME"),
+    }
+    assert_eq!(status["scheme"], "https", "{status}");
+    assert_eq!(status["devices"], 0, "{status}");
+    let fingerprint = status["fingerprint"].as_str().unwrap_or_default();
+    assert_eq!(fingerprint.split(':').count(), 32, "{status}");
+}
