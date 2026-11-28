@@ -47,7 +47,7 @@ Versión: **0.7.0**, sin tag ni release hasta cerrar el hito.
 - [x] T2 — Premiumize y Mega-Debrid sobre el mismo contrato (S1) — ruta: `segmenta-core` — commit: `0fd3b01` + ver L6/L7.
 - [x] T3 (a) — Device code / OAuth con polling para los proveedores que lo ofrecen, y `segmenta debrid login` (S1) — ruta: `segmenta-core`, `segmenta-cli` — commit: `23cca14`, ver L8.
 - [x] T4 — `debrid_accounts` (migración aditiva), prioridad y resolución centralizada en `manager.rs` con `direct: true` (S2) — ruta: `segmenta-daemon` — commit: ver L9.
-- [ ] T5 — `torrent_via_debrid`: alta remota, polling de progreso, descarga por HTTP y limpieza (S3) — ruta: `segmenta-daemon` — commit: pendiente.
+- [x] T5 (a) — `torrent_via_debrid`: alta remota, polling de progreso, descarga por HTTP y limpieza (S3) — ruta: `segmenta-daemon` — commit: ver L10.
 - [ ] T6 — Verificación de integridad al finalizar (zip en Rust, `7z t` para el resto) con umbral y comprobación bajo demanda (S4) — ruta: `segmenta-daemon` — commit: pendiente.
 - [ ] T7 — Reparación parcial de ZIP por `Range` + `If-Range` conservando cabeceras y segmentos (S4) — ruta: `segmenta-daemon` — commit: pendiente.
 - [ ] T8 — Contraseñas MRU en keyring y diálogo interactivo cuando ninguna abre (S5) — ruta: `segmenta-daemon`, `segmenta-gui` — commit: pendiente.
@@ -129,3 +129,10 @@ Versión: **0.7.0**, sin tag ni release hasta cerrar el hito.
   - `Manager::with_debrid_http` inyecta la capa HTTP: es lo que hace hermética la prueba de costura. No se finge que `api.real-debrid.com` vive en loopback; se prueba lo que T4 decide —prioridad, caída y bypass— con el `Manager` real, el store real y el keyring de archivo.
   - Cinco pruebas de costura nuevas: prioridad, fallback entre proveedores distintos, `direct`, borrado de cuenta con su token, y compatibilidad con el alias legacy.
   - **Tres pruebas viejas que fijaban el mundo anterior** se actualizaron con su razón: TorBox ya no es «no soportado» (ahora responde 1061 sin token), y dos que comparaban `SCHEMA_VERSION` contra un número pasaron a la constante.
+
+- L10 — T5 (a) cerrado en `segmenta-core/src/debrid_torrent.rs`: modelos del trabajo remoto (`TorrentJob`, `TorrentState::{Queued, Downloading, Ready, Failed, Expired}`, `TorrentFile`) y **tres adaptadores** con sus endpoints verificados contra la documentación oficial: Real-Debrid (`addMagnet`, `info`, `delete`), TorBox (`createtorrent`, `mylist`, `controltorrent`) y Premiumize (`transfer/create`, `transfer/list`, `transfer/delete`).
+  - **No es un flujo con un parámetro**: cada proveedor informa distinto. Real-Debrid manda `progress` como porcentaje y `status` como frase; TorBox lo manda como **fracción** dentro de `data`; Premiumize devuelve una lista `transfers`. El parser de cada uno lo trata como su contrato, no como una variante.
+  - Un `status` desconocido es `Unsupported` con el nombre del estado, **no** `Malformed` ni uno de los cinco estados adivinado: fingir «descargando» cuando el proveedor dice algo nuevo es peor que decirlo.
+  - El token va en cabecera en todos los casos (ninguno de estos endpoints lo necesita en la query) y hay prueba de que el `Debug` no lo imprime.
+  - Siete pruebas herméticas con respuestas canónicas: builders de los tres, los tres formatos de identificador, progreso porcentaje vs fracción, archivos seleccionados, estados terminales y las tres llamadas de limpieza.
+  - Falta de T5: la orquestación en el daemon (alta, polling con vencimiento, pase de enlaces al motor HTTP y limpieza) y el flag `torrent_via_debrid`.

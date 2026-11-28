@@ -956,7 +956,7 @@ fn is_http_link(link: &str) -> bool {
 }
 
 /// Percent-encode one form value.
-fn encode(value: &str) -> String {
+pub(crate) fn encode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for byte in value.bytes() {
         match byte {

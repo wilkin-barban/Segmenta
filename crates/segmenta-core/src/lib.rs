@@ -14,6 +14,7 @@
 pub mod batch;
 pub mod checksum;
 pub mod debrid;
+pub mod debrid_torrent;
 pub mod disk;
 pub mod dns;
 pub mod engine;
