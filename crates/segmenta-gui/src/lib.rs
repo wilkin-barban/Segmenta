@@ -3,6 +3,7 @@
 pub mod add_dialog;
 pub mod app;
 pub mod client;
+pub mod grabber;
 pub mod model;
 pub mod prefs;
 pub mod remote_dialog;
