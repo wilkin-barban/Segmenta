@@ -292,6 +292,11 @@ where
             .await
         }
     };
+    // The mobile page itself is public: it is the login screen, not the data. Everything
+    // under /api still needs the token, and the page asks for it before showing anything.
+    if request.method == "GET" && matches!(request.path.as_str(), "/" | "/index.html") {
+        return reply_html(stream, WEB_INDEX).await;
+    }
     let Some(digest) = manager.remote_digest() else {
         return reply(
             stream,
@@ -328,6 +333,38 @@ where
                 .await
             }
         },
+        ("POST", "/api/add") => {
+            let body = request.body.unwrap_or_default();
+            let url = body
+                .get("url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            if url.is_empty() {
+                return reply(
+                    stream,
+                    "400 Bad Request",
+                    b"{\"error\":\"ERR_REMOTE_NO_URL\"}",
+                )
+                .await;
+            }
+            // The same path the desktop uses, so validation and queueing are not duplicated.
+            use crate::ipc::RpcHandler;
+            match manager
+                .call("download.add", Some(serde_json::json!({ "url": url })))
+                .await
+            {
+                Ok(value) => reply(stream, "200 OK", value.to_string().as_bytes()).await,
+                Err(err) => {
+                    reply(
+                        stream,
+                        "400 Bad Request",
+                        format!("{{\"error\":\"{}\"}}", err.message).as_bytes(),
+                    )
+                    .await
+                }
+            }
+        }
         ("POST", "/api/action") => {
             let body = request.body.unwrap_or_default();
             let task_id = body.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
@@ -353,6 +390,24 @@ where
             .await
         }
     }
+}
+
+/// The embedded mobile page.
+const WEB_INDEX: &str = include_str!("../remote-web/index.html");
+
+/// Answer with the page itself.
+async fn reply_html<S>(stream: &mut S, body: &str) -> std::io::Result<()>
+where
+    S: tokio::io::AsyncWrite + Unpin,
+{
+    use tokio::io::AsyncWriteExt;
+    let head = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(head.as_bytes()).await?;
+    stream.write_all(body.as_bytes()).await?;
+    stream.flush().await
 }
 
 async fn reply<S>(stream: &mut S, status: &str, body: &[u8]) -> std::io::Result<()>

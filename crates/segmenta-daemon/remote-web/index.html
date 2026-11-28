@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#1d1d20">
+<title>Segmenta</title>
+<style>
+  :root { color-scheme: light dark; --bg:#fafafa; --fg:#1d1d20; --muted:#6b6b70; --card:#ffffff; --line:#e4e4e7; --accent:#3584e4; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1d1d20; --fg:#f2f2f4; --muted:#a3a3a8; --card:#26262a; --line:#3a3a40; --accent:#62a0ea; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+  header { position:sticky; top:0; display:flex; gap:.75rem; align-items:center; justify-content:space-between; padding:.75rem 1rem; background:var(--card); border-bottom:1px solid var(--line); }
+  h1 { font-size:1rem; margin:0; font-weight:600; }
+  main { padding:1rem; display:grid; gap:.75rem; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:.75rem; padding:.75rem; }
+  .row { display:flex; gap:.5rem; align-items:center; }
+  .grow { flex:1; min-width:0; }
+  .name { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .meta { color:var(--muted); font-size:.85rem; }
+  .bar { height:.35rem; background:var(--line); border-radius:999px; overflow:hidden; margin-top:.4rem; }
+  .bar > i { display:block; height:100%; background:var(--accent); width:0; }
+  button { font:inherit; padding:.45rem .8rem; border-radius:.6rem; border:1px solid var(--line); background:transparent; color:inherit; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  input, select { font:inherit; padding:.5rem .6rem; border-radius:.6rem; border:1px solid var(--line); background:var(--bg); color:inherit; width:100%; }
+  .tabs { display:flex; gap:.4rem; }
+  .tabs button[aria-pressed="true"] { border-color:var(--accent); color:var(--accent); }
+  .empty { color:var(--muted); text-align:center; padding:2rem 0; }
+  .error { color:#e01b24; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Segmenta</h1>
+  <span class="meta" id="status" data-i18n="status_idle">—</span>
+</header>
+<main>
+  <section class="card" id="add-card">
+    <div class="row" style="margin-bottom:.5rem">
+      <input id="url" placeholder="https://… o magnet:?xt=…" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="row">
+      <button class="primary grow" id="add" data-i18n="add">Agregar</button>
+      <button id="refresh" data-i18n="refresh">Actualizar</button>
+    </div>
+    <p class="meta" id="add-status"></p>
+  </section>
+  <nav class="tabs">
+    <button data-filter="all" aria-pressed="true" data-i18n="all">Todas</button>
+    <button data-filter="active" aria-pressed="false" data-i18n="active">Activas</button>
+    <button data-filter="completed" aria-pressed="false" data-i18n="completed">Completadas</button>
+  </nav>
+  <section id="list" class="card"><p class="empty" data-i18n="loading">Cargando…</p></section>
+</main>
+<script>
+// The token lives in localStorage: the phone keeps it after the page reloads, and it is
+// never printed in the URL where it would end up in a history or a screenshot.
+const dict = {
+  es: { status_idle:"lista", add:"Agregar", refresh:"Actualizar", all:"Todas", active:"Activas", completed:"Completadas", loading:"Cargando…", empty:"Sin descargas", pause:"Pausar", resume:"Reanudar", remove:"Eliminar", need_token:"Falta el token: abrí el enlace de emparejamiento." },
+  en: { status_idle:"ready", add:"Add", refresh:"Refresh", all:"All", active:"Active", completed:"Completed", loading:"Loading…", empty:"No downloads", pause:"Pause", resume:"Resume", remove:"Remove", need_token:"Missing token: open the pairing link." },
+  pt: { status_idle:"pronto", add:"Adicionar", refresh:"Atualizar", all:"Todas", active:"Ativas", completed:"Concluídas", loading:"Carregando…", empty:"Sem downloads", pause:"Pausar", resume:"Retomar", remove:"Remover", need_token:"Falta o token: abra o link de emparelhamento." }
+};
+const lang = (navigator.language || "es").slice(0,2);
+const t = dict[lang] || dict.es;
+for (const el of document.querySelectorAll("[data-i18n]")) el.textContent = t[el.dataset.i18n] || el.textContent;
+let token = localStorage.getItem("segmenta.token") || "";
+let filter = "all";
+
+function headers() { return token ? { "Authorization": "Bearer " + token } : {}; }
+
+async function api(path, options) {
+  const response = await fetch(path, { ...options, headers: { ...headers(), ...(options && options.headers) } });
+  if (response.status === 401) throw new Error(t.need_token);
+  if (!response.ok) throw new Error("HTTP " + response.status);
+  return response.json();
+}
+
+function render(downloads) {
+  const list = document.getElementById("list");
+  const shown = downloads.filter(d => filter === "all" ? true : filter === "active" ? ["downloading","pending","paused","retrying"].includes(d.status) : d.status === "completed");
+  if (!shown.length) { list.innerHTML = '<p class="empty">' + t.empty + "</p>"; return; }
+  list.innerHTML = "";
+  for (const d of shown) {
+    const card = document.createElement("div");
+    card.className = "card";
+    const name = (d.filename || d.url || "").split("/").pop();
+    const pct = d.total_bytes ? Math.min(100, Math.round(100 * d.downloaded_bytes / d.total_bytes)) : 0;
+    card.innerHTML = '<div class="row"><span class="name grow"></span><span class="meta"></span></div>' +
+      '<div class="bar"><i style="width:' + pct + '%"></i></div>' +
+      '<div class="row" style="margin-top:.5rem"><button class="pause"></button><button class="remove"></button></div>';
+    card.querySelector(".name").textContent = name;
+    card.querySelector(".meta").textContent = d.status;
+    const pause = card.querySelector(".pause");
+    pause.textContent = d.status === "paused" ? t.resume : t.pause;
+    pause.onclick = () => act(d.id, d.status === "paused" ? "resume" : "pause");
+    const remove = card.querySelector(".remove");
+    remove.textContent = t.remove;
+    remove.onclick = () => act(d.id, "cancel");
+    list.append(card);
+  }
+}
+
+async function load() {
+  try {
+    const answer = await api("/api/downloads");
+    render(answer.downloads || answer || []);
+    document.getElementById("status").textContent = t.status_idle;
+  } catch (error) {
+    document.getElementById("list").innerHTML = '<p class="empty error"></p>';
+    document.querySelector("#list .error").textContent = error.message;
+  }
+}
+
+async function act(id, action) {
+  await api("/api/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ task_id: id, action }) });
+  load();
+}
+
+document.getElementById("refresh").onclick = load;
+document.getElementById("add").onclick = async () => {
+  const url = document.getElementById("url").value.trim();
+  const status = document.getElementById("add-status");
+  status.textContent = "";
+  if (!url) return;
+  try {
+    await api("/api/add", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }) });
+    document.getElementById("url").value = "";
+    load();
+  } catch (error) { status.textContent = error.message; status.className = "meta error"; }
+};
+for (const button of document.querySelectorAll(".tabs button")) {
+  button.onclick = () => {
+    filter = button.dataset.filter;
+    for (const other of document.querySelectorAll(".tabs button")) other.setAttribute("aria-pressed", String(other === button));
+    load();
+  };
+}
+load();
+setInterval(load, 5000);
+</script>
+</body>
+</html>

@@ -203,3 +203,57 @@ async fn plain_http_against_the_tls_port_gets_nothing() {
     );
     server.abort();
 }
+
+#[tokio::test]
+async fn the_mobile_page_is_public_and_the_api_is_not() {
+    let h = harness();
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let manager = Arc::clone(&h.manager);
+    let tls = h.tls.clone();
+    let server = tokio::spawn(async move {
+        remote::serve_tls(listener, tls, manager, shutdown_rx).await;
+    });
+
+    let connector = TlsConnector::from(pinned(h.tls.cert_pem()));
+    let name = tokio_rustls::rustls::pki_types::ServerName::try_from("127.0.0.1").unwrap();
+    let stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    let mut tls = connector.connect(name, stream).await.unwrap();
+    tls.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .await
+        .unwrap();
+    let mut page = Vec::new();
+    let _ = tls.read_to_end(&mut page).await;
+    let text = String::from_utf8_lossy(&page);
+    assert!(text.contains("200 OK"), "{text}");
+    assert!(text.contains("text/html"), "{text}");
+    // The page is the shell: it carries no download data and no token.
+    assert!(text.contains("Segmenta"), "{text}");
+    assert!(!text.contains("api/downloads\",0)"), "no data in the shell");
+
+    // The API on the same port is still refused without a token.
+    let stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    let name = tokio_rustls::rustls::pki_types::ServerName::try_from("127.0.0.1").unwrap();
+    let mut tls = connector2(&h).connect(name, stream).await.unwrap();
+    tls.write_all(b"GET /api/downloads HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .await
+        .unwrap();
+    let mut answer = Vec::new();
+    let _ = tls.read_to_end(&mut answer).await;
+    assert!(
+        String::from_utf8_lossy(&answer).contains("401"),
+        "the api must stay closed"
+    );
+    server.abort();
+}
+
+fn connector2(h: &Harness) -> TlsConnector {
+    TlsConnector::from(pinned(h.tls.cert_pem()))
+}
