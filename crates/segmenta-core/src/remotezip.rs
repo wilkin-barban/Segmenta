@@ -428,9 +428,96 @@ fn apply_zip64(extra: &[u8], uncompressed: &mut u64, compressed: &mut u64, offse
     }
 }
 
+/// Read one entry's bytes, decompressing and checking the CRC.
+pub async fn read_entry(
+    source: &dyn RangeSource,
+    zip: &RemoteZip,
+    entry: &ZipEntry,
+) -> std::result::Result<Vec<u8>, ZipError> {
+    if entry.encrypted {
+        return Err(ZipError::Encrypted {
+            name: entry.name.clone(),
+        });
+    }
+    if let ZipMethod::Unsupported(code) = entry.method {
+        return Err(ZipError::UnsupportedMethod {
+            name: entry.name.clone(),
+            code,
+        });
+    }
+    // The local header repeats the name and may carry an extra field, so its exact size is
+    // read instead of assumed.
+    let (status, header) = source
+        .range(&zip.url, entry.header_offset, entry.header_offset + 1024)
+        .await?;
+    if status == 416 {
+        return Err(ZipError::Malformed(
+            "the local header is out of range".to_string(),
+        ));
+    }
+    if u32_at(&header, 0) != Some(LOCAL) {
+        return Err(ZipError::Malformed(format!(
+            "entry `{}` has no local header",
+            entry.name
+        )));
+    }
+    let name_len = u16_at(&header, 26).ok_or(ZipError::NotAZip)? as u64;
+    let extra_len = u16_at(&header, 28).ok_or(ZipError::NotAZip)? as u64;
+    let data_start = entry.header_offset + 30 + name_len + extra_len;
+    let data_end = data_start + entry.compressed_size.saturating_sub(1);
+    let (status, raw) = source.range(&zip.url, data_start, data_end).await?;
+    if status == 416 {
+        return Err(ZipError::Malformed(
+            "the entry data is out of range".to_string(),
+        ));
+    }
+    let bytes = match entry.method {
+        ZipMethod::Stored => raw,
+        ZipMethod::Deflate => {
+            let mut out = Vec::with_capacity(entry.uncompressed_size as usize);
+            let mut decoder = flate2::read::DeflateDecoder::new(raw.as_slice());
+            decoder
+                .read_to_end(&mut out)
+                .map_err(|err| ZipError::Malformed(format!("inflate failed: {err}")))?;
+            out
+        }
+        ZipMethod::Unsupported(code) => {
+            return Err(ZipError::UnsupportedMethod {
+                name: entry.name.clone(),
+                code,
+            })
+        }
+    };
+    if bytes.len() as u64 != entry.uncompressed_size || crc32(&bytes) != entry.crc32 {
+        return Err(ZipError::Corrupt {
+            name: entry.name.clone(),
+        });
+    }
+    Ok(bytes)
+}
+
+/// CRC-32 as the format defines it (IEEE 802.3, reflected).
+pub fn crc32(data: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for byte in data {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            let mask = (crc & 1).wrapping_neg();
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
+    }
+    !crc
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_known_crc_of_hello_is_the_standard_one() {
+        assert_eq!(crc32(b"hello"), 0x3610_a686);
+        assert_eq!(crc32(b""), 0);
+    }
 
     #[test]
     fn an_end_record_inside_a_comment_is_not_taken_as_the_real_one() {
