@@ -11,6 +11,7 @@
 //! * [`stream`] — public HLS/DASH parsing and merge planning.
 //! * [`error`] — engine error taxonomy shared with the daemon and CLI.
 
+pub mod batch;
 pub mod checksum;
 pub mod debrid;
 pub mod disk;
