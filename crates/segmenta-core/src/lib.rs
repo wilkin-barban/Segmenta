@@ -27,6 +27,7 @@ pub mod netguard;
 pub mod planner;
 pub mod probe;
 pub mod ratelimit;
+pub mod remotezip;
 pub mod retry;
 pub mod rules;
 pub mod siterules;

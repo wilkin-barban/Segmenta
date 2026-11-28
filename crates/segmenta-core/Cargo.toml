@@ -10,6 +10,7 @@ authors.workspace = true
 
 [dependencies]
 async-trait = "0.1"
+flate2 = "1"
 futures-util.workspace = true
 hex.workspace = true
 httpdate.workspace = true
