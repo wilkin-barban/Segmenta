@@ -121,6 +121,9 @@ pub enum DebridError {
     LinkUnavailable,
     /// The account ran out of traffic or hit a rate limit.
     QuotaExceeded,
+    /// The provider answered with a status this build does not know. Carries the phrase so a
+    /// bug report can name it, without leaking a string per call.
+    UnknownState(String),
     /// The account exists but cannot use the API at all (a free plan on a premium-only API).
     /// Distinct from [`DebridError::Unauthorized`] on purpose: the credentials are fine.
     AccountNotPremium,
@@ -139,6 +142,7 @@ impl DebridError {
             DebridError::LinkUnavailable => "ERR_DEBRID_LINK_UNAVAILABLE",
             DebridError::QuotaExceeded => "ERR_DEBRID_QUOTA",
             DebridError::AccountNotPremium => "ERR_DEBRID_NOT_PREMIUM",
+            DebridError::UnknownState(_) => "ERR_DEBRID_UNKNOWN_STATE",
             DebridError::Malformed => "ERR_DEBRID_BAD_RESPONSE",
             DebridError::Unreachable => "ERR_DEBRID_UNREACHABLE",
         }
@@ -157,6 +161,9 @@ impl DebridError {
             }
             DebridError::AccountNotPremium => {
                 "this account cannot use the provider API; a paid plan is required".to_string()
+            }
+            DebridError::UnknownState(state) => {
+                format!("the provider reported an unknown status `{state}`")
             }
             DebridError::Malformed => "the provider answered with an unexpected shape".to_string(),
             DebridError::Unreachable => "the provider could not be reached".to_string(),

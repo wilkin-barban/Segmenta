@@ -2892,6 +2892,8 @@ fn debrid_code(error: &segmenta_core::debrid::DebridError) -> i64 {
         segmenta_core::debrid::DebridError::QuotaExceeded => 1063,
         // A free plan on a premium-only API is its own failure: the credentials are fine.
         segmenta_core::debrid::DebridError::AccountNotPremium => 1066,
+        // A status this build does not know: the client shows it, the user can report it.
+        segmenta_core::debrid::DebridError::UnknownState(_) => 1067,
         segmenta_core::debrid::DebridError::Malformed => 1064,
         segmenta_core::debrid::DebridError::Unreachable => 1065,
     }

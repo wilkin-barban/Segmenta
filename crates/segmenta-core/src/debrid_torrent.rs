@@ -237,11 +237,7 @@ fn real_debrid_job(value: &Value) -> Result<TorrentJob, DebridError> {
         // An unknown status is not "malformed": the provider is speaking a dialect this
         // build does not know, and guessing one of the five states would be worse than
         // saying so.
-        other => {
-            return Err(DebridError::Unsupported(Box::leak(
-                format!("real-debrid status `{other}`").into_boxed_str(),
-            )))
-        }
+        other => return Err(DebridError::UnknownState(other.to_string())),
     };
     Ok(TorrentJob {
         id: value
