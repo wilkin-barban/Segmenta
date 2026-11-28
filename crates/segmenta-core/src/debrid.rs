@@ -519,6 +519,54 @@ pub fn next_interval(interval: u64, slow_down: bool) -> u64 {
     wanted.min(MAX_POLL_INTERVAL_SECS)
 }
 
+/// Exchange the authorized pair for an access token.
+///
+/// Both halves of the pair go in the body: they are credentials and would otherwise land in
+/// a URL that gets logged.
+pub fn token_exchange_request(
+    client_id: &str,
+    client_secret: &str,
+    device_code: &str,
+) -> Result<DebridRequest, DebridError> {
+    if client_id.trim().is_empty() || client_secret.is_empty() || device_code.is_empty() {
+        return Err(DebridError::Unauthorized);
+    }
+    Ok(DebridRequest {
+        method: "POST",
+        url: "https://api.real-debrid.com/oauth/v2/token".to_string(),
+        headers: vec![(
+            "Content-Type".to_string(),
+            "application/x-www-form-urlencoded".to_string(),
+        )],
+        body: format!(
+            "client_id={}&client_secret={}&code={}&grant_type={}",
+            encode(client_id.trim()),
+            encode(client_secret),
+            encode(device_code),
+            encode("http://oauth.net/2/grant_type/device_code")
+        ),
+        credential_in_url: false,
+    })
+}
+
+/// Read the access token out of the exchange answer.
+pub fn parse_token_exchange(status: u16, body: &str) -> Result<String, DebridError> {
+    match status {
+        401 | 403 => return Err(DebridError::Unauthorized),
+        429 => return Err(DebridError::QuotaExceeded),
+        500..=599 => return Err(DebridError::Unreachable),
+        _ => {}
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(body).map_err(|_| DebridError::Malformed)?;
+    value
+        .get("access_token")
+        .and_then(|token| token.as_str())
+        .filter(|token| !token.is_empty())
+        .map(str::to_string)
+        .ok_or(DebridError::Malformed)
+}
+
 /// Anything that can perform a [`DebridRequest`]: the daemon's HTTP client in production,
 /// a canned answer in tests.
 #[async_trait::async_trait]

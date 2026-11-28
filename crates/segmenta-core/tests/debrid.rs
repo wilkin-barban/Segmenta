@@ -4,8 +4,8 @@
 
 use segmenta_core::debrid::{
     account_request, device_poll_request, device_start_request, next_interval, parse_account,
-    parse_device_start, parse_poll, resolve_with, AccountInfo, DebridHttp, PollOutcome, Provider,
-    MAX_POLL_INTERVAL_SECS,
+    parse_device_start, parse_poll, parse_token_exchange, resolve_with, token_exchange_request,
+    AccountInfo, DebridHttp, PollOutcome, Provider, MAX_POLL_INTERVAL_SECS,
 };
 use std::sync::Mutex;
 
@@ -463,4 +463,31 @@ fn the_next_poll_interval_respects_slow_down_and_the_cap() {
     assert_eq!(next_interval(5, false), 5);
     assert_eq!(next_interval(5, true), 10);
     assert_eq!(next_interval(50, true), MAX_POLL_INTERVAL_SECS);
+}
+
+#[test]
+fn the_authorized_pair_is_exchanged_for_an_access_token() {
+    let request = token_exchange_request("client-1", "secret-1", "dev-code").unwrap();
+    assert!(request.url.ends_with("/oauth/v2/token"), "{}", request.url);
+    assert!(request.body.contains("grant_type=http"), "{}", request.body);
+    assert!(request.body.contains("code=dev-code"), "{}", request.body);
+    // Both halves of the pair travel in the body, never in the URL.
+    assert!(!request.url.contains("secret-1"));
+    let printed = format!("{request:?}");
+    assert!(!printed.contains("secret-1"), "{printed}");
+
+    let token = parse_token_exchange(
+        200,
+        r#"{"access_token":"the-token","refresh_token":"r","expires_in":3600,"token_type":"Bearer"}"#,
+    )
+    .unwrap();
+    assert_eq!(token, "the-token");
+    assert_eq!(
+        parse_token_exchange(200, r#"{"expires_in":3600}"#).unwrap_err(),
+        segmenta_core::debrid::DebridError::Malformed
+    );
+    assert_eq!(
+        parse_token_exchange(401, "{}").unwrap_err(),
+        segmenta_core::debrid::DebridError::Unauthorized
+    );
 }
