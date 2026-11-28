@@ -4692,6 +4692,32 @@ impl RpcHandler for Manager {
                     let _ = parse(params)?;
                     self.remote_revoke()
                 }
+                // Paired devices: list, revoke one, and pair a new one with a short code.
+                "remote.devices" => {
+                    let _ = parse(params)?;
+                    let devices = self.store.remote_devices().map_err(store_error)?;
+                    let rows: Vec<Value> = devices
+                        .into_iter()
+                        .map(|device| {
+                            json!({
+                                "id": device.id,
+                                "name": device.name,
+                                "paired_at": device.paired_at,
+                                "last_seen_at": device.last_seen_at,
+                            })
+                        })
+                        .collect();
+                    Ok(Value::Array(rows))
+                }
+                "remote.device.revoke" => {
+                    let parsed: TaskIdParams = serde_json::from_value(parse(params)?)
+                        .map_err(|err| RpcError::invalid_params(err.to_string()))?;
+                    let removed = self
+                        .store
+                        .remove_remote_device(&parsed.task_id)
+                        .map_err(store_error)?;
+                    Ok(json!({ "id": parsed.task_id, "removed": removed }))
+                }
                 "gallery.status" => {
                     let _ = parse(params)?;
                     let tool = crate::gallery::detect(&crate::gallery::search_path());

@@ -56,7 +56,7 @@ fn the_migration_adds_the_table_without_touching_existing_rows() {
             .unwrap();
         drop(conn);
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.schema_version().unwrap(), 9);
+        assert_eq!(store.schema_version().unwrap(), 10);
         let conn = rusqlite::Connection::open(&path).unwrap();
         let rows: i64 = conn
             .query_row(
@@ -69,7 +69,12 @@ fn the_migration_adds_the_table_without_touching_existing_rows() {
     }
     // A second open must be a no-op: running the migration twice cannot duplicate anything.
     let store = Store::open(&path).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 9);
+    // The version keeps moving with each additive table; the point of this test is that a
+    // v8 database gains `site_rules` without losing rows, not the number itself.
+    assert_eq!(
+        store.schema_version().unwrap(),
+        segmenta_daemon::store::SCHEMA_VERSION
+    );
     assert!(store.site_rules().unwrap().is_empty());
 }
 

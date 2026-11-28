@@ -198,6 +198,16 @@ fn the_dns_settings_are_validated_before_they_are_stored() {
 }
 
 #[test]
+fn the_remote_devices_table_arrives_without_touching_anything_else() {
+    let daemon = Daemon::start();
+    // A fresh database is v10 and keeps the download it was created with.
+    let before = daemon.call("download.add", json!({"url": "http://127.0.0.1:9/x.bin"}));
+    assert!(before.get("task_id").is_some(), "{before}");
+    let devices = daemon.call("remote.devices", json!({}));
+    assert_eq!(devices, json!([]));
+}
+
+#[test]
 fn the_settings_accept_the_engine_connection_ceiling() {
     let daemon = Daemon::start();
     // The engine opens up to 128 connections and planner clamps there; the settings must

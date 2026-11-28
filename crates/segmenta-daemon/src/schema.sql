@@ -162,3 +162,13 @@ CREATE TABLE IF NOT EXISTS site_rules (
     headers_secret_id TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Dispositivos emparejados para el control remoto (v10). Se guarda el digest del token,
+-- nunca el token: revocar es borrar la fila, y las demás siguen funcionando.
+CREATE TABLE IF NOT EXISTS remote_devices (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    token_digest TEXT NOT NULL UNIQUE,
+    paired_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at TIMESTAMP
+);

@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Current schema version, stored in `PRAGMA user_version`.
-pub const SCHEMA_VERSION: i64 = 9;
+pub const SCHEMA_VERSION: i64 = 10;
 
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
@@ -308,6 +308,21 @@ impl SiteRuleRecord {
         }
         host == pattern || host.ends_with(&format!(".{pattern}"))
     }
+}
+
+/// One paired phone or tablet allowed to control the daemon.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RemoteDeviceRecord {
+    /// Stable identifier used to revoke it.
+    pub id: String,
+    /// Name the user sees.
+    pub name: String,
+    /// SHA-256 of the token; the token itself is never stored.
+    pub token_digest: String,
+    /// When it was paired.
+    pub paired_at: Option<String>,
+    /// Last successful request, when it happened.
+    pub last_seen_at: Option<String>,
 }
 
 /// One row of `downloads`.
@@ -1183,6 +1198,19 @@ impl Store {
                 );",
             )?;
         }
+        if current < 10 {
+            // Remote devices are additive: one table, and the older single-token alias keeps
+            // working until the user pairs a device.
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS remote_devices (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    token_digest TEXT NOT NULL UNIQUE,
+                    paired_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_seen_at TIMESTAMP
+                );",
+            )?;
+        }
         if current < 9 {
             // Site rules are additive: one new table, no rebuild, and the existing rows of
             // every other table stay exactly where they are.
@@ -1201,6 +1229,62 @@ impl Store {
         tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         tx.commit()?;
         Ok(SCHEMA_VERSION)
+    }
+
+    /// Paired devices, oldest first.
+    pub fn remote_devices(&self) -> Result<Vec<RemoteDeviceRecord>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, token_digest, paired_at, last_seen_at
+             FROM remote_devices ORDER BY paired_at, id",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(RemoteDeviceRecord {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    token_digest: row.get(2)?,
+                    paired_at: row.get(3)?,
+                    last_seen_at: row.get(4)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    /// Pair a device. Only the digest is stored.
+    pub fn add_remote_device(&self, id: &str, name: &str, digest: &str) -> Result<()> {
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO remote_devices (id, name, token_digest) VALUES (?1, ?2, ?3)",
+            params![id, name, digest],
+        )?;
+        Ok(())
+    }
+
+    /// Remove one device; the others keep working.
+    pub fn remove_remote_device(&self, id: &str) -> Result<bool> {
+        let conn = self.lock();
+        let removed = conn.execute("DELETE FROM remote_devices WHERE id = ?1", params![id])?;
+        Ok(removed > 0)
+    }
+
+    /// Device owning `digest`, when it exists.
+    pub fn remote_device_by_digest(&self, digest: &str) -> Result<Option<RemoteDeviceRecord>> {
+        Ok(self
+            .remote_devices()?
+            .into_iter()
+            .find(|device| device.token_digest == digest))
+    }
+
+    /// Record that a device just used the API.
+    pub fn touch_remote_device(&self, id: &str) -> Result<()> {
+        let conn = self.lock();
+        conn.execute(
+            "UPDATE remote_devices SET last_seen_at = CURRENT_TIMESTAMP WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
     }
 
     /// Every stored rule, newest pattern first is left to the caller.
