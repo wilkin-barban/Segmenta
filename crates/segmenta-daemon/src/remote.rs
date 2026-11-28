@@ -297,14 +297,22 @@ where
     if request.method == "GET" && matches!(request.path.as_str(), "/" | "/index.html") {
         return reply_html(stream, WEB_INDEX).await;
     }
-    let Some(digest) = manager.remote_digest() else {
-        return reply(
-            stream,
-            "401 Unauthorized",
-            b"{\"error\":\"ERR_REMOTE_UNAUTHORIZED\"}",
-        )
-        .await;
-    };
+    // Pairing is the one endpoint that cannot require a token: it is how a device gets one.
+    if request.method == "POST" && request.path == "/api/pair" {
+        let body = request.body.unwrap_or_default();
+        let code = body.get("code").and_then(|v| v.as_str()).unwrap_or("");
+        let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        return match manager.pair_redeem(code, name) {
+            Ok((id, token)) => {
+                let answer = serde_json::json!({ "id": id, "token": token });
+                reply(stream, "200 OK", answer.to_string().as_bytes()).await
+            }
+            Err(err) => {
+                let answer = serde_json::json!({ "error": err.to_string() });
+                reply(stream, "403 Forbidden", answer.to_string().as_bytes()).await
+            }
+        };
+    }
     let Some(presented) = request.token.as_deref() else {
         return reply(
             stream,
@@ -313,7 +321,7 @@ where
         )
         .await;
     };
-    if authorize(&digest, presented).is_err() {
+    if manager.remote_authorize(presented).is_none() {
         return reply(
             stream,
             "401 Unauthorized",

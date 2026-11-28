@@ -205,6 +205,7 @@ pub struct Manager {
     settings: Mutex<Settings>,
     http_bucket: Arc<TokenBucket>,
     host_limits: Arc<HostLimits>,
+    pairing: std::sync::Mutex<crate::pairing::PairingCodes>,
     #[cfg(test)]
     after_settings_persist: Option<Arc<dyn Fn() + Send + Sync>>,
     progress: Arc<Mutex<HashMap<String, ProgressSnapshot>>>,
@@ -241,6 +242,7 @@ impl Manager {
             settings: Mutex::new(settings),
             http_bucket,
             host_limits,
+            pairing: std::sync::Mutex::new(crate::pairing::PairingCodes::new()),
             #[cfg(test)]
             after_settings_persist: None,
             progress: Arc::new(Mutex::new(HashMap::new())),
@@ -1810,6 +1812,66 @@ impl Manager {
             settings.remote_bind.clone(),
             settings.remote_port,
         )
+    }
+
+    /// Who is presenting `token`, when remote control is on and the token is valid.
+    ///
+    /// Returns the device id for a paired phone, or the legacy marker for the single token
+    /// the previous version installed. Revoking one device removes only its row, so the
+    /// others keep working.
+    pub fn remote_authorize(&self, token: &str) -> Option<String> {
+        let settings = self.settings();
+        if !settings.remote_enabled {
+            return None;
+        }
+        if let Some(digest) = self
+            .secrets
+            .lookup(crate::remote::TOKEN_ALIAS)
+            .ok()
+            .flatten()
+        {
+            if crate::remote::authorize(&digest, token).is_ok() {
+                return Some("legacy".to_string());
+            }
+        }
+        let digest = crate::remote::token_digest(token);
+        match self.store.remote_device_by_digest(&digest) {
+            Ok(Some(device)) => {
+                let _ = self.store.touch_remote_device(&device.id);
+                Some(device.id)
+            }
+            _ => None,
+        }
+    }
+
+    /// Issue a pairing code for a device name.
+    pub fn pair_issue(&self, name: &str) -> String {
+        let mut codes = self.pairing.lock().unwrap_or_else(|err| err.into_inner());
+        codes.issue(name)
+    }
+
+    /// Exchange a pairing code for a device token. The token is returned once.
+    pub fn pair_redeem(
+        &self,
+        code: &str,
+        name: &str,
+    ) -> Result<(String, String), crate::pairing::PairError> {
+        let issued_for = {
+            let mut codes = self.pairing.lock().unwrap_or_else(|err| err.into_inner());
+            codes.redeem(code)?
+        };
+        let device_name = if name.trim().is_empty() {
+            issued_for
+        } else {
+            name.trim().to_string()
+        };
+        let token = crate::remote::new_token();
+        let digest = crate::remote::token_digest(&token);
+        let id = uuid::Uuid::new_v4().to_string();
+        self.store
+            .add_remote_device(&id, &device_name, &digest)
+            .map_err(|_| crate::pairing::PairError::Unknown)?;
+        Ok((id, token))
     }
 
     /// Digest of the active remote session token, if remote control is enabled.
@@ -4708,6 +4770,13 @@ impl RpcHandler for Manager {
                         })
                         .collect();
                     Ok(Value::Array(rows))
+                }
+                "remote.pair.code" => {
+                    let name = params
+                        .and_then(|value| value.get("name").and_then(|v| v.as_str()).map(str::to_string))
+                        .unwrap_or_else(|| "phone".to_string());
+                    let code = self.pair_issue(&name);
+                    Ok(json!({ "code": code, "name": name, "expires_in_secs": 600 }))
                 }
                 "remote.device.revoke" => {
                     let parsed: TaskIdParams = serde_json::from_value(parse(params)?)
