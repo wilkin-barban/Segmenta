@@ -36,7 +36,7 @@ Versión: **0.7.0**, sin tag ni release hasta cerrar el hito.
 - [x] T4 — `ftp.rs` sin TLS: sondeo `SIZE`/`MDTM`, `REST`/`RETR` pasivo segmentado, reutilizando planner, DiskWriter y HostLimits, con servidor FTP de prueba (S2) — ruta: `segmenta-core` — commit: `0e0cba5` + `e17e563` + ver L8.
 - [x] T5 — FTPS, reanudación por `MDTM` y bind a `vpn_interface`, sobre el mismo cliente (S2) — ruta: `segmenta-core` — commit: `cca9bd9` + `c4a69f0` + `65c46e8`, ver L9.
 - [x] T6 — `batch.rs` (patrones `archivo_[01-25].jpg`) y `folder.rs` (BFS acotado de `Index of` y FTP, filtrado de hosts externos y carpetas padre) (S3) — ruta: `segmenta-core` — commit: `c6b28b7` + ver L10.
-- [x] T7 — `remotezip.rs`: EOCD + ZIP64 + directorio central por `Range`, listado en el alta y descarga selectiva con `If-Range` y CRC-32 (S3) — ruta: `segmenta-core` — commit: ver L11.
+- [x] T7 — `remotezip.rs`: EOCD + ZIP64 + directorio central por `Range`, listado en el alta y descarga selectiva con `If-Range` y CRC-32 (S3) — ruta: `segmenta-core` — commit: `a8c2358` + `213b296` + `2360f35`, ver L11.
 - [ ] T8 — Diálogo **Link Grabber** en la GUI y `LinksPart` en `segmenta-host`: pegar listas, filtrar, asignar paquete y contraseña de lote (S3) — ruta: `segmenta-gui`, `segmenta-host` — commit: pendiente.
 - [ ] T9 — `remote.rs` en HTTPS con certificado autofirmado local, huella SHA-256 en la UI y renovación al cambiar la interfaz (S4) — ruta: `segmenta-daemon`, `segmenta-gui`, `segmenta-cli` — commit: pendiente.
 - [ ] T10 — PWA móvil embebida (estado, alta, filtros, acciones por fila, colas) servida por el mismo puerto (S4) — ruta: `segmenta-daemon` — commit: pendiente.
