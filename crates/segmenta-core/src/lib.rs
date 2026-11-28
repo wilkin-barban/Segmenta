@@ -19,6 +19,7 @@ pub mod engine;
 pub mod error;
 pub mod filename;
 pub mod ftp;
+pub mod ftps;
 pub mod hostlimits;
 pub mod netguard;
 pub mod planner;
