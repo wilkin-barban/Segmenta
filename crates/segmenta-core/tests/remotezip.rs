@@ -228,3 +228,40 @@ async fn a_corrupted_entry_fails_its_crc_instead_of_returning_bytes() {
         "{refused:?}"
     );
 }
+
+/// Corrupted archives must come back as errors, never as a panic: a parser that dies takes
+/// the whole task with it and leaves the user with no message.
+#[tokio::test]
+async fn malformed_archives_never_panic() {
+    let base = stored_zip();
+    let url = Url::parse("https://example.test/a.zip").unwrap();
+    let mut cases: Vec<Vec<u8>> = Vec::new();
+    // Every truncation length that matters, not just one.
+    for cut in [1usize, 4, 21, 22, 40, base.len() / 2, base.len() - 1] {
+        cases.push(base[..cut.min(base.len())].to_vec());
+    }
+    // A count that claims far more entries than the directory holds.
+    let mut lying = base.clone();
+    let eocd = lying.len() - 22;
+    lying[eocd + 10..eocd + 12].copy_from_slice(&u16::MAX.to_le_bytes());
+    cases.push(lying);
+    // A directory offset past the end of the body.
+    let mut far = base.clone();
+    far[eocd + 16..eocd + 20].copy_from_slice(&u32::MAX.to_le_bytes());
+    cases.push(far);
+    // A ZIP64 marker with no locator behind it.
+    let mut zip64 = base.clone();
+    zip64[eocd + 10..eocd + 12].copy_from_slice(&u16::MAX.to_le_bytes());
+    zip64[eocd + 12..eocd + 16].copy_from_slice(&u32::MAX.to_le_bytes());
+    cases.push(zip64);
+    // Pure noise that happens to carry the signature.
+    let mut noise = vec![0u8; 512];
+    noise[..4].copy_from_slice(&0x0605_4b50u32.to_le_bytes());
+    cases.push(noise);
+
+    for case in cases {
+        let fixture = Fixture::new(case);
+        // Both outcomes are acceptable; a panic is not.
+        let _ = open(&fixture, &url).await;
+    }
+}
