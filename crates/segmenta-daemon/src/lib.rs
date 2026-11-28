@@ -15,6 +15,7 @@ pub mod manager;
 pub mod media;
 pub mod postprocess;
 pub mod remote;
+pub mod remote_tls;
 pub mod rpc;
 pub mod rss;
 pub mod scheduler;
