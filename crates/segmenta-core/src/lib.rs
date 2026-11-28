@@ -19,6 +19,7 @@ pub mod dns;
 pub mod engine;
 pub mod error;
 pub mod filename;
+pub mod folder;
 pub mod ftp;
 pub mod ftps;
 pub mod hostlimits;
