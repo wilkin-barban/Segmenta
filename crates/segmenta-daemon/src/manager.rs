@@ -2819,6 +2819,8 @@ fn debrid_code(error: &segmenta_core::debrid::DebridError) -> i64 {
         segmenta_core::debrid::DebridError::Unauthorized => 1061,
         segmenta_core::debrid::DebridError::LinkUnavailable => 1062,
         segmenta_core::debrid::DebridError::QuotaExceeded => 1063,
+        // A free plan on a premium-only API is its own failure: the credentials are fine.
+        segmenta_core::debrid::DebridError::AccountNotPremium => 1066,
         segmenta_core::debrid::DebridError::Malformed => 1064,
         segmenta_core::debrid::DebridError::Unreachable => 1065,
     }
