@@ -306,3 +306,249 @@ pub struct LinksPart {
     dispositions: HashMap<String, Disposition>,
     disposition_order: VecDeque<String>,
 }
+
+impl LinksPart {
+    /// Create a reassembler with the given limits and monotonic clock.
+    pub fn new(limits: LinksLimits) -> Self {
+        Self::with_clock(limits, Arc::new(MonotonicClock::default()))
+    }
+
+    /// Create a reassembler with the given limits and a caller-supplied clock.
+    pub fn with_clock(limits: LinksLimits, clock: Arc<dyn Clock>) -> Self {
+        Self {
+            limits,
+            clock,
+            captures: HashMap::new(),
+            dispositions: HashMap::new(),
+            disposition_order: VecDeque::new(),
+        }
+    }
+
+    /// Current limits in force.
+    pub fn limits(&self) -> &LinksLimits {
+        &self.limits
+    }
+
+    /// Number of active captures currently accumulating in memory.
+    pub fn active_captures(&self) -> usize {
+        self.captures.len()
+    }
+
+    /// Evicts expired captures based on the configured timeout.
+    pub fn prune(&mut self) {
+        let now = self.clock.elapsed_ms();
+        let expiry_ms = self.limits.expiry.as_millis() as u64;
+
+        let mut expired_ids = Vec::new();
+        for (id, cap) in &self.captures {
+            if now.saturating_sub(cap.last_updated_ms) >= expiry_ms {
+                expired_ids.push(id.clone());
+            }
+        }
+
+        for id in expired_ids {
+            self.captures.remove(&id);
+            self.record_disposition(
+                id,
+                Disposition::Expired("capture expired due to inactivity".to_string()),
+            );
+        }
+    }
+
+    /// Explicitly evict a capture session.
+    pub fn evict(&mut self, capture_id: &str, reason: impl Into<String>) -> bool {
+        let reason = reason.into();
+        if self.captures.remove(capture_id).is_some() {
+            self.record_disposition(capture_id.to_string(), Disposition::Evicted(reason));
+            true
+        } else {
+            false
+        }
+    }
+
+    fn record_disposition(&mut self, capture_id: String, disp: Disposition) {
+        if let Some(existing) = self.dispositions.get_mut(&capture_id) {
+            *existing = disp;
+            return;
+        }
+        if self.disposition_order.len() >= MAX_DISPOSITION_HISTORY {
+            if let Some(oldest) = self.disposition_order.pop_front() {
+                self.dispositions.remove(&oldest);
+            }
+        }
+        self.disposition_order.push_back(capture_id.clone());
+        self.dispositions.insert(capture_id, disp);
+    }
+
+    /// Ingest a chunk message, returning `Ok(Some(links))` when all chunks are present.
+    pub fn push(&mut self, chunk: ChunkMessage) -> Result<Option<Vec<String>>, LinksError> {
+        if chunk.method != METHOD_LINKS_CHUNK {
+            return Err(LinksError::InvalidMethod {
+                method: chunk.method,
+            });
+        }
+
+        // Prune any abandoned captures before processing.
+        self.prune();
+
+        let capture_id = chunk.params.capture_id;
+        let index = chunk.params.index;
+        let total = chunk.params.total;
+        let links = chunk.params.links;
+
+        // Check if this capture was previously expired or evicted.
+        if let Some(disposition) = self.dispositions.get(&capture_id) {
+            return match disposition {
+                Disposition::Expired(reason) => Err(LinksError::Expired {
+                    capture_id,
+                    reason: reason.clone(),
+                }),
+                Disposition::Evicted(reason) => Err(LinksError::Evicted {
+                    capture_id,
+                    reason: reason.clone(),
+                }),
+            };
+        }
+
+        let now = self.clock.elapsed_ms();
+        let expiry_ms = self.limits.expiry.as_millis() as u64;
+
+        if let Some(cap) = self.captures.get_mut(&capture_id) {
+            // Check if this active capture expired.
+            if now.saturating_sub(cap.last_updated_ms) >= expiry_ms {
+                self.captures.remove(&capture_id);
+                let reason = "capture expired due to inactivity".to_string();
+                self.record_disposition(capture_id.clone(), Disposition::Expired(reason.clone()));
+                return Err(LinksError::Expired { capture_id, reason });
+            }
+
+            if total != cap.total {
+                return Err(LinksError::MismatchedTotal {
+                    expected: cap.total,
+                    actual: total,
+                });
+            }
+
+            if index >= cap.total {
+                return Err(LinksError::IndexOutOfRange {
+                    index,
+                    total: cap.total,
+                });
+            }
+
+            // Duplicate chunks are idempotent.
+            if cap.chunks.contains_key(&index) {
+                cap.last_updated_ms = now;
+                return Ok(None);
+            }
+
+            let new_links_count = links.len();
+            let candidate_links = cap.total_links.saturating_add(new_links_count);
+            if candidate_links > self.limits.max_links_per_capture {
+                return Err(LinksError::MaxLinksExceeded {
+                    count: candidate_links,
+                    limit: self.limits.max_links_per_capture,
+                });
+            }
+
+            let new_bytes: usize = links.iter().map(|l| l.len()).sum();
+            let candidate_bytes = cap.total_bytes.saturating_add(new_bytes);
+            if candidate_bytes > self.limits.max_bytes_per_capture {
+                return Err(LinksError::MaxBytesExceeded {
+                    bytes: candidate_bytes,
+                    limit: self.limits.max_bytes_per_capture,
+                });
+            }
+
+            cap.chunks.insert(index, links);
+            cap.total_links = candidate_links;
+            cap.total_bytes = candidate_bytes;
+            cap.last_updated_ms = now;
+
+            if cap.chunks.len() == cap.total {
+                let total = cap.total;
+                let total_links = cap.total_links;
+                // The entry was borrowed above and is owned here; if it vanished there is
+                // nothing to assemble and an error is better than a panic in a parser.
+                let Some(mut cap) = self.captures.remove(&capture_id) else {
+                    return Err(LinksError::Expired {
+                        capture_id,
+                        reason: "the capture went away while assembling".to_string(),
+                    });
+                };
+                let mut assembled = Vec::with_capacity(total_links);
+                for idx in 0..total {
+                    if let Some(chunk_links) = cap.chunks.remove(&idx) {
+                        assembled.extend(chunk_links);
+                    }
+                }
+                return Ok(Some(assembled));
+            }
+
+            Ok(None)
+        } else {
+            // New capture session.
+            if total == 0 || index >= total {
+                return Err(LinksError::IndexOutOfRange { index, total });
+            }
+
+            let new_links_count = links.len();
+            if new_links_count > self.limits.max_links_per_capture {
+                return Err(LinksError::MaxLinksExceeded {
+                    count: new_links_count,
+                    limit: self.limits.max_links_per_capture,
+                });
+            }
+
+            let new_bytes: usize = links.iter().map(|l| l.len()).sum();
+            if new_bytes > self.limits.max_bytes_per_capture {
+                return Err(LinksError::MaxBytesExceeded {
+                    bytes: new_bytes,
+                    limit: self.limits.max_bytes_per_capture,
+                });
+            }
+
+            if self.captures.len() >= self.limits.max_concurrent_captures {
+                return Err(LinksError::MaxConcurrentCapturesExceeded {
+                    limit: self.limits.max_concurrent_captures,
+                });
+            }
+
+            if total == 1 {
+                // Immediate single-chunk completion.
+                return Ok(Some(links));
+            }
+
+            let mut chunks = HashMap::new();
+            chunks.insert(index, links);
+            let active = ActiveCapture {
+                total,
+                chunks,
+                total_links: new_links_count,
+                total_bytes: new_bytes,
+                last_updated_ms: now,
+            };
+            self.captures.insert(capture_id, active);
+            Ok(None)
+        }
+    }
+
+    /// Convenience helper for ingesting a chunk message.
+    pub fn ingest(&mut self, chunk: ChunkMessage) -> Result<Option<Vec<String>>, LinksError> {
+        self.push(chunk)
+    }
+
+    /// Ingest a [`serde_json::Value`] representing the chunk message.
+    pub fn push_json(&mut self, value: &Value) -> Result<Option<Vec<String>>, LinksError> {
+        let chunk: ChunkMessage =
+            serde_json::from_value(value.clone()).map_err(|err| LinksError::InvalidPayload {
+                detail: err.to_string(),
+            })?;
+        self.push(chunk)
+    }
+
+    /// Convenience helper for ingesting a [`serde_json::Value`].
+    pub fn ingest_json(&mut self, value: &Value) -> Result<Option<Vec<String>>, LinksError> {
+        self.push_json(value)
+    }
+}
