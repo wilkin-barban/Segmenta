@@ -41,7 +41,7 @@ Versión: **0.7.0**, sin tag ni release hasta cerrar el hito.
 - [x] T9 — `remote.rs` en HTTPS con certificado autofirmado local, huella SHA-256 en la UI y renovación al cambiar la interfaz (S4) — ruta: `segmenta-daemon`, `segmenta-gui`, `segmenta-cli` — commit: `e3742b2`, `4cdbc1a`, `fcd2bb8`, ver L13.
 - [x] T10 — PWA móvil embebida (estado, alta, filtros, acciones por fila, colas) servida por el mismo puerto (S4) — ruta: `segmenta-daemon` — commit: `b710467`, ver L14.
 - [x] T11 — `remote_devices` (migración aditiva), códigos de emparejamiento con TTL y rate limit, revocación individual y su diálogo (S4) — ruta: `segmenta-daemon`, `segmenta-gui` — commit: `51026df`, `95574bd`, `868973d`, ver L15.
-- [ ] T12 — Cierre: pruebas en host de los binarios release, notas de 0.8.0 y gates completos (S5, S6) — ruta: documentación — commit: pendiente.
+- [x] T12 — Cierre: pruebas en host de los binarios release, notas de 0.8.0 y gates completos (S5, S6) — ruta: documentación — commit: ver L16.
 
 ## Criterios de aceptación
 

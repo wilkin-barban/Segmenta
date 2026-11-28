@@ -1,58 +1,65 @@
 # Segmenta 0.8.0
 
-Red e inmunidad: el tráfico deja de escapar del túnel, los nombres se resuelven cifrados, y el
-motor HTTP se adapta cuando un servidor pide menos. La versión instalada sigue siendo 0.7.0
-hasta que este documento se publique; nada de lo que sigue altera el formato de la base salvo
-una tabla nueva.
+Captura, hosters y control remoto. Los enlaces que antes había que bajar a mano ahora se
+resuelven solos, el control remoto viaja cifrado y cada teléfono emparejado se puede revocar
+por separado. La versión instalada **sigue siendo 0.7.0** hasta que este documento se publique:
+no hay tag ni release todavía.
 
-## Relay interno y herramientas externas
+## Extractores nativos
 
-`yt-dlp`, `gallery-dl`, los hooks y el antivirus ya no abren sus propios sockets contra la red
-del sistema. Un relay loopback autenticado recibe sus peticiones y las abre atadas a la
-interfaz de la VPN. Antes de cada conexión el relay vuelve a comprobar que la interfaz exista y
-esté arriba: si no lo está, responde `503` y no hay reintento ciego. Las variables de proxy
-heredadas se descartan, así que un `HTTP_PROXY` del entorno no puede secuestrar la descarga
-fuera del túnel.
+Un enlace deja de ser una página web que se guarda con nombre de archivo:
 
-`ffmpeg` no se enruta: en Segmenta solo concatena archivos locales y no abre red. Está escrito
-para que nadie asuma lo contrario.
+| Servicio | Qué resuelve |
+| --- | --- |
+| **Google Drive** | archivos (incluido el intersticial de archivos grandes) y exportación de Docs/Sheets/Slides a Office |
+| **MediaFire** | el enlace real del botón de descarga |
+| **Rapidgator** | el enlace anunciado en la página, con aviso cuando caducó |
+| **Internet Archive** | el archivo del ítem, elegido por su metadata |
+| **Gofile** | el archivo más grande del share |
+| **GitHub releases** | el asset publicado, con su **SHA-256** cuando GitHub lo publica |
+| **Hugging Face** | modelos y datasets, con el **SHA-256** del objeto LFS |
 
-## Torrents sobre VPN
+Cuando el servicio cambia y el extractor ya no reconoce la página, la descarga **falla con un
+motivo** en vez de guardar el HTML. Eso es deliberado: un `.html` con nombre de archivo se
+descubre recién al abrirlo.
 
-Los torrents dejaron de rechazarse. La sesión de librqbit se crea con `bind_device_name`,
-sin descubrimiento local y sin listener entrante ni UPnP. Como el bind no cubre una conexión
-abierta antes de que el túnel caiga, el planificador pausa las tareas en vuelo cuando la
-interfaz deja de estar arriba. La sesión es única por proceso: cambiar de interfaz exige
-reiniciar el daemon.
+## FTP y FTPS segmentado
 
-## DNS cifrado
+`ftp://` y `ftps://` se descargan con el mismo motor de segmentos que HTTP: sondeo `SIZE` y
+`MDTM`, `REST` + `RETR` pasivo, `DiskWriter` por offsets y el tope por host de siempre.
 
-`dns_mode` acepta `system`, `doh` y `dot`. DoH habla RFC 8484 con Cloudflare, Quad9, Google o
-una URL propia, y sus respuestas pasan por las mismas guardas anti-SSRF que el resolvedor del
-sistema: un endpoint hostil no puede apuntar una descarga a loopback ni a la LAN. **DoT no
-está incluido en este build** y devuelve un error que lo dice; no se simula. PAC tampoco: haría
-falta un intérprete de JavaScript que el proyecto no incorpora.
+- **TLS explícito e implícito**, con `PBSZ`/`PROT P` para que el canal de datos también vaya
+  cifrado.
+- La IP que el servidor anuncia en `PASV` **se ignora**: se conecta al host del control, que es
+  lo que evita el rebote de FTP y los problemas detrás de NAT.
+- La reanudación se valida con `MDTM` **antes** de emitir `REST`: si el archivo remoto cambió,
+  se niega en vez de empalmar dos versiones.
 
-## Reglas por sitio
+## Captura masiva
 
-Una regla por dominio puede fijar user agent, tope de conexiones y headers. Los headers
-sensibles se guardan en el almacén de secretos y en la base queda solo un alias que nunca sale
-del daemon. La página de preferencias lista las reglas sin mostrar ni valores ni alias, y el
-selector de proveedor DNS solo está activo cuando el modo es DoH.
+- **Patrones**: `foto_[01-25].jpg` se expande con su relleno, hasta 1000 URLs; un rango mayor se
+  rechaza diciendo cuántos pedía.
+- **Rastreo de carpetas**: listados `Index of`, sin salir del host ni del subárbol, con cotas de
+  profundidad, carpetas y archivos. Cuando una cota corta la lista, **se dice cuál**.
+- **ZIP remoto**: el árbol interno se lista por `Range` leyendo sólo el final del archivo
+  (ZIP64 incluido), sin bajar el `.zip` completo, y una entrada suelta se descarga y se verifica
+  contra su CRC-32.
+- **Link Grabber**: se pega una lista, el daemon dice qué va a encolar y qué rechaza —con el
+  motivo de cada línea— y la ventana lo muestra antes de encolar.
 
-## Motor adaptativo
+## Control remoto
 
-- **Límite por host**: un `429` o `503` divide el límite a la mitad, nunca por debajo de una
-  conexión; cada período de calma devuelve un slot hasta el valor inicial.
-- **Tope de 128 conexiones**, y ninguna regla ni ajuste lo amplía.
-- **Evicción de workers lentos**: un worker por debajo del 25 % del más rápido, con al menos
-  `MIN_SPLIT_SIZE` pendiente, se reemplaza por una conexión nueva sin mover los offsets del
-  disco.
-- **Streams sin `Content-Length`**: se crean sparse y `download.keep` publica lo que llegó al
-  disco, porque ese stream no se puede reanudar y descartarlo tiraba lo ya transferido.
+- **HTTPS con certificado local** y huella SHA-256. La clave se guarda con permisos `0600` y se
+  repara si estaba suelta; el certificado cubre loopback y las IPs de la LAN.
+- **Página móvil embebida** con estado, alta de enlaces, filtros y acciones por fila, en tema
+  claro/oscuro y en es/en/pt.
+- **Un token por dispositivo** y **códigos de emparejamiento** de ocho dígitos, un solo uso, diez
+  minutos y cinco intentos. Revocar un teléfono no desconecta a los demás.
 
-## Corrección de una prueba inestable
+## Notas
 
-`snapshot_of_exactly_the_page_size_paints_no_notice` esperaba 500 ms fijos a la respuesta de
-conteo y fallaba en máquina cargada. Ahora espera la condición con un límite de 10 s: un total
-equivocado deja el aviso pintado y la prueba sigue fallando, pero por el motivo correcto.
+- La versión sigue en **0.7.0**: este documento se publica cuando se decida cortar la release.
+- DoT sigue sin estar incluido en este build y devuelve un error que lo dice; PAC no aplica
+  porque evaluarlo requiere un intérprete de JavaScript que el proyecto no incorpora.
+- La suplantación TLS (perfil `chrome`) continúa como *seam* sin C++: se rechaza con un error
+  que nombra la feature faltante.
