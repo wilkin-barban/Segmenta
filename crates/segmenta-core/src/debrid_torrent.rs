@@ -147,25 +147,26 @@ pub fn parse_add(provider: Provider, status: u16, body: &str) -> Result<String, 
     ok_status(status)?;
     let value: Value = serde_json::from_str(body).map_err(|_| DebridError::Malformed)?;
     let id = match provider {
-        Provider::RealDebrid => value.get("id").and_then(|v| v.as_str()),
+        Provider::RealDebrid => value.get("id").and_then(|v| v.as_str()).map(str::to_string),
         // TorBox wraps everything in `data`.
         Provider::TorBox => boxed_id(&value),
-        Provider::Premiumize => value.get("id").and_then(|v| v.as_str()),
+        Provider::Premiumize => value.get("id").and_then(|v| v.as_str()).map(str::to_string),
         _ => None,
     };
-    id.map(str::to_string).ok_or(DebridError::Malformed)
+    id.ok_or(DebridError::Malformed)
 }
 
-/// TorBox nests the identifier under `data`.
-fn boxed_id(value: &Value) -> Option<&str> {
+/// TorBox nests the identifier under `data`, as a string or as a number.
+///
+/// The number is rendered into an owned string: this keeps a `Box::leak` out of a function
+/// that runs on every poll.
+fn boxed_id(value: &Value) -> Option<String> {
     let data = value.get("data")?;
-    if let Some(id) = data.get("torrent_id").and_then(|v| v.as_str()) {
-        return Some(id);
+    let candidate = data.get("torrent_id").or_else(|| data.get("id"))?;
+    match candidate {
+        Value::String(text) => Some(text.clone()),
+        other => other.as_u64().map(|id| id.to_string()),
     }
-    if let Some(id) = data.get("torrent_id").and_then(Value::as_u64) {
-        return Some(Box::leak(id.to_string().into_boxed_str()));
-    }
-    data.get("id").and_then(|v| v.as_str())
 }
 
 /// Request that asks the provider how the job is doing.
