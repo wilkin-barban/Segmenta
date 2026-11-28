@@ -20,7 +20,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::time::Duration;
 
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use url::Url;
 
@@ -49,6 +49,11 @@ pub struct FtpConfig {
     pub interface: Option<String>,
     /// Timeout for one control or data operation.
     pub timeout: Duration,
+    /// Encryption for control and data connections.
+    pub tls: crate::ftps::TlsSetup,
+    /// Modification time the partial file was built from; a different `MDTM` means the
+    /// remote changed and the transfer must start over instead of resuming.
+    pub expect_modified: Option<String>,
 }
 
 impl Default for FtpConfig {
@@ -58,6 +63,8 @@ impl Default for FtpConfig {
             allow_local: false,
             interface: None,
             timeout: Duration::from_secs(30),
+            tls: crate::ftps::TlsSetup::default(),
+            expect_modified: None,
         }
     }
 }
@@ -80,9 +87,7 @@ pub struct FtpTarget {
 impl FtpTarget {
     /// Read `ftp://[user:pass@]host[:port]/path`.
     pub fn parse(url: &Url) -> Option<FtpTarget> {
-        if url.scheme() != "ftp" {
-            return None;
-        }
+        crate::ftps::TlsMode::for_scheme(url.scheme())?;
         let host = url.host_str()?.to_string();
         let user = if url.username().is_empty() {
             "anonymous".to_string()
@@ -131,21 +136,31 @@ impl Reply {
 }
 
 /// One control connection.
+///
+/// The stream stays in one piece instead of being split: an explicit `AUTH TLS` upgrades
+/// the same socket, and a split would make that impossible. Lines are read byte by byte
+/// because a `BufReader` could swallow bytes past the line that are then lost by the
+/// upgrade.
 pub struct Control {
-    reader: BufReader<tokio::io::ReadHalf<TcpStream>>,
-    writer: tokio::io::WriteHalf<TcpStream>,
+    stream: crate::ftps::BoxStream,
     timeout: Duration,
 }
 
 impl Control {
-    /// Open and authenticate a control connection.
+    /// Open and authenticate a control connection, encrypting it when asked.
     pub async fn open(target: &FtpTarget, cfg: &FtpConfig) -> Result<Control> {
         let addr = resolve(&target.host, target.port, cfg).await?;
-        let stream = connect(addr, cfg).await?;
-        let (read, write) = tokio::io::split(stream);
+        let tcp = connect(addr, cfg).await?;
+        // Implicit TLS starts before the server says anything; explicit TLS waits until
+        // the greeting and the login, because that is when `AUTH TLS` is allowed.
+        let stream: crate::ftps::BoxStream = match cfg.tls.mode {
+            crate::ftps::TlsMode::Implicit => {
+                crate::ftps::handshake(tcp, &target.host, &cfg.tls).await?
+            }
+            _ => Box::new(tcp),
+        };
         let mut control = Control {
-            reader: BufReader::new(read),
-            writer: write,
+            stream,
             timeout: cfg.timeout,
         };
         control.expect_success().await?;
@@ -166,6 +181,24 @@ impl Control {
             .command(&format!("PASS {}", target.password))
             .await
             .and_then(require_success)?;
+        if cfg.tls.mode == crate::ftps::TlsMode::Explicit {
+            let reply = control.command("AUTH TLS").await?;
+            if reply.code != 234 && reply.code != 334 {
+                return Err(CoreError::Network(format!(
+                    "ftps server refused AUTH TLS: {} {}",
+                    reply.code, reply.message
+                )));
+            }
+            // The upgrade consumes the plain stream and gives back the encrypted one.
+            let plain = std::mem::replace(&mut control.stream, Box::new(tokio::io::empty()));
+            control.stream = crate::ftps::handshake(plain, &target.host, &cfg.tls).await?;
+        }
+        if cfg.tls.mode.is_tls() {
+            // Without PBSZ/PROT the data channel is sent in the clear even though the
+            // control channel is encrypted — the classic FTPS mistake.
+            control.command("PBSZ 0").await.and_then(require_success)?;
+            control.command("PROT P").await.and_then(require_success)?;
+        }
         // Binary mode: without it the server may translate line endings in the payload.
         control.command("TYPE I").await.and_then(require_success)?;
         Ok(control)
@@ -175,7 +208,7 @@ impl Control {
     pub async fn command(&mut self, line: &str) -> Result<Reply> {
         let mut payload = line.as_bytes().to_vec();
         payload.extend_from_slice(b"\r\n");
-        let write = self.writer.write_all(&payload);
+        let write = self.stream.write_all(&payload);
         tokio::time::timeout(self.timeout, write)
             .await
             .map_err(|_| CoreError::Network("ftp control write timed out".to_string()))?
@@ -184,29 +217,21 @@ impl Control {
     }
 
     /// Read one (possibly multi-line) reply.
+    ///
+    /// Bytes are read one at a time on purpose: a buffered reader would keep whatever
+    /// arrived after the line, and that buffer would be lost when the connection is
+    /// upgraded to TLS.
     pub async fn read_reply(&mut self) -> Result<Reply> {
-        let mut message = Vec::new();
+        let mut message: Vec<String> = Vec::new();
         loop {
-            let mut line = String::new();
-            let read = self.reader.read_line(&mut line);
-            let read = tokio::time::timeout(self.timeout, read)
-                .await
-                .map_err(|_| CoreError::Network("ftp control read timed out".to_string()))?
-                .map_err(|err| CoreError::Network(err.to_string()))?;
-            if read == 0 {
-                return Err(CoreError::Network(
-                    "ftp server closed the control connection".to_string(),
-                ));
-            }
-            let trimmed = line.trim_end_matches(['\r', '\n']);
+            let line = self.read_line().await?;
             if message.is_empty() {
-                let code = trimmed
+                let code = line
                     .get(..3)
                     .and_then(|value| value.parse::<u16>().ok())
-                    .ok_or_else(|| CoreError::Network(format!("ftp reply `{trimmed}`")))?;
-                let rest = trimmed.get(4..).unwrap_or_default().to_string();
-                // `123-` opens a multi-line reply that ends at `123 `.
-                if trimmed.as_bytes().get(3) == Some(&b'-') {
+                    .ok_or_else(|| CoreError::Network(format!("ftp reply `{line}`")))?;
+                let rest = line.get(4..).unwrap_or_default().to_string();
+                if line.as_bytes().get(3) == Some(&b'-') {
                     message.push(rest);
                     continue;
                 }
@@ -215,22 +240,38 @@ impl Control {
                     message: rest,
                 });
             }
-            message.push(trimmed.to_string());
-            if trimmed
-                .get(4..)
-                .map(|_| trimmed.as_bytes().get(3) == Some(&b' '))
-                .unwrap_or(false)
-                && trimmed
-                    .get(..3)
-                    .and_then(|value| value.parse::<u16>().ok())
-                    .is_some()
-            {
-                let code = trimmed[..3].parse::<u16>().unwrap_or(0);
+            message.push(line.clone());
+            if line.as_bytes().get(3) == Some(&b' ') {
+                let code = line[..3].parse::<u16>().unwrap_or(0);
                 return Ok(Reply {
                     code,
                     message: message.join(" "),
                 });
             }
+        }
+    }
+
+    /// One CRLF-terminated line, byte by byte.
+    async fn read_line(&mut self) -> Result<String> {
+        let mut raw = Vec::new();
+        loop {
+            let mut byte = [0u8; 1];
+            let read = tokio::time::timeout(self.timeout, self.stream.read(&mut byte))
+                .await
+                .map_err(|_| CoreError::Network("ftp control read timed out".to_string()))?
+                .map_err(|err| CoreError::Network(err.to_string()))?;
+            if read == 0 {
+                return Err(CoreError::Network(
+                    "ftp server closed the control connection".to_string(),
+                ));
+            }
+            if byte[0] == b'\n' {
+                let text = String::from_utf8_lossy(&raw)
+                    .trim_end_matches('\r')
+                    .to_string();
+                return Ok(text);
+            }
+            raw.push(byte[0]);
         }
     }
 
@@ -347,6 +388,22 @@ pub async fn download(
 ) -> Result<u64> {
     let target = FtpTarget::parse(url).ok_or_else(|| CoreError::InvalidUrl(url.to_string()))?;
     let probe = probe(url, cfg).await?;
+    // A resume built on a different remote file would splice two objects together. The
+    // validator is checked before a single REST is sent, not after.
+    if let Some(expected) = cfg.expect_modified.as_deref() {
+        match probe.modified.as_deref() {
+            Some(current) if current == expected => {}
+            Some(current) => {
+                return Err(CoreError::Network(format!(
+                    "remote file changed: expected {expected}, server says {current}"
+                )))
+            }
+            None => return Err(CoreError::Network(
+                "the server does not report a modification time, so a resume cannot be validated"
+                    .to_string(),
+            )),
+        }
+    }
     let total = probe.size;
     let (_writer, _outcome) = DiskWriter::create_new(path, total)?;
     let writer = std::sync::Arc::new(_writer);
@@ -396,7 +453,7 @@ async fn transfer_segment(
     let mut control = Control::open(target, cfg).await?;
     let port = control.passive_port().await?;
     let data_addr = resolve(&target.host, port, cfg).await?;
-    let mut data = connect(data_addr, cfg).await?;
+    let tcp = connect(data_addr, cfg).await?;
     if range.start > 0 {
         let reply = control.command(&format!("REST {}", range.start)).await?;
         if reply.code != 350 {
@@ -406,9 +463,9 @@ async fn transfer_segment(
             )));
         }
     }
-    // `150` (or `125`) is the preliminary answer that opens the data connection; the final
-    // `226` only arrives once the stream ends. Requiring 2xx here would refuse every
-    // well-behaved server.
+    // `150` (or `125`) opens the data connection; only then is there a peer to handshake
+    // with. Upgrading before RETR would wait forever for a server that is still waiting
+    // for the command.
     let reply = control.command(&format!("RETR {}", target.path)).await?;
     if !(reply.code == 125 || reply.code == 150 || reply.is_success()) {
         return Err(CoreError::Network(format!(
@@ -416,6 +473,11 @@ async fn transfer_segment(
             reply.code, reply.message
         )));
     }
+    let mut data: crate::ftps::BoxStream = if cfg.tls.mode.is_tls() {
+        crate::ftps::handshake(tcp, &target.host, &cfg.tls).await?
+    } else {
+        Box::new(tcp)
+    };
 
     let mut offset = range.start;
     let mut buffer = vec![0u8; 64 * 1024];
