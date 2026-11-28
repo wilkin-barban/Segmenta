@@ -45,7 +45,7 @@ Versión: **0.7.0**, sin tag ni release hasta cerrar el hito.
 
 - [x] T1 — Debrid: contrato de proveedor con metadata y **TorBox** completo (resolución + cuenta), con servidor de prueba local (S1) — ruta: `segmenta-core` — commit: ver L5.
 - [x] T2 — Premiumize y Mega-Debrid sobre el mismo contrato (S1) — ruta: `segmenta-core` — commit: `0fd3b01` + ver L6/L7.
-- [ ] T3 — Device code / OAuth con polling para los proveedores que lo ofrecen, y `segmenta debrid login` (S1) — ruta: `segmenta-core`, `segmenta-cli` — commit: pendiente.
+- [x] T3 (a) — Device code / OAuth con polling para los proveedores que lo ofrecen, y `segmenta debrid login` (S1) — ruta: `segmenta-core`, `segmenta-cli` — commit: `23cca14`, ver L8.
 - [ ] T4 — `debrid_accounts` (migración aditiva), prioridad y resolución centralizada en `manager.rs` con `direct: true` (S2) — ruta: `segmenta-daemon` — commit: pendiente.
 - [ ] T5 — `torrent_via_debrid`: alta remota, polling de progreso, descarga por HTTP y limpieza (S3) — ruta: `segmenta-daemon` — commit: pendiente.
 - [ ] T6 — Verificación de integridad al finalizar (zip en Rust, `7z t` para el resto) con umbral y comprobación bajo demanda (S4) — ruta: `segmenta-daemon` — commit: pendiente.
@@ -114,3 +114,10 @@ Versión: **0.7.0**, sin tag ni release hasta cerrar el hito.
   - Las credenciales van en el **cuerpo de un POST**, nunca en la query; el paso del token de sesión sí va en la query y por eso la petición se marca `credential_in_url: true`, que ya redacta el `Debug`.
   - `username` queda en `None` a propósito: la API no lo devuelve y no se inventa.
   - Cuatro pruebas nuevas, más un arreglo del arnés: `Canned` ahora **consume respuestas en orden por path**, porque el login y el pedido de enlace comparten `/api.php` y una sola respuesta por path ocultaba el segundo paso.
+
+- L8 — T3 (a) cerrado: **máquina de estados del device flow** para Real-Debrid, con la API confirmada antes de escribirla (`GET /oauth/v2/device/code?client_id=…&new_credentials=yes`, polling por `/device/credentials`). `DeviceFlow` con `device_code`, `user_code`, URL de verificación, intervalo y vencimiento; `PollOutcome::{Pending, SlowDown, Denied, Expired, Granted}`; `next_interval` duplica ante `slow_down` y **capea en 60 s** para que un proveedor no imponga una espera absurda.
+  - **Sólo se ofrece donde el flujo existe de verdad.** AllDebrid y TorBox usan API key; Mega-Debrid autentica con la cuenta; Premiumize exige un cliente OAuth registrado. Los cuatro devuelven `Unsupported` con su nombre, en vez de inventar un flujo que fallaría en la primera llamada.
+  - **El `client_id` es un parámetro, no una constante**: inventar uno fallaría en el primer request y parecería un bug de integración. Quien llame decide.
+  - **Defecto propio corregido por la prueba**: `PollOutcome` derivaba `Debug`, y la variante `Granted` lleva el secreto por usuario. Ahora `Debug` está escrito a mano y redacta. La prueba que lo detectó fue la que exige que el secreto no aparezca al imprimir.
+  - El `device_code` viaja en la query → la petición de polling se marca `credential_in_url: true` y el `Debug` la redacta.
+  - Falta de T3 para cerrar: intercambio del par por un `access_token` y el comando `segmenta debrid login`.
