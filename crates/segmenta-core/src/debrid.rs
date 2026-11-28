@@ -38,6 +38,8 @@ pub enum Provider {
     AllDebrid,
     /// TorBox: a web download is created and then its link is requested.
     TorBox,
+    /// Premiumize: one `directdl` call with the key in the header.
+    Premiumize,
 }
 
 impl Provider {
@@ -47,6 +49,7 @@ impl Provider {
             "realdebrid" | "real-debrid" | "real_debrid" => Some(Provider::RealDebrid),
             "alldebrid" | "all-debrid" | "all_debrid" => Some(Provider::AllDebrid),
             "torbox" | "tor-box" => Some(Provider::TorBox),
+            "premiumize" => Some(Provider::Premiumize),
             _ => None,
         }
     }
@@ -57,6 +60,7 @@ impl Provider {
             Provider::RealDebrid => "realdebrid",
             Provider::AllDebrid => "alldebrid",
             Provider::TorBox => "torbox",
+            Provider::Premiumize => "premiumize",
         }
     }
 }
@@ -72,6 +76,22 @@ pub struct DebridRequest {
     pub headers: Vec<(String, String)>,
     /// `application/x-www-form-urlencoded` body.
     pub body: String,
+    /// The URL carries a credential in its query. Some providers design their API that way;
+    /// the flag exists so the `Debug` render redacts it instead of trusting every caller.
+    pub credential_in_url: bool,
+}
+
+impl DebridRequest {
+    /// URL safe to print: the query disappears when it carries a credential.
+    fn render_url(&self) -> String {
+        if !self.credential_in_url {
+            return self.url.clone();
+        }
+        match self.url.split_once('?') {
+            Some((base, _)) => format!("{base}?<redacted>"),
+            None => self.url.clone(),
+        }
+    }
 }
 
 impl fmt::Debug for DebridRequest {
@@ -80,7 +100,7 @@ impl fmt::Debug for DebridRequest {
         formatter
             .debug_struct("DebridRequest")
             .field("method", &self.method)
-            .field("url", &self.url)
+            .field("url", &self.render_url())
             .field("header_count", &self.headers.len())
             .finish()
     }
@@ -161,6 +181,7 @@ pub fn resolve_request(
                 ),
             ],
             body: format!("link={}", encode(link)),
+            credential_in_url: false,
         }),
         Provider::AllDebrid => Ok(DebridRequest {
             method: "POST",
@@ -173,6 +194,20 @@ pub fn resolve_request(
                 ),
             ],
             body: format!("link={}", encode(link)),
+            credential_in_url: false,
+        }),
+        Provider::Premiumize => Ok(DebridRequest {
+            method: "POST",
+            url: "https://www.premiumize.me/api/transfer/directdl".to_string(),
+            headers: vec![
+                ("Authorization".to_string(), format!("Bearer {token}")),
+                (
+                    "Content-Type".to_string(),
+                    "application/x-www-form-urlencoded".to_string(),
+                ),
+            ],
+            body: format!("src={}", encode(link)),
+            credential_in_url: false,
         }),
         Provider::TorBox => Ok(DebridRequest {
             method: "POST",
@@ -185,6 +220,7 @@ pub fn resolve_request(
                 ),
             ],
             body: format!("link={}", encode(link)),
+            credential_in_url: false,
         }),
     }
 }
@@ -225,10 +261,26 @@ pub fn parse_resolution(
                 .and_then(|link| link.as_str())
                 .map(str::to_string)
         }
+        Provider::Premiumize => {
+            if value.get("status").and_then(|s| s.as_str()) != Some("success") {
+                return Err(DebridError::LinkUnavailable);
+            }
+            value
+                .get("content")
+                .and_then(|content| content.as_array())
+                .and_then(|list| list.first())
+                .and_then(|first| first.get("link"))
+                .and_then(|link| link.as_str())
+                .map(str::to_string)
+        }
         // TorBox needs a second call; a single answer has no link to return.
         Provider::TorBox => return Err(DebridError::Malformed),
     };
-    let link = link.ok_or(DebridError::Malformed)?;
+    // Two different failures, deliberately kept apart: a provider that answers successfully
+    // without a link is telling us the hoster is unavailable (the user can try another one);
+    // a provider that hands back an insecure or credential-carrying URL broke the contract,
+    // and retrying the same call would not help.
+    let link = link.ok_or(DebridError::LinkUnavailable)?;
     sanitize_link(&link).ok_or(DebridError::Malformed)
 }
 
@@ -254,7 +306,9 @@ pub async fn resolve_with(
     let first = resolve_request(provider, token, link)?;
     let (status, body) = http.send(&first).await?;
     match provider {
-        Provider::RealDebrid | Provider::AllDebrid => parse_resolution(provider, status, &body),
+        Provider::RealDebrid | Provider::AllDebrid | Provider::Premiumize => {
+            parse_resolution(provider, status, &body)
+        }
         Provider::TorBox => {
             let id = torbox_download_id(status, &body)?;
             let request = torbox_link_request(token, id)?;
@@ -303,6 +357,7 @@ fn torbox_link_request(token: &str, id: u64) -> Result<DebridRequest, DebridErro
             format!("Bearer {}", token.trim()),
         )],
         body: String::new(),
+        credential_in_url: false,
     })
 }
 
@@ -351,12 +406,14 @@ pub fn account_request(provider: Provider, token: &str) -> Result<DebridRequest,
         Provider::RealDebrid => "https://api.real-debrid.com/rest/1.0/user",
         Provider::AllDebrid => "https://api.alldebrid.com/v4/user",
         Provider::TorBox => "https://api.torbox.app/v1/api/user/me",
+        Provider::Premiumize => "https://www.premiumize.me/api/account/info",
     };
     Ok(DebridRequest {
         method: "GET",
         url: url.to_string(),
         headers: vec![("Authorization".to_string(), auth)],
         body: String::new(),
+        credential_in_url: false,
     })
 }
 
@@ -401,6 +458,24 @@ pub fn parse_account(
                     .get("premiumUntil")
                     .and_then(|v| v.as_u64())
                     .map(|epoch| epoch.to_string()),
+            }
+        }
+        Provider::Premiumize => {
+            if value.get("status").and_then(|s| s.as_str()) != Some("success") {
+                return Err(DebridError::Unauthorized);
+            }
+            let until = value
+                .get("premium_until")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            AccountInfo {
+                username: value
+                    .get("customer_id")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                // A zero epoch means "never subscribed", not "expired long ago".
+                is_premium: until > 0,
+                expires_at: (until > 0).then(|| until.to_string()),
             }
         }
         Provider::TorBox => {

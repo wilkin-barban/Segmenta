@@ -44,7 +44,7 @@ Versión: **0.7.0**, sin tag ni release hasta cerrar el hito.
 ## Tareas
 
 - [x] T1 — Debrid: contrato de proveedor con metadata y **TorBox** completo (resolución + cuenta), con servidor de prueba local (S1) — ruta: `segmenta-core` — commit: ver L5.
-- [ ] T2 — Premiumize y Mega-Debrid sobre el mismo contrato (S1) — ruta: `segmenta-core` — commit: pendiente.
+- [x] T2 — Premiumize y Mega-Debrid sobre el mismo contrato (S1) — ruta: `segmenta-core` — commit: ver L6.
 - [ ] T3 — Device code / OAuth con polling para los proveedores que lo ofrecen, y `segmenta debrid login` (S1) — ruta: `segmenta-core`, `segmenta-cli` — commit: pendiente.
 - [ ] T4 — `debrid_accounts` (migración aditiva), prioridad y resolución centralizada en `manager.rs` con `direct: true` (S2) — ruta: `segmenta-daemon` — commit: pendiente.
 - [ ] T5 — `torrent_via_debrid`: alta remota, polling de progreso, descarga por HTTP y limpieza (S3) — ruta: `segmenta-daemon` — commit: pendiente.
@@ -102,3 +102,9 @@ Versión: **0.7.0**, sin tag ni release hasta cerrar el hito.
   - Metadata de cuenta para los tres: `account_request` + `parse_account` → `AccountInfo { username, is_premium, expires_at }`. TorBox informa el plan como número (0 es gratis), Real-Debrid `type == "premium"`, AllDebrid `isPremium` + `premiumUntil`. TorBox con `success: false` es `Unauthorized`, no `Malformed`.
   - El token viaja **siempre** en cabecera; hay prueba de que no aparece en la URL del segundo paso.
   - Cinco pruebas nuevas contra respuestas canónicas, incluida la secuencia completa de dos llamadas y el rechazo por enlace no soportado.
+
+- L6 — T2 (a) cerrado: **Premiumize** y el cierre de un defecto latente. Su API se confirmó en la documentación oficial: `POST /api/transfer/directdl` con `src=` y el `Authorization: Bearer` **recomendado por ellos mismos** para que la clave no quede en logs ni en Referer; cuenta por `GET /api/account/info`.
+  - **Redacción de credenciales en la URL**: `DebridRequest` gana `credential_in_url` y su `Debug` imprime `…?<redacted>`. Hacía falta antes de sumar proveedores cuyo token viaja en la query por diseño; sin esto, el propio `Debug` era la fuga que la regla de cabeceras intentaba evitar.
+  - **Dos fallos distintos, a propósito**: un proveedor que responde bien **sin enlace** es `LinkUnavailable` (el hoster no está disponible para esa cuenta, el usuario puede probar otro); un enlace **inseguro** (`http`, credenciales, espacios) es `Malformed`, porque reintentar no lo arregla.
+  - `premium_until = 0` significa «nunca suscripto», no «vencido hace mucho»: no se lee como premium.
+  - Cuatro pruebas nuevas (resolución, lista vacía, metadata premium y gratis, y redacción en `Debug`).

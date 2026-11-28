@@ -183,3 +183,84 @@ fn account_metadata_is_read_for_every_provider() {
         }
     );
 }
+
+#[tokio::test]
+async fn premiumize_resolves_through_directdl_and_keeps_the_key_out_of_the_url() {
+    let http = Canned::new(&[(
+        "/api/transfer/directdl",
+        200,
+        r#"{"status":"success","content":[{"link":"https://cdn.premiumize.me/f.zip"}]}"#,
+    )]);
+    let link = resolve_with(
+        &http,
+        Provider::Premiumize,
+        "key",
+        "https://hoster.example/f.zip",
+    )
+    .await
+    .unwrap();
+    assert_eq!(link, "https://cdn.premiumize.me/f.zip");
+    let seen = http.seen();
+    assert_eq!(seen.len(), 1);
+    // The key travels in the header, never in the query: its own documentation recommends
+    // exactly this so the credential does not end up in logs or a Referer.
+    assert!(!seen[0].1.contains("key="), "{seen:?}");
+    assert!(!seen[0].1.contains("apikey"), "{seen:?}");
+}
+
+#[tokio::test]
+async fn premiumize_reports_an_empty_content_list_as_unavailable() {
+    let http = Canned::new(&[(
+        "/api/transfer/directdl",
+        200,
+        r#"{"status":"success","content":[]}"#,
+    )]);
+    let refused = resolve_with(
+        &http,
+        Provider::Premiumize,
+        "key",
+        "https://hoster.example/f.zip",
+    )
+    .await;
+    assert_eq!(
+        refused.unwrap_err(),
+        segmenta_core::debrid::DebridError::LinkUnavailable
+    );
+}
+
+#[test]
+fn premiumize_account_metadata_reads_the_premium_until_epoch() {
+    let paid = parse_account(
+        Provider::Premiumize,
+        200,
+        r#"{"status":"success","customer_id":"42","premium_until":1900000000}"#,
+    )
+    .unwrap();
+    assert_eq!(paid.username.as_deref(), Some("42"));
+    assert!(paid.is_premium);
+    assert_eq!(paid.expires_at.as_deref(), Some("1900000000"));
+
+    let free = parse_account(
+        Provider::Premiumize,
+        200,
+        r#"{"status":"success","customer_id":"43","premium_until":0}"#,
+    )
+    .unwrap();
+    assert!(!free.is_premium, "a zero epoch is not a subscription");
+}
+
+#[test]
+fn a_request_that_carries_a_secret_in_its_url_redacts_it_when_printed() {
+    // Mega-Debrid puts its session token in the query by design, so the Debug render must
+    // not become the leak that the header rule was protecting against.
+    let request = segmenta_core::debrid::DebridRequest {
+        method: "GET",
+        url: "https://www.mega-debrid.eu/api.php?action=getLink&token=SECRET&link=x".to_string(),
+        headers: Vec::new(),
+        body: String::new(),
+        credential_in_url: true,
+    };
+    let printed = format!("{request:?}");
+    assert!(!printed.contains("SECRET"), "{printed}");
+    assert!(printed.contains("mega-debrid"), "{printed}");
+}
